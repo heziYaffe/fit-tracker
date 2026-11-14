@@ -1325,7 +1325,39 @@
       '<input type="number" min="10" max="90" step="5" inputmode="numeric" data-action="notify-setting" data-key="lowHpThreshold" value="' + esc(N.lowHpThreshold || 50) + '" style="width:90px" /></label>' +
       '</section>';
 
-    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + notifyCard +
+
+    const syncOn = window.FitSync && FitSync.isConfigured();
+    const whoopOn = window.FitSync && FitSync.whoopReady();
+    const syncSt = window.FitSync ? FitSync.status() : { signedIn: false };
+    const soon = '<span class="soon-badge">בקרוב</span>';
+    const accountCard = !syncOn
+      ? ('<section class="card is-soon"><h2>חשבון וסנכרון ' + soon + '</h2>' +
+        '<p class="hp-legend">סנכרון בענן (כניסה בקישור למייל) יופיע כאן אחרי שתקימו פרויקט Supabase ותמלאו את <code>js/cloud-config.js</code>. ההוראות המדויקות ב-<code>server/README.md</code>. עד אז כל הנתונים נשארים במכשיר.</p></section>')
+      : ('<section class="card"><h2>חשבון וסנכרון</h2>' +
+        (syncSt.signedIn
+          ? ('<p class="hp-legend">מחוברים' + (syncSt.user && syncSt.user.email ? (': ' + esc(syncSt.user.email)) : '') + '</p>' +
+            '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
+            '<button type="button" class="btn primary" data-action="sync-now">סנכרון עכשיו</button>' +
+            '<button type="button" class="btn" data-action="sync-signout">התנתקות</button></div>' +
+            (syncSt.lastSync ? '<p class="hp-legend">סונכרן לאחרונה: ' + esc(syncSt.lastSync) + '</p>' : '') +
+            (syncSt.error ? '<p class="hp-legend">' + esc(syncSt.error) + '</p>' : ''))
+          : ('<p class="hp-legend">שלחו קישור כניסה למייל. אין סיסמה.</p>' +
+            '<label class="field"><span>אימייל</span><input type="email" id="sync-email" dir="ltr" inputmode="email" autocomplete="email" /></label>' +
+            '<button type="button" class="btn primary wide" data-action="sync-magic">שלחו קישור כניסה</button>')) +
+        '</section>');
+    const whoopCard = !whoopOn
+      ? ('<section class="card is-soon"><h2>חיבור Whoop ' + soon + '</h2>' +
+        '<p class="hp-legend">אחרי הקמת השרת ומילוי מזהה הלקוח של Whoop ב-<code>js/cloud-config.js</code>, אפשר יהיה לחבר את החשבון. מדדי Recovery, Strain, שינה, HRV ואימונים ייכנסו עם מקור whoop.</p></section>')
+      : ('<section class="card"><h2>חיבור Whoop</h2>' +
+        (syncSt.signedIn
+          ? ('<p class="hp-legend">חיבור מאובטח דרך השרת. הנתונים מסונכרנים למדדים עם מקור whoop.</p>' +
+            '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
+            '<a class="btn primary" data-action="whoop-connect" href="#">חבר Whoop</a>' +
+            '<button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>')
+          : '<p class="hp-legend">קודם התחברו לחשבון, ואז אפשר לחבר את Whoop.</p>') +
+        '</section>');
+
+    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + notifyCard + accountCard + whoopCard +
       '<section class="card">' +
       '<label class="field"><span>שם תצוגה</span>' +
       '<input type="text" data-action="setting" data-key="displayName" value="' + esc(set.displayName || '') + '" /></label>' +
@@ -1366,9 +1398,7 @@
       '<li>באנדרואיד: בתפריט בחרו «התקן אפליקציה» או «הוסף למסך הבית».</li>' +
       '</ol></section>' +
 
-      '<section class="card"><h2>חיבורים בהמשך</h2>' +
-      '<p class="hp-legend">אינטגרציית Whoop (התאוששות, Strain, שינה, HRV כמקור XP) ורשת חברתית מתוכננות לגרסאות הבאות. המודל כבר תומך במדדים עם שדה מקור (manual / whoop).</p>' +
-      '</section>' +
+
 
       '<section class="card"><button type="button" class="btn danger wide" data-action="confirm-clear">מחיקת כל הנתונים</button></section>';
   }
@@ -2325,6 +2355,31 @@
       return;
     }
     if (action === 'share-summary') { shareSummary(); return; }
+    if (action === 'sync-magic') {
+      const emailEl = document.getElementById('sync-email');
+      const email = emailEl && emailEl.value.trim();
+      if (!email) { toast('יש להזין אימייל'); return; }
+      FitSync.sendMagicLink(email).then(function () { toast('נשלח קישור למייל'); }).catch(function (e) { toast('שליחה נכשלה'); });
+      return;
+    }
+    if (action === 'sync-now') {
+      toast('מסנכרן…');
+      FitSync.syncNow().then(function () { toast('הסנכרון הושלם'); render(); }).catch(function () { toast('הסנכרון נכשל'); render(); });
+      return;
+    }
+    if (action === 'sync-signout') { FitSync.signOut(); toast('התנתקתם'); render(); return; }
+    if (action === 'whoop-connect') {
+      ev.preventDefault();
+      const url = FitSync.whoopStartUrl();
+      if (url) location.href = url;
+      else toast('חיבור Whoop לא מוכן');
+      return;
+    }
+    if (action === 'whoop-refresh') {
+      FitSync.whoopRefresh().then(function () { return FitSync.syncNow(); }).then(function () { toast('נתוני Whoop עודכנו'); render(); }).catch(function () { toast('המשיכה נכשלה'); });
+      return;
+    }
+
     if (action === 'open-body') {
       ui.view = 'body';
       try { location.hash = '#/body'; } catch (e) {}

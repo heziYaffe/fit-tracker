@@ -8,6 +8,11 @@
   let state = defaultState();
   let demoMode = false;
 
+  function touch(row) {
+    if (row && typeof row === 'object') row.updatedAt = new Date().toISOString();
+    return row;
+  }
+
   function uid() {
     return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
   }
@@ -300,6 +305,7 @@
 
   function updateSettings(patch) {
     state.settings = Object.assign({}, state.settings, patch);
+    touch(state.settings);
     commit();
   }
 
@@ -314,6 +320,7 @@
       notes: ''
     }, workout);
     if (!row.id) row.id = uid();
+    touch(row);
     state.workouts.push(row);
     commit();
     return row;
@@ -323,6 +330,7 @@
     const row = state.workouts.find(function (w) { return w.id === id; });
     if (!row) return null;
     Object.assign(row, patch, { id: row.id });
+    touch(row);
     commit();
     return row;
   }
@@ -349,6 +357,7 @@
     row.water = Math.max(0, Number(row.water) || 0);
     if (row.carbs !== undefined && row.carbs !== '') row.carbs = Math.max(0, Number(row.carbs) || 0);
     if (row.fat !== undefined && row.fat !== '') row.fat = Math.max(0, Number(row.fat) || 0);
+    touch(row);
     commit();
     return row;
   }
@@ -412,6 +421,7 @@
       }
     });
     row.source = src;
+    touch(row);
     commit();
     return row;
   }
@@ -684,8 +694,8 @@
   function upsertMeasure(row) {
     row = normalizeMeasureRow(Object.assign({ id: uid(), date: root.FitEngine.todayISO() }, row || {}));
     const i = state.measures.findIndex(function (m) { return m.id === row.id || (m.date === row.date && !row._forceNew); });
-    if (i >= 0) state.measures[i] = Object.assign({}, state.measures[i], row, { id: state.measures[i].id });
-    else state.measures.push(row);
+    if (i >= 0) state.measures[i] = touch(Object.assign({}, state.measures[i], row, { id: state.measures[i].id }));
+    else state.measures.push(touch(row));
     commit();
     return row;
   }

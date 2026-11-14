@@ -1,1 +1,6 @@
 screenshot*.png
+
+# local secrets — never commit
+server/.env
+server/**/.env
+js/cloud-config.local.js

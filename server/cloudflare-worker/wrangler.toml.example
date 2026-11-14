@@ -1,0 +1,16 @@
+name = "fit-tracker-whoop"
+main = "whoop.js"
+compatibility_date = "2026-11-14"
+
+[vars]
+APP_ORIGIN = "https://heziyaffe.github.io"
+WHOOP_CLIENT_ID = "your-whoop-client-id"
+WHOOP_REDIRECT_URI = "https://fit-tracker-whoop.YOUR_SUBDOMAIN.workers.dev/callback"
+SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
+# Optional: proxy to the Supabase Edge Function instead of reimplementing it
+# WHOOP_FN_URL = "https://YOUR_PROJECT.supabase.co/functions/v1/whoop"
+
+# Secrets (wrangler secret put ...):
+# WHOOP_CLIENT_SECRET
+# SUPABASE_SERVICE_ROLE_KEY
+# SUPABASE_ANON_KEY

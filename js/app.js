@@ -8,6 +8,7 @@
     FitStore.load();
     FitUI.init();
     if (window.FitNotify) FitNotify.start();
+    if (window.FitSync) FitSync.init().then(function () { if (window.FitUI) FitUI.render(); });
   });
 
   if ('serviceWorker' in navigator) {

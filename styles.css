@@ -1475,3 +1475,17 @@ details.live-type .chips { margin-top: 8px; }
 .compare-slider input[type="range"] { position: absolute; left: 0; right: 0; bottom: 12px; width: 90%; margin: 0 5%; }
 .ghost-wrap { position: relative; margin-top: 12px; }
 .ghost-wrap .ghost-prev { position: absolute; inset: 0; opacity: 0.45; mix-blend-mode: lighten; pointer-events: none; }
+
+.soon-badge {
+  display: inline-block;
+  margin-inline-start: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  vertical-align: middle;
+}
+.card.is-soon { opacity: 0.92; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; color: var(--accent); }
