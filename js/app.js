@@ -7,6 +7,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     FitStore.load();
     FitUI.init();
+    if (window.FitNotify) FitNotify.start();
   });
 
   if ('serviceWorker' in navigator) {

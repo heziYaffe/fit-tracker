@@ -129,13 +129,41 @@
     };
   }
 
+
+  function normalizeSettings(set) {
+    set = set || {};
+    const baseN = (C.DEFAULT_NOTIFICATIONS && Object.assign({}, C.DEFAULT_NOTIFICATIONS)) || {
+      workoutEnabled: false,
+      workoutTime: '18:00',
+      mealEnabled: false,
+      lowHpEnabled: false,
+      lowHpThreshold: 50,
+      lastFired: { workoutDate: '', meals: {}, lowHpDate: '' }
+    };
+    const n = set.notifications || {};
+    const last = n.lastFired || {};
+    set.notifications = {
+      workoutEnabled: !!n.workoutEnabled,
+      workoutTime: n.workoutTime || baseN.workoutTime,
+      mealEnabled: !!n.mealEnabled,
+      lowHpEnabled: !!n.lowHpEnabled,
+      lowHpThreshold: n.lowHpThreshold == null || n.lowHpThreshold === '' ? 50 : Number(n.lowHpThreshold),
+      lastFired: {
+        workoutDate: last.workoutDate || '',
+        meals: last.meals && typeof last.meals === 'object' ? last.meals : {},
+        lowHpDate: last.lowHpDate || ''
+      }
+    };
+    return set;
+  }
+
   function normalize(raw) {
     const base = defaultState();
     if (!raw || typeof raw !== 'object') return base;
     const foods = Array.isArray(raw.foods) && raw.foods.length ? raw.foods : starterFoods();
     return {
       version: 1,
-      settings: Object.assign({}, base.settings, raw.settings || {}),
+      settings: normalizeSettings(Object.assign({}, base.settings, raw.settings || {})),
       workouts: Array.isArray(raw.workouts) ? raw.workouts : [],
       nutrition: Array.isArray(raw.nutrition) ? raw.nutrition : [],
       weights: Array.isArray(raw.weights) ? raw.weights : [],

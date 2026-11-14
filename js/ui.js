@@ -917,7 +917,32 @@
       '<button type="button" class="chip' + (themePref === 'dark' ? ' active' : '') + '" data-action="set-theme" data-theme="dark">כהה</button>' +
       '<button type="button" class="chip' + (themePref === 'light' ? ' active' : '') + '" data-action="set-theme" data-theme="light">בהיר</button>' +
       '</div></div></section>';
-    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard +
+
+    const N = (window.FitNotify && FitNotify.notifOf(s)) || (set.notifications || {});
+    const perm = window.FitNotify ? FitNotify.permission() : 'unsupported';
+    const permLabel = perm === 'granted' ? 'ההרשאה ניתנה' : (perm === 'denied' ? 'ההרשאה נחסמה בהגדרות המכשיר' : (perm === 'unsupported' ? 'הדפדפן לא תומך בהתראות' : 'ממתינים לאישור'));
+    const iosNote = (window.FitNotify && FitNotify.isIOS() && !FitNotify.isStandalone())
+      ? '<p class="hp-legend notify-note">באייפון צריך קודם להוסיף את האפליקציה למסך הבית (iOS 16.4 ומעלה) כדי לקבל התראות.</p>'
+      : '<p class="hp-legend notify-note">באייפון ההתראות זמינות רק אחרי שמוסיפים את האפליקציה למסך הבית (iOS 16.4 ומעלה). התזמון המקומי עובד כשהאפליקציה פתוחה או ברקע. שרת התראות (Web Push) יתווסף בהמשך.</p>';
+    const permBtn = perm === 'granted' || perm === 'unsupported'
+      ? ''
+      : '<button type="button" class="btn primary wide" data-action="notify-request">אפשר התראות</button>';
+    const notifyCard = '<section class="card" id="notify-card"><h2>התראות</h2>' +
+      '<p class="hp-legend" style="margin-bottom:10px">מצב הרשאה: ' + permLabel + '</p>' +
+      permBtn + iosNote +
+      '<div class="setting"><div class="grow"><div>תזכורת לאימון</div><div class="desc">בימים שיש תבנית, בשעה שנבחרה. לא נשלחת אם כבר תיעדת אימון היום.</div></div>' +
+      '<label class="toggle"><input type="checkbox" data-action="notify-toggle" data-key="workoutEnabled"' + (N.workoutEnabled ? ' checked' : '') + ' /><span></span></label></div>' +
+      '<label class="field"><span>שעת תזכורת לאימון</span>' +
+      '<input type="time" lang="he-IL" dir="ltr" data-action="notify-setting" data-key="workoutTime" value="' + esc(N.workoutTime || '18:00') + '" /></label>' +
+      '<div class="setting"><div class="grow"><div>תזכורות לארוחות</div><div class="desc">לפי השעות בתפריט של היום, רק לארוחות שעוד לא סומנו.</div></div>' +
+      '<label class="toggle"><input type="checkbox" data-action="notify-toggle" data-key="mealEnabled"' + (N.mealEnabled ? ' checked' : '') + ' /><span></span></label></div>' +
+      '<div class="setting"><div class="grow"><div>אזהרת מד נמוך</div><div class="desc">פעם ביום, אם מד העקביות יורד מתחת לסף.</div></div>' +
+      '<label class="toggle"><input type="checkbox" data-action="notify-toggle" data-key="lowHpEnabled"' + (N.lowHpEnabled ? ' checked' : '') + ' /><span></span></label></div>' +
+      '<label class="field"><span>סף אזהרה (%)</span>' +
+      '<input type="number" min="10" max="90" step="5" inputmode="numeric" data-action="notify-setting" data-key="lowHpThreshold" value="' + esc(N.lowHpThreshold || 50) + '" style="width:90px" /></label>' +
+      '</section>';
+
+    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + notifyCard +
       '<section class="card">' +
       '<label class="field"><span>שם תצוגה</span>' +
       '<input type="text" data-action="setting" data-key="displayName" value="' + esc(set.displayName || '') + '" /></label>' +
@@ -1865,6 +1890,33 @@
     if (action === 'tab') { setTab(btn.dataset.tab); return; }
     if (action === 'close') { closeModal(); return; }
     if (action === 'set-theme') { applyTheme(btn.dataset.theme); render(); haptic(8); return; }
+    if (action === 'notify-request') {
+      if (!window.FitNotify) return;
+      FitNotify.requestPermission().then(function (perm) {
+        if (perm === 'granted') toast('ההרשאה ניתנה. אפשר להפעיל תזכורות.');
+        else if (perm === 'denied') toast('ההרשאה נחסמה. אפשר לשנות בהגדרות המכשיר.');
+        render();
+      });
+      return;
+    }
+    if (action === 'notify-toggle') {
+      if (!window.FitNotify) return;
+      const key = btn.dataset.key;
+      const on = btn.checked;
+      const apply = function () { FitNotify.patchNotifications({ [key]: on }); render(); haptic(8); };
+      if (on && FitNotify.permission() !== 'granted') {
+        FitNotify.requestPermission().then(function (perm) {
+          if (perm !== 'granted') { toast(perm === 'denied' ? 'ההרשאה נחסמה בהגדרות המכשיר' : 'צריך לאשר התראות כדי להפעיל תזכורות'); render(); return; }
+          apply();
+          FitNotify.tick();
+        });
+        return;
+      }
+      apply();
+      if (on) FitNotify.tick();
+      return;
+    }
+
     if (action === 'open-start') {
       const list = Store.listTemplates();
       if (!list.length) { openLive(); return; }
@@ -2456,6 +2508,16 @@
         okLabel: 'ייבוא',
         onOk: function () { importFile(file); }
       });
+      return;
+    }
+    if (el.dataset.action === 'notify-setting') {
+      const key = el.dataset.key;
+      const val = el.value;
+      if (!window.FitNotify || !key) return;
+      const patch = {};
+      if (key === 'lowHpThreshold') patch[key] = Math.max(10, Math.min(90, Number(val) || 50));
+      else patch[key] = val;
+      FitNotify.patchNotifications(patch);
       return;
     }
     if (el.dataset.action === 'setting') {

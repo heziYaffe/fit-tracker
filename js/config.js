@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '6';
+  const APP_VERSION = '7';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -166,12 +166,22 @@
 
   const MEAL_SLOTS = ['בוקר', 'צהריים', 'לפני אימון', 'אחרי אימון', 'ערב', 'ביניים'];
 
+  const DEFAULT_NOTIFICATIONS = {
+    workoutEnabled: false,
+    workoutTime: '18:00',
+    mealEnabled: false,
+    lowHpEnabled: false,
+    lowHpThreshold: 50,
+    lastFired: { workoutDate: '', meals: {}, lowHpDate: '' }
+  };
+
   const DEFAULT_SETTINGS = {
     weeklyWorkoutTarget: 4,
     dailyProteinTarget: 150,
     dailyCalorieTarget: '',
     dailyWaterTarget: 8,
-    displayName: 'Hazi'
+    displayName: 'Hazi',
+    notifications: Object.assign({}, DEFAULT_NOTIFICATIONS)
   };
 
   const FitConfig = {
@@ -189,6 +199,7 @@
     METRIC_FIELDS,
     ACHIEVEMENTS,
     DEFAULT_SETTINGS,
+    DEFAULT_NOTIFICATIONS,
     REST_DEFAULT_SEC,
     SMALL_LIFTS,
     MUSCLES,

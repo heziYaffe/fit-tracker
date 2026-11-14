@@ -1,5 +1,5 @@
 /* פיט — service worker */
-const CACHE = 'fit-tracker-v6';
+const CACHE = 'fit-tracker-v7';
 const ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,7 @@ const ASSETS = [
   './js/live.js',
   './js/bodymap.js',
   './js/charts.js',
+  './js/notify.js',
   './js/ui.js',
   './js/app.js',
   './version.json'
@@ -53,5 +54,54 @@ self.addEventListener('fetch', (event) => {
         return response;
       })
       .catch(() => caches.match(request).then((c) => c || caches.match('./index.html')))
+  );
+});
+
+
+self.addEventListener('message', (event) => {
+  const data = event.data || {};
+  if (data.type !== 'show-notification') return;
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'פיט', {
+      body: data.body || '',
+      icon: './icon-192.png',
+      badge: './icon-192.png',
+      tag: data.tag,
+      renotify: false,
+      dir: 'rtl',
+      lang: 'he',
+      data: data.data || { url: './' }
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || './';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url && 'focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(target);
+    })
+  );
+});
+
+/* Future Web Push: the server will send a push payload {title, body, tag, data}. */
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try { payload = event.data ? event.data.json() : {}; } catch (err) { payload = {}; }
+  const title = payload.title || 'פיט';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: payload.body || '',
+      icon: './icon-192.png',
+      badge: './icon-192.png',
+      tag: payload.tag || 'fit-push',
+      dir: 'rtl',
+      lang: 'he',
+      data: payload.data || { url: './' }
+    })
   );
 });
