@@ -15,7 +15,11 @@
   }
 
   function whoopReady() {
-    return isConfigured() && !!(cfg().WHOOP_CLIENT_ID && (cfg().WHOOP_FN_URL || cfg().SUPABASE_URL));
+    const c = cfg();
+    if (!isConfigured() || !(c.WHOOP_FN_URL || c.SUPABASE_URL)) return false;
+    // The Edge Function builds the Whoop authorize URL. Enable the UI when
+    // a client id is present or WHOOP_ENABLED is set.
+    return !!(c.WHOOP_CLIENT_ID || c.WHOOP_ENABLED);
   }
 
   function fnUrl() {
