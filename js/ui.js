@@ -1519,18 +1519,20 @@
             '<button type="button" class="btn" data-action="sync-signout">התנתקות</button></div>' +
             (syncSt.lastSync ? '<p class="hp-legend">סונכרן לאחרונה: ' + esc(syncSt.lastSync) + '</p>' : '') +
             (syncSt.error ? '<p class="hp-legend">' + esc(syncSt.error) + '</p>' : ''))
-          : ('<p class="hp-legend">הכניסה המומלצת באפליקציה שעל מסך הבית היא עם אימייל וסיסמה. אפשר גם לקבל קוד למייל ולהזין אותו כאן, בלי ללחוץ על קישור.</p>' +
-            '<label class="field"><span>אימייל</span><input type="email" id="sync-email" dir="ltr" inputmode="email" autocomplete="email" /></label>' +
-            '<label class="field"><span>סיסמה</span><input type="password" id="sync-password" dir="ltr" autocomplete="current-password" /></label>' +
+          : ('<p class="hp-legend">הכניסה המומלצת באפליקציה שעל מסך הבית היא עם אימייל וסיסמה. אם השדות נראים מלאים והכניסה נכשלת, הקישו בתוך השדה והקלידו שוב. אפשר גם לקבל קוד למייל ולהזין אותו כאן, בלי ללחוץ על קישור.</p>' +
+            '<form id="sync-auth-form" action="#" method="post" novalidate>' +
+            '<label class="field"><span>אימייל</span><input type="email" id="sync-email" name="email" dir="ltr" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" /></label>' +
+            '<label class="field"><span>סיסמה</span><input type="password" id="sync-password" name="password" dir="ltr" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" /></label>' +
             '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
-            '<button type="button" class="btn primary" data-action="sync-signin">כניסה</button>' +
+            '<button type="submit" class="btn primary" id="sync-signin-btn">כניסה</button>' +
             '<button type="button" class="btn" data-action="sync-signup">הרשמה</button></div>' +
+            '</form>' +
             '<button type="button" class="btn wide" data-action="sync-send-otp">שלחו קוד למייל</button>' +
-            '<label class="field"><span>קוד בן 8 ספרות מהמייל</span><input type="text" id="sync-otp" dir="ltr" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>' +
+            '<label class="field"><span>קוד בן 8 ספרות מהמייל</span><input type="text" id="sync-otp" dir="ltr" inputmode="numeric" autocomplete="one-time-code" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="8" /></label>' +
             '<button type="button" class="btn wide" data-action="sync-verify-otp">אימות קוד</button>' +
             '<button type="button" class="btn wide" data-action="sync-magic">שלחו קישור כניסה</button>')) +
         (syncSt.signedIn
-          ? ('<label class="field" style="margin-top:12px"><span>סיסמה חדשה (לפעם הבאה)</span><input type="password" id="sync-new-password" dir="ltr" autocomplete="new-password" /></label>' +
+          ? ('<label class="field" style="margin-top:12px"><span>סיסמה חדשה (לפעם הבאה)</span><input type="password" id="sync-new-password" dir="ltr" autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" /></label>' +
             '<button type="button" class="btn" data-action="sync-set-password">שמירת סיסמה</button>')
           : '') +
         '</section>');
@@ -1592,7 +1594,8 @@
 
 
 
-      '<section class="card"><button type="button" class="btn danger wide" data-action="confirm-clear">מחיקת כל הנתונים</button></section>';
+      '<section class="card"><button type="button" class="btn danger wide" data-action="confirm-clear">מחיקת כל הנתונים</button></section>' +
+      '<p class="hp-legend" dir="ltr" style="text-align:center;margin:8px 0 24px">v' + esc((window.FitConfig && FitConfig.APP_VERSION) || '') + '</p>';
   }
 
   /* ---------- modals ---------- */
@@ -2703,6 +2706,35 @@
     document.querySelectorAll('[data-meal]').forEach(syncMeal);
   }
 
+  function authFieldValues() {
+    const emailEl = document.getElementById('sync-email');
+    const passEl = document.getElementById('sync-password');
+    return {
+      email: ((emailEl && emailEl.value) || '').trim().toLowerCase(),
+      password: ((passEl && passEl.value) || '').trim()
+    };
+  }
+
+  function runPasswordAuth(mode) {
+    function go() {
+      const v = authFieldValues();
+      if (!v.email || !v.password) { toast('יש להזין אימייל וסיסמה'); return; }
+      if (!window.FitSync) { toast('ההתחברות נכשלה'); return; }
+      const fn = mode === 'signup' ? FitSync.signUpWithPassword : FitSync.signInWithPassword;
+      toast(mode === 'signup' ? 'נרשמים…' : 'מתחברים…');
+      fn(v.email, v.password).then(function () {
+        toast('התחברתם');
+        return FitSync.onForeground ? FitSync.onForeground() : null;
+      }).then(function () { render(); }).catch(function (e) { toast((e && e.message) || 'ההתחברות נכשלה'); });
+    }
+    const first = authFieldValues();
+    if (!first.email || !first.password) {
+      requestAnimationFrame(function () { requestAnimationFrame(go); });
+      return;
+    }
+    go();
+  }
+
   function onClick(ev) {
     const btn = ev.target.closest('[data-action]');
     if (!btn) {
@@ -2732,25 +2764,18 @@
     }
     if (action === 'share-summary') { shareSummary(); return; }
     if (action === 'sync-signin' || action === 'sync-signup') {
-      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
-      const password = (document.getElementById('sync-password') || {}).value || '';
-      if (!email || !password) { toast('יש להזין אימייל וסיסמה'); return; }
-      const fn = action === 'sync-signup' ? FitSync.signUpWithPassword : FitSync.signInWithPassword;
-      toast(action === 'sync-signup' ? 'נרשמים…' : 'מתחברים…');
-      fn(email, password).then(function () {
-        toast('התחברתם');
-        return FitSync.onForeground ? FitSync.onForeground() : null;
-      }).then(function () { render(); }).catch(function (e) { toast(e.message || 'ההתחברות נכשלה'); });
+      ev.preventDefault();
+      runPasswordAuth(action === 'sync-signup' ? 'signup' : 'signin');
       return;
     }
     if (action === 'sync-send-otp') {
-      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim().toLowerCase();
       if (!email) { toast('יש להזין אימייל'); return; }
       FitSync.sendOtp(email).then(function () { toast('נשלח קוד למייל. הזינו אותו כאן, בלי ללחוץ על קישור'); }).catch(function (e) { toast(e.message || 'שליחת הקוד נכשלה'); });
       return;
     }
     if (action === 'sync-verify-otp') {
-      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim().toLowerCase();
       const token = ((document.getElementById('sync-otp') || {}).value || '').trim();
       if (!email || !token) { toast('יש להזין אימייל וקוד'); return; }
       FitSync.verifyOtp(email, token).then(function () {
@@ -2760,13 +2785,13 @@
       return;
     }
     if (action === 'sync-magic') {
-      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim().toLowerCase();
       if (!email) { toast('יש להזין אימייל'); return; }
       FitSync.sendMagicLink(email).then(function () { toast('נשלח קישור למייל. עדיף להזין את הקוד בתוך האפליקציה'); }).catch(function (e) { toast(e.message || 'שליחה נכשלה'); });
       return;
     }
     if (action === 'sync-set-password') {
-      const password = (document.getElementById('sync-new-password') || {}).value || '';
+      const password = ((document.getElementById('sync-new-password') || {}).value || '').trim();
       if (!password) { toast('יש להזין סיסמה חדשה'); return; }
       FitSync.updatePassword(password).then(function () { toast('הסיסמה נשמרה'); render(); }).catch(function (e) { toast(e.message || 'שמירת הסיסמה נכשלה'); });
       return;
@@ -3797,6 +3822,13 @@
     }
     Store.subscribe(function () { maybeCelebrate(); render(); });
     document.addEventListener('click', onClick);
+    document.addEventListener('submit', function (ev) {
+      const form = ev.target && ev.target.id === 'sync-auth-form' ? ev.target : (ev.target && ev.target.closest ? ev.target.closest('#sync-auth-form') : null);
+      if (!form) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      runPasswordAuth('signin');
+    });
     document.addEventListener('change', onChange);
     document.addEventListener('input', function (ev) {
       const el = ev.target;

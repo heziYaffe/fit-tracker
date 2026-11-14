@@ -29,10 +29,21 @@
     return '';
   }
 
+  function normalizeEmail(email) {
+    return String(email || '').trim().toLowerCase();
+  }
+
+  function normalizePassword(password) {
+    return String(password || '').trim();
+  }
+
   function headers(extra) {
     const c = cfg();
-    const h = { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' };
-    if (authUser && authUser.access_token) h.Authorization = 'Bearer ' + authUser.access_token;
+    const h = {
+      apikey: c.SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + ((authUser && authUser.access_token) || c.SUPABASE_ANON_KEY)
+    };
     return Object.assign(h, extra || {});
   }
 
@@ -181,20 +192,27 @@
     if (low.indexOf('signup is disabled') >= 0) return 'הרשמה חדשה כבויה כרגע';
     if (raw === 'not-signed-in' || fallback === 'not-signed-in') return 'קודם צריך להתחבר לחשבון';
     if (raw === 'whoop-not-ready' || raw === 'not-ready') return 'חיבור Whoop לא מוכן עדיין';
-    return raw || fallback || 'הפעולה נכשלה';
+    if (low.indexOf('failed to fetch') >= 0 || low.indexOf('networkerror') >= 0 || low.indexOf('load failed') >= 0 || low.indexOf('network request failed') >= 0) {
+      return 'אין חיבור לשרת. בדקו את הרשת ונסו שוב';
+    }
+    const extra = code && raw.indexOf(code) < 0 ? (' (' + code + ')') : '';
+    return (raw || fallback || 'הפעולה נכשלה') + extra;
   }
 
   function authFetch(path, body) {
     const c = cfg();
     return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + path, {
       method: 'POST',
-      headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify(body)
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (b) {
         if (!res.ok) throw new Error(authErrorMessage(b, 'הפעולה נכשלה'));
         return b;
       });
+    }).catch(function (err) {
+      if (err && err.message && err.message !== 'Failed to fetch' && !/failed to fetch|networkerror|load failed|network request failed/i.test(err.message)) throw err;
+      throw new Error(authErrorMessage({ message: err && err.message }, 'ההתחברות נכשלה'));
     });
   }
 
@@ -205,19 +223,27 @@
       refresh_token: data.refresh_token,
       user: data.user || {}
     });
-    return restoreSession().then(function () { return authUser; });
+    if (data.user && data.user.id) return Promise.resolve(authUser);
+    return restoreSession().then(function () {
+      if (!authUser) throw new Error('ההתחברות נכשלה');
+      return authUser;
+    });
   }
 
   function signInWithPassword(email, password) {
     if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    email = normalizeEmail(email);
+    password = normalizePassword(password);
     if (!email || !password) return Promise.reject(new Error('יש להזין אימייל וסיסמה'));
     return authFetch('/auth/v1/token?grant_type=password', { email: email, password: password }).then(applySession);
   }
 
   function signUpWithPassword(email, password) {
     if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    email = normalizeEmail(email);
+    password = normalizePassword(password);
     if (!email || !password) return Promise.reject(new Error('יש להזין אימייל וסיסמה'));
-    if (String(password).length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
+    if (password.length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
     return authFetch('/auth/v1/signup', { email: email, password: password }).then(function (data) {
       if (data && data.access_token) return applySession(data);
       throw new Error('ההרשמה נקלטה. אם לא התחברתם אוטומטית, נסו כניסה עם הסיסמה');
@@ -226,12 +252,13 @@
 
   function sendOtp(email, redirectTo) {
     if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    email = normalizeEmail(email);
     if (!email) return Promise.reject(new Error('יש להזין אימייל'));
     const c = cfg();
     const back = redirectTo || (typeof location !== 'undefined' ? (location.origin + location.pathname.replace(/index\.html$/, '')) : '');
     return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/otp?redirect_to=' + encodeURIComponent(back), {
       method: 'POST',
-      headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({ email: email, create_user: true })
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (b) {
@@ -243,13 +270,16 @@
 
   function verifyOtp(email, token) {
     if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    email = normalizeEmail(email);
+    token = String(token || '').trim();
     if (!email || !token) return Promise.reject(new Error('יש להזין אימייל וקוד'));
-    return authFetch('/auth/v1/verify', { type: 'email', email: email, token: String(token).trim() }).then(applySession);
+    return authFetch('/auth/v1/verify', { type: 'email', email: email, token: token }).then(applySession);
   }
 
   function updatePassword(password) {
     if (!authUser) return Promise.reject(new Error('not-signed-in'));
-    if (!password || String(password).length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
+    password = normalizePassword(password);
+    if (!password || password.length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
     const c = cfg();
     return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/user', {
       method: 'PUT',
