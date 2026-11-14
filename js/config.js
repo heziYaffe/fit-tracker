@@ -4,8 +4,11 @@
   'use strict';
 
   const STORAGE_KEY = 'hazi-fit-v1';
+  const DEMO_STORAGE_KEY = 'hazi-fit-demo-v1';
+  const DEMO_MODE_KEY = 'hazi-fit-demo-mode';
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
+  const APP_VERSION = '4';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -101,6 +104,54 @@
     { id: 'level-5', title: 'רמה 5', desc: 'הגעת לרמה 5', icon: '⭐', check: 'level5' }
   ];
 
+
+  const REST_DEFAULT_SEC = 90;
+
+  const SMALL_LIFTS = [
+    'פשיטת מרפקים', 'פרפר', 'כפיפת מרפקים', 'כפיפת רגליים', 'עליות שוקיים',
+    'כתפיים צידיות', 'הרחקה', 'פנים-חוץ'
+  ];
+
+  const MUSCLES = [
+    { id: 'chest', label: 'חזה', view: 'front' },
+    { id: 'shoulders', label: 'כתפיים', view: 'both' },
+    { id: 'biceps', label: 'ידיים קדמיות', view: 'front' },
+    { id: 'triceps', label: 'ידיים אחוריות', view: 'back' },
+    { id: 'forearms', label: 'אמות', view: 'both' },
+    { id: 'abs', label: 'בטן', view: 'front' },
+    { id: 'lats', label: 'גב רחב', view: 'back' },
+    { id: 'upperback', label: 'גב עליון', view: 'back' },
+    { id: 'lowerback', label: 'גב תחתון', view: 'back' },
+    { id: 'quads', label: 'ארבע ראשי', view: 'front' },
+    { id: 'hamstrings', label: 'המסטרינגס', view: 'back' },
+    { id: 'glutes', label: 'עכוז', view: 'back' },
+    { id: 'calves', label: 'שוקיים', view: 'both' }
+  ];
+
+  const EXERCISE_MUSCLES = {
+    'לחיצת חזה': { primary: ['chest'], secondary: ['shoulders', 'triceps'] },
+    'לחיצה בשיפוע': { primary: ['chest'], secondary: ['shoulders', 'triceps'] },
+    'לחיצת כתפיים': { primary: ['shoulders'], secondary: ['triceps'] },
+    'פשיטת מרפקים': { primary: ['triceps'], secondary: [] },
+    'פרפר': { primary: ['chest'], secondary: [] },
+    'דדליפט': { primary: ['hamstrings', 'glutes', 'lowerback'], secondary: ['upperback', 'forearms'] },
+    'מתח': { primary: ['lats'], secondary: ['biceps', 'upperback'] },
+    'חתירה': { primary: ['upperback'], secondary: ['lats', 'biceps'] },
+    'פולדאון': { primary: ['lats'], secondary: ['biceps'] },
+    'כפיפת מרפקים': { primary: ['biceps'], secondary: ['forearms'] },
+    'סקוואט': { primary: ['quads'], secondary: ['glutes', 'hamstrings'] },
+    'לחיצת רגליים': { primary: ['quads'], secondary: ['glutes'] },
+    'מתנייחים': { primary: ['hamstrings', 'glutes'], secondary: ['lowerback'] },
+    'כפיפת רגליים': { primary: ['hamstrings'], secondary: [] },
+    'עליות שוקיים': { primary: ['calves'], secondary: [] }
+  };
+
+  const STARTER_FOODS = [
+    { key: 'shake', name: 'שייק חלבון', protein: 25, calories: 130, carbs: 5, fat: 2 },
+    { key: 'chicken', name: 'חזה עוף 200 גרם', protein: 62, calories: 330, carbs: 0, fat: 7 },
+    { key: 'yogurt', name: 'יוגורט חלבון', protein: 20, calories: 120, carbs: 6, fat: 0.5 },
+    { key: 'eggs', name: '3 ביצים', protein: 18, calories: 210, carbs: 1, fat: 15 }
+  ];
   const DEFAULT_SETTINGS = {
     weeklyWorkoutTarget: 4,
     dailyProteinTarget: 150,
@@ -111,15 +162,23 @@
 
   const FitConfig = {
     STORAGE_KEY,
+    DEMO_STORAGE_KEY,
+    DEMO_MODE_KEY,
     CONSISTENCY_DAYS,
     INSTALL_DISMISS_KEY,
+    APP_VERSION,
     WORKOUT_TYPES,
     XP_RULES,
     LEVELS,
     METRIC_SOURCES,
     METRIC_FIELDS,
     ACHIEVEMENTS,
-    DEFAULT_SETTINGS
+    DEFAULT_SETTINGS,
+    REST_DEFAULT_SEC,
+    SMALL_LIFTS,
+    MUSCLES,
+    EXERCISE_MUSCLES,
+    STARTER_FOODS
   };
 
   root.FitConfig = FitConfig;

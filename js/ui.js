@@ -11,7 +11,10 @@
     tab: 'home',
     nutritionDate: null,
     modal: null,
-    toastTimer: 0
+    toastTimer: 0,
+    exerciseName: null,
+    exerciseBack: 'progress',
+    exerciseSort: 'recent'
   };
 
   function esc(s) {
@@ -87,6 +90,30 @@
 
   /* ---------- screens ---------- */
 
+  function demoBanner() {
+    if (!Store.isDemoMode()) return '';
+    return '<div class="banner demo-banner">' +
+      '<p><strong>מצב דמו</strong> — הנתונים להדגמה בלבד. הנתונים האמיתיים שלך לא נמחקו ולא הוחלפו.</p>' +
+      '<button type="button" class="btn tiny" data-action="exit-demo">צא ממצב דמו</button>' +
+      '</div>';
+  }
+
+  function emptyDemoCta() {
+    if (Store.isDemoMode()) return '';
+    const s = state();
+    const has = (s.workouts && s.workouts.length) || (s.nutrition && s.nutrition.length) || (s.weights && s.weights.length);
+    if (has) return '';
+    return '<section class="card demo-cta"><p>רוצים לראות איך האפליקציה נראית עם היסטוריה, גרפים ושיאים? טענו נתוני דמו. אפשר לצאת בכל רגע — הנתונים האמיתיים יישארו כמו שהם.</p>' +
+      '<button type="button" class="btn primary wide" data-action="enter-demo">טען נתוני דמו</button></section>';
+  }
+
+  function prTags(types) {
+    const map = { weight: 'שיא משקל', e1rm: 'שיא 1RM', volume: 'שיא נפח', reps: 'שיא חזרות' };
+    return (types || []).map(function (tp) {
+      return '<span class="pr-tag">' + (map[tp] || tp) + '</span>';
+    }).join('');
+  }
+
   function renderHome() {
     const s = state();
     const now = new Date();
@@ -124,11 +151,11 @@
       ? workouts.map(function (w) { return typeLabel(w); }).join(' · ')
       : 'עדיין לא תועד אימון היום';
 
-    return install +
+    return install + emptyDemoCta() +
       '<header class="page-head"><div>' +
       '<p class="kicker">' + esc(dateLabel) + '</p>' +
       '<h1>שלום, ' + esc(name) + '</h1>' +
-      '</div></header>' +
+      '</div><button type="button" class="btn primary" data-action="start-live">אימון חי</button></header>' +
 
       '<section class="card level-card">' +
       '<div class="level-badge" aria-label="רמה ' + level.level + '">' + level.level + '</div>' +
@@ -192,6 +219,8 @@
       renderTodayMetrics(metrics) +
       '</section>' +
 
+      '<button type="button" class="btn primary wide live-start-btn" data-action="start-live">▶  התחל אימון חי</button>' +
+
       '<div class="section-title"><h2>הוספה מהירה</h2></div>' +
       '<div class="quick-row" style="grid-template-columns:repeat(4,1fr)">' +
       '<button type="button" class="btn" data-action="open-workout">+ אימון</button>' +
@@ -199,6 +228,9 @@
       '<button type="button" class="btn" data-action="open-weight">+ משקל</button>' +
       '<button type="button" class="btn" data-action="open-metrics">+ מדדים</button>' +
       '</div>' +
+
+      renderMiniBodyMap(s) +
+      renderFoodsStrip(E.todayISO()) +
 
       '<div class="section-title"><h2>הישגים</h2><span class="kicker">' + unlocked.length + '/' + badges.length + '</span></div>' +
       '<section class="card"><div class="badges">' + badges.map(renderBadge).join('') + '</div></section>';
@@ -236,7 +268,8 @@
     let body;
     if (!list.length) {
       body = '<div class="empty card"><span class="emoji">🏋️</span><p>אין אימונים עדיין. תעדו את האימון הראשון שלכם — כך המד וה־XP יתחילו לזוז.</p>' +
-        '<button type="button" class="btn primary" data-action="open-workout">אימון חדש</button></div>';
+        '<button type="button" class="btn primary" data-action="open-workout">אימון חדש</button>' +
+        emptyDemoCta() + '</div>';
     } else {
       let lastDate = '';
       const parts = [];
@@ -245,27 +278,34 @@
           parts.push('<div class="list-date">' + esc(E.formatDayLong(w.date)) + '</div>');
           lastDate = w.date;
         }
-        const ex = (w.exercises || []).filter(function (e) { return e.name; }).map(function (e) {
-          const bits = [e.name];
+        const named = (w.exercises || []).filter(function (e) { return e.name; });
+        const links = named.map(function (e) {
+          const bits = [];
           if (e.sets || e.reps) bits.push((e.sets || '?') + '×' + (e.reps || '?'));
           if (e.weight) bits.push(e.weight + ' ק״ג');
-          return bits.join(' ');
-        }).join(' · ');
+          return '<button type="button" class="ex-link" data-action="open-exercise" data-name="' + esc(e.name) + '">' +
+            esc(e.name) + (bits.length ? ' <span>' + esc(bits.join(' · ')) + '</span>' : '') + '</button>';
+        }).join('');
         const meta = [];
         if (w.duration) meta.push(w.duration + ' דק׳');
         parts.push(
-          '<button type="button" class="list-item" data-action="edit-workout" data-id="' + esc(w.id) + '">' +
+          '<div class="list-item workout-card">' +
+          '<button type="button" class="workout-main" data-action="edit-workout" data-id="' + esc(w.id) + '">' +
           '<div class="meta">' + esc(meta.join(' · ') || 'אימון') + '</div>' +
           '<div class="title">' + esc(typeLabel(w)) + '</div>' +
-          (ex ? '<div class="sub">' + esc(ex) + '</div>' : '') +
           (w.notes ? '<div class="sub">' + esc(w.notes) + '</div>' : '') +
-          '</button>'
+          '</button>' +
+          (links ? '<div class="ex-links">' + links + '</div>' : '') +
+          '</div>'
         );
       });
       body = '<div class="list">' + parts.join('') + '</div>';
     }
     return '<header class="page-head"><h1>אימונים</h1>' +
-      '<div class="actions"><button type="button" class="btn primary" data-action="open-workout">אימון חדש</button></div></header>' + body;
+      '<div class="actions">' +
+      '<button type="button" class="btn primary" data-action="start-live">אימון חי</button>' +
+      '<button type="button" class="btn" data-action="open-workout">תיעוד ידני</button>' +
+      '</div></header>' + body;
   }
 
   function renderNutrition() {
@@ -309,6 +349,7 @@
       '<h2>' + esc(title) + '</h2>' +
       '<button type="button" class="btn" data-action="shift-day" data-delta="1" aria-label="היום הבא" ' + (isToday ? 'disabled' : '') + '>←</button>' +
       '</div>' +
+      renderFoodsLibrary(date) +
       '<section class="card">' +
       '<div class="metric"><div><span class="label kicker">חלבון</span><div><span class="big">' + ltr(String(Number(nut.protein) || 0)) + '</span><span class="unit"> / ' + ltr(String(pTarget)) + ' גרם</span></div></div></div>' +
       hpBar(pTarget ? Math.min(1, (Number(nut.protein) || 0) / pTarget) : 0, 'sm', true) +
@@ -375,7 +416,8 @@
     if (!hasAny) {
       return '<header class="page-head"><h1>התקדמות</h1></header>' +
         '<div class="empty card"><span class="emoji">📈</span><p>אין עדיין מספיק נתונים. התחילו לתעד אימונים, תזונה ומשקל כדי לראות כאן גרפים.</p>' +
-        '<button type="button" class="btn primary" data-action="open-workout">אימון ראשון</button></div>';
+        '<button type="button" class="btn primary" data-action="open-workout">אימון ראשון</button>' +
+        emptyDemoCta() + '</div>';
     }
 
     // Workouts per week — last 8 weeks (Sun–Sat, Israel)
@@ -405,6 +447,7 @@
         labels: weights.map(function (w) { return E.parseISO(w.date).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' }); }),
         values: weights.map(function (w) { return w.weight; }),
         color: '#6aa8ff',
+        tighten: true,
         aria: 'משקל גוף'
       })
       : '<div class="empty"><p>אין עדיין מדידות משקל. תעדו משקל מהמסך הראשי או מההגדרות.</p></div>';
@@ -450,6 +493,7 @@
     const badges = E.computeAchievements(s, xp);
 
     return '<header class="page-head"><h1>התקדמות</h1></header>' +
+      renderBodyMapCard(s, false) +
       '<section class="card"><h2>אימונים לפי שבוע</h2>' +
       Charts.barChart({
         labels: weekCounts.map(function (w) { return w.label; }),
@@ -478,14 +522,111 @@
       '<span><i class="hm-both" style="background:#3ee0a0"></i>שניהם</span>' +
       '<span><i class="hm-partial" style="background:#3a4a3a"></i>חלבון חלקי</span>' +
       '</div></section>' +
-      '<section class="card"><h2>הישגים</h2><div class="badges">' + badges.map(renderBadge).join('') + '</div></section>';
+      '<section class="card"><h2>הישגים</h2><div class="badges">' + badges.map(renderBadge).join('') + '</div></section>' +
+      renderExerciseLibrary(s);
+  }
+
+  function renderExerciseLibrary(s) {
+    const items = E.exerciseIndex(s);
+    if (!items.length) return '';
+    const sort = ui.exerciseSort || 'recent';
+    items.sort(function (a, b) {
+      if (sort === 'freq') return b.sessions - a.sessions || b.lastDate.localeCompare(a.lastDate);
+      return b.lastDate.localeCompare(a.lastDate) || b.sessions - a.sessions;
+    });
+    const rows = items.map(function (it) {
+      const last = it.last || {};
+      const bits = [];
+      if (last.sets || last.reps) bits.push((last.sets || '?') + '×' + (last.reps || '?'));
+      if (last.weight) bits.push(last.weight + ' ק״ג');
+      return '<button type="button" class="list-item" data-action="open-exercise" data-name="' + esc(it.name) + '">' +
+        '<div class="meta">' + esc(E.formatDay(it.lastDate)) + ' · ' + it.sessions + ' אימונים</div>' +
+        '<div class="title">' + esc(it.name) + '</div>' +
+        (bits.length ? '<div class="sub">אחרון: ' + esc(bits.join(' · ')) + '</div>' : '') +
+        '</button>';
+    }).join('');
+    return '<div class="section-title"><h2>תרגילים</h2>' +
+      '<span class="sort-tabs">' +
+      '<button type="button" class="linkish' + (sort === 'recent' ? ' on' : '') + '" data-action="ex-sort" data-sort="recent">אחרונים</button>' +
+      ' · ' +
+      '<button type="button" class="linkish' + (sort === 'freq' ? ' on' : '') + '" data-action="ex-sort" data-sort="freq">לפי תדירות</button>' +
+      '</span></div>' +
+      '<p class="hp-legend" style="margin-top:-4px;margin-bottom:8px">לחצו על תרגיל כדי לראות נפח, משקל, 1RM ושיאים.</p>' +
+      '<div class="list">' + rows + '</div>';
+  }
+
+  function renderExerciseDetail() {
+    const name = ui.exerciseName;
+    const s = state();
+    const sessions = E.sessionsForExercise(s, name);
+    if (!sessions.length) {
+      return '<header class="page-head"><button type="button" class="btn" data-action="close-exercise">חזרה</button><h1>' + esc(name || 'תרגיל') + '</h1></header>' +
+        '<div class="empty card"><p>אין עדיין סטים לתרגיל הזה.</p></div>';
+    }
+    const stats = E.exerciseStats(sessions);
+    const list = stats.sessions;
+    const labels = list.map(function (sess) {
+      return E.parseISO(sess.date).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
+    });
+    const marks = list.map(function (sess) { return !!sess.isPR; });
+    const daysSince = stats.daysSinceLastPR;
+    const sinceText = daysSince == null ? 'אין שיא עדיין' : (daysSince === 0 ? 'היום' : (daysSince === 1 ? 'אתמול' : daysSince + ' ימים'));
+    const rate = (stats.prPerWeek * 10) / 10;
+    const rateTxt = (Math.round(stats.prPerWeek * 10) / 10).toString();
+    const pctTxt = Math.round(stats.prSessionPct * 100);
+
+    const table = stats.bestReps.length
+      ? '<div class="reps-table">' + stats.bestReps.map(function (row) {
+          return '<div class="reps-row"><span>' + ltr(row.weight + ' ק״ג') + '</span><strong>' + row.reps + ' חזרות</strong><span class="muted">' + esc(E.formatDay(row.date)) + '</span></div>';
+        }).join('') + '</div>'
+      : '<p class="kicker">אין עדיין נתוני חזרות-למשקל.</p>';
+
+    const history = list.slice().reverse().map(function (sess) {
+      const rowBits = (sess.rows || []).map(function (e) {
+        return (e.sets || '?') + '×' + (e.reps || '?') + (e.weight ? ' · ' + e.weight + ' ק״ג' : '');
+      }).join(' · ');
+      return '<div class="list-item">' +
+        '<div class="meta">' + esc(E.formatDayLong(sess.date)) + (sess.isPR ? ' ' + prTags(sess.prTypes) : (sess.isBaseline ? ' <span class="pr-tag dim">בסיס</span>' : '')) + '</div>' +
+        '<div class="title">' + esc(rowBits) + '</div>' +
+        '<div class="sub">נפח ' + ltr(String(Math.round(sess.volume))) + ' · 1RM משוער ' + ltr((Math.round(sess.e1rm * 10) / 10) + ' ק״ג') + '</div>' +
+        '</div>';
+    }).join('');
+
+    return '<header class="page-head">' +
+      '<button type="button" class="btn" data-action="close-exercise">חזרה</button>' +
+      '<h1>' + esc(name) + '</h1></header>' +
+      '<div class="stats-grid">' +
+      '<div class="metric-pill"><div class="label">שיאים סה״כ</div><div class="value">' + stats.totalPRs + '</div></div>' +
+      '<div class="metric-pill"><div class="label">שיאים ב־30 יום</div><div class="value">' + stats.prLast30 + '</div></div>' +
+      '<div class="metric-pill"><div class="label">שיאים לשבוע</div><div class="value">' + ltr(rateTxt) + '</div></div>' +
+      '<div class="metric-pill"><div class="label">% אימונים עם שיא</div><div class="value">' + pctTxt + '<span class="unit">%</span></div></div>' +
+      '<div class="metric-pill"><div class="label">ימים מאז שיא</div><div class="value">' + esc(sinceText) + '</div></div>' +
+      '<div class="metric-pill"><div class="label">אימונים</div><div class="value">' + stats.totalSessions + '</div></div>' +
+      '</div>' +
+      '<section class="card"><h2>נפח כולל לאימון</h2>' +
+      Charts.barChart({ labels: labels, values: list.map(function (sess) { return sess.volume; }), marks: marks, color: '#6aa8ff', aria: 'נפח כולל', height: 170 }) +
+      '<p class="hp-legend">נפח = סטים × חזרות × משקל. נקודה צהובה / עמודה צהובה = שיא.</p></section>' +
+      '<section class="card"><h2>משקל בסט הכבד</h2>' +
+      Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.topWeight; }), marks: marks, color: '#3ee0a0', tighten: true, aria: 'משקל בסט הכבד' }) +
+      '</section>' +
+      '<section class="card"><h2>1RM משוער (Epley)</h2>' +
+      Charts.lineChart({ labels: labels, values: list.map(function (sess) { return Math.round(sess.e1rm * 10) / 10; }), marks: marks, color: '#ffb14a', tighten: true, aria: '1RM משוער' }) +
+      '<p class="hp-legend">נוסחת Epley: משקל × (1 + חזרות/30). השיא הנוכחי: ' + ltr((Math.round(stats.currentMaxE1rm * 10) / 10) + ' ק״ג') + '.</p></section>' +
+      '<section class="card"><h2>שיא חזרות לפי משקל</h2>' + table + '</section>' +
+      '<div class="section-title"><h2>היסטוריית אימונים</h2></div>' +
+      '<div class="list">' + history + '</div>';
   }
 
   function renderSettings() {
     const s = state();
     const set = s.settings;
     const lastW = Store.latestWeight();
-    return '<header class="page-head"><h1>הגדרות</h1></header>' +
+    const demoCard = Store.isDemoMode()
+      ? '<section class="card demo-cta"><h2>מצב דמו</h2><p class="hp-legend" style="margin-bottom:12px">מוצגים נתוני הדגמה. הנתונים האמיתיים שמורים בנפרד ולא הוחלפו.</p>' +
+        '<button type="button" class="btn wide" data-action="exit-demo">צא ממצב דמו</button></section>'
+      : '<section class="card demo-cta"><h2>נתוני דמו</h2><p class="hp-legend" style="margin-bottom:12px">טעינת הדמו לא מוחקת ולא דורסת את הנתונים האמיתיים. אפשר לצאת בכל רגע.</p>' +
+        '<button type="button" class="btn primary wide" data-action="enter-demo">טען נתוני דמו</button></section>';
+    return '<header class="page-head"><h1>הגדרות</h1></header>' + demoCard +
       '<section class="card">' +
       '<label class="field"><span>שם תצוגה</span>' +
       '<input type="text" data-action="setting" data-key="displayName" value="' + esc(set.displayName || '') + '" /></label>' +
@@ -544,11 +685,14 @@
     }
     overlay.hidden = false;
     const type = ui.modal.type;
-    if (type === 'workout') overlay.innerHTML = renderWorkoutSheet();
-    else if (type === 'weight') overlay.innerHTML = renderWeightSheet();
+    if (type === 'workout') {
+      overlay.innerHTML = renderWorkoutSheet();
+      fillLastHints();
+    } else if (type === 'weight') overlay.innerHTML = renderWeightSheet();
     else if (type === 'metrics') overlay.innerHTML = renderMetricsSheet();
     else if (type === 'confirm') overlay.innerHTML = renderConfirm();
     else if (type === 'badge') overlay.innerHTML = renderBadgeDialog();
+    else if (type === 'food') overlay.innerHTML = renderFoodSheet();
     else overlay.innerHTML = '';
   }
 
@@ -563,12 +707,16 @@
       return '<button type="button" class="chip' + (draft.type === t.id ? ' active' : '') + '" data-action="draft-type" data-type="' + t.id + '">' + esc(t.label) + '</button>';
     }).join('');
     const exercises = (draft.exercises || []).map(function (ex, i) {
-      return '<div class="ex-row">' +
-        '<input type="text" data-ex="' + i + '" data-exk="name" placeholder="תרגיל" value="' + esc(ex.name || '') + '" />' +
+      return '<div class="ex-block">' +
+        '<div class="ex-row">' +
+        '<input type="text" data-ex="' + i + '" data-exk="name" placeholder="תרגיל" autocomplete="off" value="' + esc(ex.name || '') + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="sets" min="0" placeholder="סטים" value="' + esc(ex.sets || '') + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="reps" min="0" placeholder="חזרות" value="' + esc(ex.reps || '') + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="weight" min="0" step="0.5" placeholder="ק״ג" value="' + esc(ex.weight || '') + '" />' +
         '<button type="button" class="icon-btn" data-action="remove-ex" data-index="' + i + '" aria-label="מחיקה">×</button>' +
+        '</div>' +
+        '<div class="ex-suggest" data-ex-suggest="' + i + '" hidden></div>' +
+        '<div class="ex-last" data-ex-last="' + i + '"></div>' +
         '</div>';
     }).join('');
     return '<div class="sheet" role="dialog" aria-labelledby="wo-title">' +
@@ -655,21 +803,210 @@
       '</div>';
   }
 
+  function formatElapsed(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0');
+  }
+
+  function renderMiniBodyMap(s) {
+    const load = E.weekMuscleLoad(s);
+    if (!load.maxSets) return '';
+    const neglected = (load.neglected || []).slice(0, 4).map(function (m) { return m.label; });
+    return '<section class="card body-card">' +
+      '<div class="section-title" style="margin-top:0"><h2>מפת גוף השבוע</h2>' +
+      '<button type="button" class="linkish" data-action="tab" data-tab="progress">פירוט</button></div>' +
+      root.FitBodyMap.render(load, { mini: true }) +
+      (neglected.length ? '<p class="hp-legend">הוזנחו: ' + esc(neglected.join(' · ')) + '</p>' : '<p class="hp-legend">כיסוי טוב השבוע.</p>') +
+      '</section>';
+  }
+
+  function renderBodyMapCard(s, mini) {
+    const load = E.weekMuscleLoad(s);
+    const neglected = load.neglected || [];
+    const range = esc(E.formatDay(load.weekStart)) + ' – ' + esc(E.formatDay(load.weekEnd));
+    const list = neglected.length
+      ? '<ul class="neglected-list">' + neglected.map(function (m) {
+          return '<li>' + esc(m.label) + (m.sets ? ' · ' + (Math.round(m.sets * 10) / 10) + ' סטים' : ' · אין סטים') + '</li>';
+        }).join('') + '</ul>'
+      : (load.maxSets ? '<p class="hp-legend">אין שרירים מוזנחים במיוחד השבוע.</p>' : '<p class="hp-legend">עדיין אין אימונים השבוע — המפה תתמלא אחרי האימון הבא.</p>');
+    return '<section class="card body-card"><h2>מפת גוף שבועית</h2>' +
+      '<p class="hp-legend">' + range + ' · צבע חזק = יותר נפח. משני מקבלים חצי משקל.</p>' +
+      root.FitBodyMap.render(load, { mini: !!mini }) +
+      '<h3 class="subhead">שרירים שהוזנחו</h3>' + list +
+      '</section>';
+  }
+
+  function renderFoodsStrip(date) {
+    const foods = Store.listFoods().slice(0, 4);
+    if (!foods.length) return '';
+    return '<section class="card"><div class="section-title" style="margin-top:0"><h2>מאכלים קבועים</h2>' +
+      '<button type="button" class="linkish" data-action="tab" data-tab="nutrition">הכל</button></div>' +
+      '<div class="food-chips">' + foods.map(function (f) {
+        return '<button type="button" class="chip food-chip" data-action="use-food" data-id="' + esc(f.id) + '" data-date="' + date + '">' +
+          esc(f.name) + ' <span>' + f.protein + 'ג׳</span></button>';
+      }).join('') + '</div></section>';
+  }
+
+  function renderFoodsLibrary(date) {
+    const foods = Store.listFoods();
+    const chips = foods.map(function (f) {
+      const bits = [f.protein + 'ג׳ חלבון', f.calories + ' קק״ל'];
+      if (f.carbs !== '' && f.carbs != null) bits.push(f.carbs + ' פחמ׳');
+      if (f.fat !== '' && f.fat != null) bits.push(f.fat + ' שומן');
+      return '<div class="food-row">' +
+        '<button type="button" class="btn primary food-add" data-action="use-food" data-id="' + esc(f.id) + '" data-date="' + date + '">+ ' + esc(f.name) + '</button>' +
+        '<div class="food-meta"><span>' + esc(bits.join(' · ')) + '</span>' +
+        (f.uses ? '<span class="kicker">' + f.uses + ' פעמים</span>' : '') + '</div>' +
+        '<div class="food-actions">' +
+        '<button type="button" class="linkish" data-action="edit-food" data-id="' + esc(f.id) + '">עריכה</button>' +
+        '<button type="button" class="linkish" data-action="delete-food" data-id="' + esc(f.id) + '">מחיקה</button>' +
+        '</div></div>';
+    }).join('');
+    return '<section class="card"><div class="section-title" style="margin-top:0"><h2>ספריית מאכלים</h2>' +
+      '<button type="button" class="linkish" data-action="edit-food" data-id="">+ מאכל</button></div>' +
+      '<p class="hp-legend">לחיצה מוסיפה את הערכים ליום הנבחר. הפריטים השכיחים מופיעים ראשונים.</p>' +
+      (chips || '<p class="kicker">הספרייה ריקה.</p>') +
+      '</section>';
+  }
+
+  function renderFoodSheet() {
+    const p = ui.modal.props || {};
+    const f = p.food || { name: '', protein: '', calories: '', carbs: '', fat: '' };
+    return '<div class="sheet" role="dialog"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><button type="button" class="btn ghost" data-action="close-modal">סגירה</button>' +
+      '<h2>' + (f.id ? 'עריכת מאכל' : 'מאכל חדש') + '</h2>' +
+      '<button type="button" class="btn primary" data-action="save-food">שמירה</button></div>' +
+      '<label class="field"><span>שם</span><input type="text" id="food-name" value="' + esc(f.name || '') + '" /></label>' +
+      '<label class="field"><span>חלבון (גרם)</span><input type="number" id="food-protein" min="0" step="0.5" value="' + esc(f.protein == null ? '' : f.protein) + '" /></label>' +
+      '<label class="field"><span>קלוריות</span><input type="number" id="food-calories" min="0" step="1" value="' + esc(f.calories == null ? '' : f.calories) + '" /></label>' +
+      '<label class="field"><span>פחמימות (אופציונלי)</span><input type="number" id="food-carbs" min="0" step="0.5" value="' + esc(f.carbs == null || f.carbs === '' ? '' : f.carbs) + '" /></label>' +
+      '<label class="field"><span>שומן (אופציונלי)</span><input type="number" id="food-fat" min="0" step="0.5" value="' + esc(f.fat == null || f.fat === '' ? '' : f.fat) + '" /></label>' +
+      '</div>';
+  }
+
+  function renderLive() {
+    const L = root.FitLive;
+    const sess = L.getSession();
+    if (!sess) return '';
+    const ex = L.currentExercise();
+    const left = L.restRemaining();
+    const pr = L.prForDraft();
+    const lastSets = ex ? E.lastSessionSets(state(), ex.name, null) : [];
+    const lastHtml = lastSets.length
+      ? '<div class="last-sets"><div class="label">פעם קודמת</div><div class="set-pills">' +
+        lastSets.map(function (s, i) {
+          return '<span class="set-pill">סט ' + (i + 1) + ': ' + s.weight + '×' + s.reps + '</span>';
+        }).join('') + '</div></div>'
+      : '<p class="hp-legend">אין היסטוריה לתרגיל הזה עדיין.</p>';
+    const restBar = left > 0
+      ? '<div class="rest-banner" id="rest-banner"><div class="rest-label">מנוחה</div>' +
+        '<div class="rest-count" id="rest-count">' + left + '</div><div class="kicker">שניות</div>' +
+        '<button type="button" class="btn" data-action="skip-rest">דלג</button></div>'
+      : '';
+    const chips = C.WORKOUT_TYPES.map(function (tp) {
+      return '<button type="button" class="chip' + (sess.type === tp.id ? ' active' : '') + '" data-action="live-type" data-type="' + tp.id + '">' + esc(tp.label) + '</button>';
+    }).join('');
+    const exList = sess.exercises.map(function (item, i) {
+      const sets = item.sets.map(function (s, si) {
+        return 'סט ' + (si + 1) + ' ' + s.weight + '×' + s.reps + (s.pr ? ' ⭐' : '');
+      }).join(' · ') || 'אין סטים עדיין';
+      return '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
+        '<div class="title">' + esc(item.name) + '</div><div class="sub">' + esc(sets) + '</div></button>';
+    }).join('');
+    const suggest = ex ? (ex.suggestReason || '') : '';
+    return '<header class="live-head">' +
+      '<button type="button" class="btn ghost" data-action="cancel-live">יציאה</button>' +
+      '<div class="live-clock"><div class="kicker">זמן אימון</div><div id="elapsed-clock" class="clock">' + formatElapsed(L.elapsedMs()) + '</div></div>' +
+      '<button type="button" class="btn primary" data-action="finish-live">סיום</button>' +
+      '</header>' +
+      '<div class="field"><span>סוג אימון</span><div class="chips">' + chips + '</div></div>' +
+      restBar +
+      (ex
+        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + '</h1>' +
+          lastHtml +
+          (suggest ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
+          (pr.isPR ? '<div class="live-pr">⭐ שיא חדש בסט הזה! ' + prTags(pr.types) + '</div>' : '') +
+          '<div class="step-grid">' +
+          '<div class="step-col"><div class="label">משקל (ק״ג)</div>' +
+          '<div class="big-stepper">' +
+          '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="-2.5">−2.5</button>' +
+          '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="-1.25">−1.25</button>' +
+          '<div class="step-val" id="live-weight">' + sess.draft.weight + '</div>' +
+          '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="1.25">+1.25</button>' +
+          '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="2.5">+2.5</button>' +
+          '</div></div>' +
+          '<div class="step-col"><div class="label">חזרות</div>' +
+          '<div class="big-stepper">' +
+          '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="-1">−</button>' +
+          '<div class="step-val" id="live-reps">' + sess.draft.reps + '</div>' +
+          '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="1">+</button>' +
+          '</div></div></div>' +
+          '<button type="button" class="btn primary wide live-log" data-action="live-log">רשום סט ' + (ex.sets.length + 1) + '</button>' +
+          (ex.sets.length ? '<button type="button" class="linkish wide-link" data-action="live-undo">בטל סט אחרון</button>' : '') +
+          '</section>')
+        : '<section class="card"><p>הוסיפו תרגיל כדי להתחיל לתעד סטים.</p></section>') +
+      '<section class="card"><h2>הוסף תרגיל</h2>' +
+      '<div class="live-add"><input type="text" id="live-ex-name" placeholder="שם התרגיל" autocomplete="off" />' +
+      '<button type="button" class="btn primary" data-action="live-add-ex">הוספה</button></div>' +
+      '<div id="live-ex-suggest" class="ex-suggest" hidden></div></section>' +
+      '<div class="rest-pref"><span>מנוחה אחרי סט</span>' +
+      '<button type="button" class="chip' + (sess.restSec === 60 ? ' active' : '') + '" data-action="live-rest" data-sec="60">60 שנ׳</button>' +
+      '<button type="button" class="chip' + (sess.restSec === 90 ? ' active' : '') + '" data-action="live-rest" data-sec="90">90 שנ׳</button>' +
+      '<button type="button" class="chip' + (sess.restSec === 120 ? ' active' : '') + '" data-action="live-rest" data-sec="120">120 שנ׳</button>' +
+      '</div>' +
+      (exList ? '<div class="section-title"><h2>האימון הזה</h2></div><div class="list">' + exList + '</div>' : '');
+  }
+
+  function renderLiveSummary() {
+    const sum = ui.liveSummary;
+    if (!sum) return '';
+    const prs = (sum.prs || []).map(function (p) {
+      return '<li>' + esc(p.name) + ' · ' + p.weight + '×' + p.reps + ' ' + prTags(p.types) + '</li>';
+    }).join('');
+    return '<header class="page-head"><h1>אימון הושלם 💪</h1></header>' +
+      '<section class="card">' +
+      '<div class="stats-grid">' +
+      '<div class="metric-pill"><div class="label">זמן</div><div class="value">' + sum.durationMin + ' <span class="unit">דק׳</span></div></div>' +
+      '<div class="metric-pill"><div class="label">נפח</div><div class="value">' + ltr(String(Math.round(sum.volume))) + '</div></div>' +
+      '<div class="metric-pill"><div class="label">שיאים</div><div class="value">' + (sum.prs || []).length + '</div></div>' +
+      '<div class="metric-pill"><div class="label">XP</div><div class="value">+' + sum.xp + '</div></div>' +
+      '</div>' +
+      (prs ? '<h2>שיאים שנשברו</h2><ul class="neglected-list">' + prs + '</ul>' : '<p class="hp-legend">אין שיאים חדשים הפעם, אבל כל אימון נספר.</p>') +
+      '<button type="button" class="btn primary wide" data-action="close-summary">למסך הבית</button>' +
+      '</section>';
+  }
+
+  function liveBanner() {
+    const L = root.FitLive;
+    if (!L.getSession() || ui.tab === 'live' || ui.liveSummary) return '';
+    return '<div class="banner demo-banner"><p>יש אימון חי פתוח.</p>' +
+      '<button type="button" class="btn tiny primary" data-action="resume-live">חזרה לאימון</button></div>';
+  }
+
   /* ---------- top-level render ---------- */
 
   function render() {
     const main = document.getElementById('main');
     if (!main) return;
-    let html = '';
-    if (ui.tab === 'home') html = renderHome();
-    else if (ui.tab === 'workouts') html = renderWorkouts();
-    else if (ui.tab === 'nutrition') html = renderNutrition();
-    else if (ui.tab === 'progress') html = renderProgress();
-    else if (ui.tab === 'settings') html = renderSettings();
+    const liveOn = !!(root.FitLive && root.FitLive.getSession()) && ui.tab === 'live' && !ui.liveSummary;
+    let html = demoBanner() + liveBanner();
+    if (ui.liveSummary) html += renderLiveSummary();
+    else if (liveOn) html += renderLive();
+    else if (ui.exerciseName) html += renderExerciseDetail();
+    else if (ui.tab === 'home') html += renderHome();
+    else if (ui.tab === 'workouts') html += renderWorkouts();
+    else if (ui.tab === 'nutrition') html += renderNutrition();
+    else if (ui.tab === 'progress') html += renderProgress();
+    else if (ui.tab === 'settings') html += renderSettings();
     main.innerHTML = html;
+    document.body.classList.toggle('is-demo', Store.isDemoMode());
+    document.body.classList.toggle('is-live', liveOn);
 
     document.querySelectorAll('.tab').forEach(function (btn) {
-      btn.classList.toggle('active', btn.getAttribute('data-tab') === ui.tab);
+      const activeTab = liveOn ? 'workouts' : (ui.exerciseName ? 'progress' : ui.tab);
+      btn.classList.toggle('active', btn.getAttribute('data-tab') === activeTab);
     });
     renderOverlay();
   }
@@ -678,10 +1015,114 @@
     if (C && ['home', 'workouts', 'nutrition', 'progress', 'settings'].indexOf(tab) === -1) tab = 'home';
     ui.tab = tab;
     ui.modal = null;
+    ui.exerciseName = null;
+    if (tab !== 'live') { /* keep session */ }
     if (tab === 'nutrition' && !ui.nutritionDate) ui.nutritionDate = E.todayISO();
     try { location.hash = '#/' + tab; } catch (e) { /* ignore */ }
     render();
     window.scrollTo(0, 0);
+  }
+
+  function openLive() {
+    const L = root.FitLive;
+    if (!L.getSession()) L.start();
+    L.startClocks();
+    L.requestWakeLock();
+    ui.tab = 'live';
+    ui.exerciseName = null;
+    ui.liveSummary = null;
+    try { location.hash = '#/live'; } catch (e) { /* ignore */ }
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function openExercise(name, back) {
+    const n = E.normName(name);
+    if (!n) return;
+    ui.exerciseName = n;
+    ui.exerciseBack = back || ui.tab || 'progress';
+    ui.modal = null;
+    try { location.hash = '#/exercise/' + encodeURIComponent(n); } catch (e) { /* ignore */ }
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function closeExercise() {
+    const back = ui.exerciseBack || 'progress';
+    ui.exerciseName = null;
+    setTab(back);
+  }
+
+  function fillLastHints() {
+    const draft = workoutDraft();
+    if (!draft) return;
+    (draft.exercises || []).forEach(function (ex, i) {
+      if (!ex.name) return;
+      renderLastHint(i, ex.name);
+    });
+  }
+
+  function renderLastHint(i, name) {
+    const lastEl = document.querySelector('[data-ex-last="' + i + '"]');
+    if (!lastEl) return;
+    const draft = workoutDraft();
+    const last = E.lastPerformance(state(), name, draft && draft.date, draft && draft.id);
+    if (!last) { lastEl.innerHTML = ''; return; }
+    const e = last.last;
+    const bits = [];
+    if (e.sets || e.reps) bits.push((e.sets || '?') + '×' + (e.reps || '?'));
+    if (e.weight) bits.push(e.weight + ' ק״ג');
+    lastEl.innerHTML = '<span>פעם קודמת (' + esc(E.formatDay(last.date)) + '): ' + esc(bits.join(' · ')) + '</span>' +
+      '<button type="button" class="linkish" data-action="copy-last" data-index="' + i + '" data-name="' + esc(name) + '">העתק</button>';
+  }
+
+  function updateExAutocomplete(input) {
+    const i = Number(input.dataset.ex);
+    const q = String(input.value || '').trim();
+    const box = document.querySelector('[data-ex-suggest="' + i + '"]');
+    if (box) {
+      const names = E.exerciseNames(state());
+      const matches = (q ? names.filter(function (n) { return n !== q && n.indexOf(q) !== -1; }) : names).slice(0, 6);
+      if (!matches.length) {
+        box.hidden = true;
+        box.innerHTML = '';
+      } else {
+        box.hidden = false;
+        box.innerHTML = matches.map(function (n) {
+          return '<button type="button" class="suggest-item" data-action="pick-ex" data-index="' + i + '" data-name="' + esc(n) + '">' + esc(n) + '</button>';
+        }).join('');
+      }
+    }
+    renderLastHint(i, q);
+  }
+
+  function updateLiveExSuggest(input) {
+    const box = document.getElementById('live-ex-suggest');
+    if (!box) return;
+    const q = String(input.value || '').trim();
+    const names = E.exerciseNames(state());
+    const matches = (q ? names.filter(function (n) { return n.indexOf(q) !== -1; }) : names).slice(0, 8);
+    if (!matches.length) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    box.innerHTML = matches.map(function (n) {
+      return '<button type="button" class="suggest-item" data-action="live-pick-ex" data-name="' + esc(n) + '">' + esc(n) + '</button>';
+    }).join('');
+  }
+
+  function applyLast(i, name, force) {
+    const draft = workoutDraft();
+    if (!draft) return;
+    collectWorkoutDraftFromDom();
+    const last = E.lastPerformance(state(), name, draft.date, draft.id);
+    if (!draft.exercises[i]) draft.exercises[i] = { name: '', sets: '', reps: '', weight: '' };
+    draft.exercises[i].name = name;
+    if (last) {
+      const e = last.last;
+      if (force || !draft.exercises[i].sets) draft.exercises[i].sets = e.sets;
+      if (force || !draft.exercises[i].reps) draft.exercises[i].reps = e.reps;
+      if (force || !draft.exercises[i].weight) draft.exercises[i].weight = e.weight;
+    }
+    renderOverlay();
   }
 
   function syncDraftFromInput(input) {
@@ -770,7 +1211,7 @@
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'fit-tracker-backup-' + E.todayISO() + '.json';
+    a.download = (Store.isDemoMode() ? 'fit-tracker-demo-' : 'fit-tracker-backup-') + E.todayISO() + '.json';
     document.body.appendChild(a);
     a.click();
     setTimeout(function () {
@@ -806,6 +1247,136 @@
     const s = state();
 
     if (action === 'tab') { setTab(btn.dataset.tab); return; }
+    if (action === 'start-live' || action === 'resume-live') { openLive(); return; }
+    if (action === 'cancel-live') {
+      openModal('confirm', {
+        title: 'יציאה מהאימון?',
+        message: 'הסטים שטרם נשמרו יימחקו.',
+        danger: true,
+        okLabel: 'יציאה',
+        onOk: function () {
+          root.FitLive.discard();
+          closeModal();
+          setTab('workouts');
+        }
+      });
+      return;
+    }
+    if (action === 'finish-live') {
+      const sum = root.FitLive.finish();
+      if (!sum) { toast('רשמו לפחות סט אחד'); return; }
+      ui.liveSummary = sum;
+      ui.tab = 'home';
+      try { location.hash = '#/home'; } catch (e) { /* ignore */ }
+      render();
+      return;
+    }
+    if (action === 'close-summary') { ui.liveSummary = null; setTab('home'); return; }
+    if (action === 'live-type') { root.FitLive.setType(btn.dataset.type); render(); return; }
+    if (action === 'live-rest') { root.FitLive.setRestSec(Number(btn.dataset.sec)); render(); return; }
+    if (action === 'live-add-ex') {
+      const input = document.getElementById('live-ex-name');
+      const name = input ? input.value : '';
+      if (!root.FitLive.addExercise(name)) { toast('יש להזין שם תרגיל'); return; }
+      render();
+      return;
+    }
+    if (action === 'live-pick-ex') {
+      if (!root.FitLive.addExercise(btn.dataset.name)) { toast('יש להזין שם תרגיל'); return; }
+      render();
+      return;
+    }
+    if (action === 'live-select-ex') { root.FitLive.selectExercise(Number(btn.dataset.index)); render(); return; }
+    if (action === 'live-step') {
+      root.FitLive.stepDraft(btn.dataset.field, Number(btn.dataset.delta));
+      render();
+      return;
+    }
+    if (action === 'live-log') {
+      const row = root.FitLive.logSet();
+      if (!row) { toast('יש להזין משקל או חזרות'); return; }
+      if (row.pr) toast('שיא חדש! ⭐');
+      render();
+      return;
+    }
+    if (action === 'live-undo') { root.FitLive.undoLastSet(); render(); return; }
+    if (action === 'skip-rest') { root.FitLive.cancelRest(); render(); return; }
+    if (action === 'use-food') {
+      const food = Store.useFood(btn.dataset.id, btn.dataset.date || ui.nutritionDate || E.todayISO());
+      if (food) toast('נוסף: ' + food.name);
+      return;
+    }
+    if (action === 'edit-food') {
+      const existing = btn.dataset.id ? Store.getFood(btn.dataset.id) : null;
+      openModal('food', { food: existing || { name: '', protein: '', calories: '', carbs: '', fat: '' } });
+      return;
+    }
+    if (action === 'save-food') {
+      const name = (document.getElementById('food-name') || {}).value || '';
+      if (!String(name).trim()) { toast('יש להזין שם'); return; }
+      const payload = {
+        name: String(name).trim(),
+        protein: Number((document.getElementById('food-protein') || {}).value || 0),
+        calories: Number((document.getElementById('food-calories') || {}).value || 0),
+        carbs: (document.getElementById('food-carbs') || {}).value,
+        fat: (document.getElementById('food-fat') || {}).value
+      };
+      const existing = ui.modal && ui.modal.props && ui.modal.props.food && ui.modal.props.food.id;
+      if (existing) Store.updateFood(existing, payload);
+      else Store.addFood(payload);
+      closeModal();
+      toast('המאכל נשמר');
+      return;
+    }
+    if (action === 'delete-food') {
+      const id = btn.dataset.id;
+      openModal('confirm', {
+        title: 'מחיקת מאכל',
+        message: 'למחוק את המאכל מהספרייה?',
+        danger: true,
+        okLabel: 'מחיקה',
+        onOk: function () { Store.deleteFood(id); closeModal(); toast('נמחק'); }
+      });
+      return;
+    }
+    if (action === 'muscle-info') {
+      const load = E.weekMuscleLoad(state());
+      const m = (load.muscles || []).find(function (x) { return x.id === btn.dataset.muscle; });
+      if (m) toast(m.label + ' · ' + (Math.round(m.sets * 10) / 10) + ' סטים השבוע');
+      return;
+    }
+    if (action === 'enter-demo') {
+      Store.enterDemoMode();
+      ui.exerciseName = null;
+      toast('נטענו נתוני דמו');
+      setTab('home');
+      return;
+    }
+    if (action === 'exit-demo') {
+      Store.exitDemoMode();
+      ui.exerciseName = null;
+      toast('חזרתם לנתונים האמיתיים');
+      setTab('home');
+      return;
+    }
+    if (action === 'open-exercise') {
+      openExercise(btn.dataset.name, ui.tab);
+      return;
+    }
+    if (action === 'close-exercise') { closeExercise(); return; }
+    if (action === 'ex-sort') {
+      ui.exerciseSort = btn.dataset.sort || 'recent';
+      render();
+      return;
+    }
+    if (action === 'pick-ex') {
+      applyLast(Number(btn.dataset.index), btn.dataset.name, false);
+      return;
+    }
+    if (action === 'copy-last') {
+      applyLast(Number(btn.dataset.index), btn.dataset.name, true);
+      return;
+    }
     if (action === 'close-modal') { closeModal(); return; }
     if (action === 'dismiss-install') {
       try { localStorage.setItem(C.INSTALL_DISMISS_KEY, '1'); } catch (e) { /* ignore */ }
@@ -934,8 +1505,10 @@
     }
     if (action === 'confirm-clear') {
       openModal('confirm', {
-        title: 'מחיקת כל הנתונים',
-        message: 'כל האימונים, התזונה, המשקל והמדדים יימחקו מהמכשיר הזה. היעדים יחזרו לברירת המחדל.',
+        title: Store.isDemoMode() ? 'מחיקת נתוני הדמו' : 'מחיקת כל הנתונים',
+        message: Store.isDemoMode()
+          ? 'יימחקו רק נתוני הדמו מהמכשיר. הנתונים האמיתיים יישארו כמו שהם.'
+          : 'כל האימונים, התזונה, המשקל והמדדים יימחקו מהמכשיר הזה. היעדים יחזרו לברירת המחדל.',
         danger: true,
         okLabel: 'מחיקה',
         onOk: function () {
@@ -1012,28 +1585,70 @@
     if (el.dataset.draft || el.dataset.ex != null) syncDraftFromInput(el);
   }
 
-  function onHash() {
+  function parseHash() {
     const h = (location.hash || '#/home').replace(/^#\/?/, '');
-    const tab = (h.split('/')[0] || 'home');
-    if (tab && tab !== ui.tab && !ui.modal) {
-      ui.tab = ['home', 'workouts', 'nutrition', 'progress', 'settings'].indexOf(tab) >= 0 ? tab : 'home';
-      render();
+    const parts = h.split('/');
+    const tab = parts[0] || 'home';
+    if (tab === 'exercise') {
+      ui.exerciseName = decodeURIComponent(parts.slice(1).join('/') || '');
+      if (!ui.tab || ui.tab === 'home') ui.tab = 'progress';
+      return;
     }
+    ui.exerciseName = null;
+    if (tab === 'live') {
+      ui.tab = 'live';
+      return;
+    }
+    if (['home', 'workouts', 'nutrition', 'progress', 'settings'].indexOf(tab) >= 0) ui.tab = tab;
+  }
+
+  function onHash() {
+    if (ui.modal) return;
+    parseHash();
+    render();
   }
 
   function init() {
     Store.load();
+    try {
+      if (new URLSearchParams(location.search).get('demo') === '1' && !Store.isDemoMode()) {
+        Store.enterDemoMode();
+      }
+    } catch (err) { /* ignore */ }
     ui.nutritionDate = E.todayISO();
-    const h = (location.hash || '').replace(/^#\/?/, '');
-    const tab = h.split('/')[0];
-    if (['home', 'workouts', 'nutrition', 'progress', 'settings'].indexOf(tab) >= 0) ui.tab = tab;
+    parseHash();
 
+    if (root.FitLive) {
+      if (root.FitLive.restore() && ui.tab === 'live') {
+        root.FitLive.startClocks();
+        root.FitLive.requestWakeLock();
+      }
+      root.FitLive.onTick(function (ev) {
+        if (ev.type === 'elapsed') {
+          const el = document.getElementById('elapsed-clock');
+          if (el) el.textContent = formatElapsed(ev.ms);
+        } else if (ev.type === 'rest') {
+          const el = document.getElementById('rest-count');
+          if (el) el.textContent = ev.left;
+        } else if (ev.type === 'rest-done') {
+          toast('המנוחה נגמרה');
+          render();
+        }
+      });
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible' && root.FitLive.getSession()) {
+          root.FitLive.requestWakeLock();
+        }
+      });
+    }
     Store.subscribe(function () { render(); });
     document.addEventListener('click', onClick);
     document.addEventListener('change', onChange);
     document.addEventListener('input', function (ev) {
       const el = ev.target;
       if (el && (el.dataset.draft || el.dataset.ex != null)) syncDraftFromInput(el);
+      if (el && el.dataset.exk === 'name') updateExAutocomplete(el);
+      if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);
     });
     window.addEventListener('hashchange', onHash);
     window.addEventListener('popstate', function () {

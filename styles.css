@@ -734,3 +734,220 @@ input[type="date"] { color-scheme: dark; }
 }
 
 span[dir="ltr"] { unicode-bidi: isolate; }
+
+
+/* Demo mode */
+.demo-banner {
+  background: rgba(255, 194, 58, 0.12);
+  border-color: rgba(255, 194, 58, 0.35);
+  align-items: center;
+}
+.demo-banner p { color: var(--text); }
+.demo-banner strong { color: var(--warning); }
+.demo-cta p { color: var(--text-muted); line-height: 1.55; margin-bottom: 12px; }
+
+/* Workout cards + exercise links */
+.workout-card { padding: 4px 4px 8px; }
+.workout-main {
+  display: block;
+  width: 100%;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 8px 10px 4px;
+}
+.ex-links { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 6px; }
+.ex-link {
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text);
+}
+.ex-link span { color: var(--text-muted); font-weight: 600; }
+
+/* Autocomplete */
+.ex-block { margin-bottom: 10px; }
+.ex-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0;
+  background: #0e1518;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.ex-suggest[hidden] { display: none !important; }
+.suggest-item {
+  text-align: start;
+  background: transparent;
+  border: 0;
+  padding: 10px 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+.suggest-item:active { background: var(--accent-dim); }
+.ex-last {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  min-height: 0;
+  padding: 0 2px;
+}
+.ex-last:empty { display: none; }
+
+/* Exercise detail */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.pr-tag {
+  display: inline-block;
+  margin-right: 4px;
+  background: rgba(255, 194, 58, 0.16);
+  color: var(--warning);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+.pr-tag.dim {
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font-weight: 700;
+}
+.reps-table { display: flex; flex-direction: column; gap: 8px; }
+.reps-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+.reps-row:first-child { border-top: 0; padding-top: 0; }
+.reps-row .muted { color: var(--text-dim); font-size: 0.78rem; }
+.sort-tabs .on { color: var(--accent); }
+.linkish.on { color: var(--accent); }
+
+
+/* Live workout */
+body.is-live .tabbar { display: none; }
+body.is-live .main { padding-bottom: calc(16px + var(--safe-b)); }
+body.is-live .toast { bottom: calc(16px + var(--safe-b)); }
+.live-start-btn { margin: 4px 0 16px; padding: 14px 16px; font-size: 1.05rem; }
+.live-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.live-clock { text-align: center; }
+.live-clock .clock {
+  font-size: 1.8rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+.live-ex h1 { font-size: 1.6rem; margin-bottom: 10px; }
+.big-stepper {
+  direction: ltr;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.step-btn {
+  min-width: 56px;
+  min-height: 56px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.step-btn.sm { min-width: 48px; min-height: 48px; font-size: 0.8rem; }
+.step-val {
+  min-width: 72px;
+  text-align: center;
+  font-size: 2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.step-grid { display: flex; flex-direction: column; gap: 16px; margin: 16px 0; }
+.live-log { padding: 16px; font-size: 1.1rem; margin-top: 8px; }
+.wide-link { display: block; text-align: center; margin-top: 10px; }
+.suggest-reason { color: var(--accent); font-size: 0.88rem; margin: 8px 0; font-weight: 650; }
+.live-pr {
+  background: rgba(255, 194, 58, 0.16);
+  border: 1px solid rgba(255, 194, 58, 0.35);
+  color: var(--warning);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 800;
+  margin: 8px 0;
+}
+.set-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.set-pill {
+  background: var(--bg-soft);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.rest-banner {
+  background: var(--accent-dim);
+  border: 1px solid rgba(62, 224, 160, 0.35);
+  border-radius: 18px;
+  text-align: center;
+  padding: 16px 12px;
+  margin-bottom: 14px;
+}
+.rest-count {
+  font-size: 3.2rem;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.rest-pref { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
+.live-add { display: flex; gap: 8px; }
+.live-add input { flex: 1; }
+.list-item.on { border-color: rgba(62, 224, 160, 0.45); background: var(--accent-dim); }
+
+/* Body map */
+.body-map { width: 100%; height: auto; display: block; }
+.body-map.mini { max-height: 210px; }
+.body-skin { fill: #141c20; stroke: #2a3a3d; stroke-width: 1; }
+.body-outline { fill: none; stroke: #3a4a50; stroke-width: 1; }
+.body-caption { fill: #7f9299; font-size: 11px; font-family: var(--font); }
+.body-map .muscle { stroke: #2a3a3d; stroke-width: 1; transition: fill 0.2s; cursor: pointer; }
+.body-map .muscle.lv0 { fill: #1a262b; }
+.body-map .muscle.lv1 { fill: #16352c; }
+.body-map .muscle.lv2 { fill: #1c5a45; }
+.body-map .muscle.lv3 { fill: #2a8f68; }
+.body-map .muscle.lv4 { fill: #3ee0a0; }
+.neglected-list { margin: 8px 0 0; padding: 0 18px 0 0; color: var(--text-muted); line-height: 1.6; }
+.subhead { font-size: 0.92rem; margin: 12px 0 0; }
+
+/* Foods */
+.food-chips, .food-chip { }
+.food-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.food-chip span { color: var(--text-muted); font-weight: 600; }
+.food-row { padding: 10px 0; border-top: 1px solid var(--line); }
+.food-row:first-of-type { border-top: 0; }
+.food-add { width: 100%; text-align: start; }
+.food-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 0.78rem; color: var(--text-muted); }
+.food-actions { display: flex; gap: 12px; margin-top: 4px; }

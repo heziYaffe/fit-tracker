@@ -6,9 +6,25 @@
   const C = root.FitConfig;
   const listeners = [];
   let state = defaultState();
+  let demoMode = false;
 
   function uid() {
     return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  }
+
+  function starterFoods() {
+    return (C.STARTER_FOODS || []).map(function (f) {
+      return {
+        id: 'food_' + f.key,
+        name: f.name,
+        protein: f.protein,
+        calories: f.calories,
+        carbs: f.carbs == null ? '' : f.carbs,
+        fat: f.fat == null ? '' : f.fat,
+        uses: 0,
+        starter: true
+      };
+    });
   }
 
   function defaultState() {
@@ -18,26 +34,80 @@
       workouts: [],
       nutrition: [],
       weights: [],
-      metrics: []
+      metrics: [],
+      foods: starterFoods()
     };
   }
 
   function normalize(raw) {
     const base = defaultState();
     if (!raw || typeof raw !== 'object') return base;
+    const foods = Array.isArray(raw.foods) && raw.foods.length ? raw.foods : starterFoods();
     return {
       version: 1,
       settings: Object.assign({}, base.settings, raw.settings || {}),
       workouts: Array.isArray(raw.workouts) ? raw.workouts : [],
       nutrition: Array.isArray(raw.nutrition) ? raw.nutrition : [],
       weights: Array.isArray(raw.weights) ? raw.weights : [],
-      metrics: Array.isArray(raw.metrics) ? raw.metrics : []
+      metrics: Array.isArray(raw.metrics) ? raw.metrics : [],
+      foods: foods
     };
   }
 
+  function storageAvailable() {
+    return typeof localStorage !== 'undefined';
+  }
+
+  function dataKey() {
+    return demoMode ? C.DEMO_STORAGE_KEY : C.STORAGE_KEY;
+  }
+
   function persist() {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(C.STORAGE_KEY, JSON.stringify(state));
+    if (!storageAvailable()) return;
+    localStorage.setItem(dataKey(), JSON.stringify(state));
+  }
+
+  function isDemoMode() {
+    return demoMode;
+  }
+
+  function readDemoFlag() {
+    try {
+      return storageAvailable() && localStorage.getItem(C.DEMO_MODE_KEY) === '1';
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function readKey(key) {
+    if (!storageAvailable()) return null;
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? normalize(JSON.parse(raw)) : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function enterDemoMode(now) {
+    demoMode = true;
+    if (storageAvailable()) localStorage.setItem(C.DEMO_MODE_KEY, '1');
+    const generated = root.FitDemo && root.FitDemo.generate
+      ? root.FitDemo.generate(now)
+      : defaultState();
+    state = normalize(generated);
+    persist();
+    notify();
+    return state;
+  }
+
+  function exitDemoMode() {
+    demoMode = false;
+    if (storageAvailable()) localStorage.removeItem(C.DEMO_MODE_KEY);
+    const real = readKey(C.STORAGE_KEY);
+    state = real || defaultState();
+    notify();
+    return state;
   }
 
   function notify() {
@@ -52,13 +122,23 @@
   }
 
   function load() {
-    if (typeof localStorage === 'undefined') {
-      state = defaultState();
+    demoMode = readDemoFlag();
+    if (!storageAvailable()) {
+      if (demoMode && root.FitDemo) {
+        state = normalize(root.FitDemo.generate());
+      } else {
+        state = defaultState();
+      }
       return state;
     }
     try {
-      const raw = localStorage.getItem(C.STORAGE_KEY);
-      state = raw ? normalize(JSON.parse(raw)) : defaultState();
+      const raw = localStorage.getItem(dataKey());
+      if (demoMode && !raw && root.FitDemo) {
+        state = normalize(root.FitDemo.generate());
+        persist();
+      } else {
+        state = raw ? normalize(JSON.parse(raw)) : defaultState();
+      }
     } catch (err) {
       console.warn('fit-tracker: could not read storage', err);
       state = defaultState();
@@ -127,6 +207,8 @@
     row.protein = Math.max(0, Number(row.protein) || 0);
     row.calories = Math.max(0, Number(row.calories) || 0);
     row.water = Math.max(0, Number(row.water) || 0);
+    if (row.carbs !== undefined && row.carbs !== '') row.carbs = Math.max(0, Number(row.carbs) || 0);
+    if (row.fat !== undefined && row.fat !== '') row.fat = Math.max(0, Number(row.fat) || 0);
     commit();
     return row;
   }
@@ -206,6 +288,69 @@
     return manual || rows[0];
   }
 
+  function listFoods() {
+    return (state.foods || []).slice().sort(function (a, b) {
+      const ua = Number(a.uses) || 0;
+      const ub = Number(b.uses) || 0;
+      if (ub !== ua) return ub - ua;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'he');
+    });
+  }
+
+  function addFood(food) {
+    const row = {
+      id: (food && food.id) || uid(),
+      name: (food && food.name) || '',
+      protein: Number(food && food.protein) || 0,
+      calories: Number(food && food.calories) || 0,
+      carbs: food && food.carbs !== '' && food.carbs != null ? Number(food.carbs) : '',
+      fat: food && food.fat !== '' && food.fat != null ? Number(food.fat) : '',
+      uses: Number(food && food.uses) || 0,
+      starter: !!(food && food.starter)
+    };
+    state.foods = state.foods || [];
+    state.foods.push(row);
+    commit();
+    return row;
+  }
+
+  function updateFood(id, patch) {
+    const row = (state.foods || []).find(function (f) { return f.id === id; });
+    if (!row) return null;
+    Object.assign(row, patch, { id: row.id });
+    commit();
+    return row;
+  }
+
+  function deleteFood(id) {
+    state.foods = (state.foods || []).filter(function (f) { return f.id !== id; });
+    commit();
+  }
+
+  function getFood(id) {
+    return (state.foods || []).find(function (f) { return f.id === id; }) || null;
+  }
+
+  function useFood(id, date) {
+    const food = getFood(id);
+    if (!food) return null;
+    food.uses = (Number(food.uses) || 0) + 1;
+    const day = date || root.FitEngine.todayISO();
+    const cur = getNutrition(day) || { protein: 0, calories: 0, water: 0, carbs: 0, fat: 0 };
+    const patch = {
+      protein: (Number(cur.protein) || 0) + (Number(food.protein) || 0),
+      calories: (Number(cur.calories) || 0) + (Number(food.calories) || 0)
+    };
+    if (food.carbs !== '' && food.carbs != null) {
+      patch.carbs = (Number(cur.carbs) || 0) + (Number(food.carbs) || 0);
+    }
+    if (food.fat !== '' && food.fat != null) {
+      patch.fat = (Number(cur.fat) || 0) + (Number(food.fat) || 0);
+    }
+    upsertNutrition(day, patch);
+    return food;
+  }
+
   function exportJSON() {
     return {
       app: 'fit-tracker',
@@ -216,7 +361,8 @@
         workouts: state.workouts,
         nutrition: state.nutrition,
         weights: state.weights,
-        metrics: state.metrics
+        metrics: state.metrics,
+        foods: state.foods
       }
     };
   }
@@ -256,7 +402,16 @@
     getMetrics: getMetrics,
     exportJSON: exportJSON,
     importJSON: importJSON,
-    clearAll: clearAll
+    clearAll: clearAll,
+    listFoods: listFoods,
+    addFood: addFood,
+    updateFood: updateFood,
+    deleteFood: deleteFood,
+    getFood: getFood,
+    useFood: useFood,
+    isDemoMode: isDemoMode,
+    enterDemoMode: enterDemoMode,
+    exitDemoMode: exitDemoMode
   };
 
   root.FitStore = FitStore;

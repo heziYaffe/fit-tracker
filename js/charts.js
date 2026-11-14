@@ -53,14 +53,22 @@
       targetLine += '<text x="' + (W - padR + 4) + '" y="' + (y + 3).toFixed(1) + '" class="chart-label">' + esc(String(target)) + '</text>';
     }
 
+    const marks = opts.marks || [];
+    const showEvery = Math.max(1, Math.ceil(n / 8));
     let bars = '';
     values.forEach(function (v, i) {
       const num = Number(v) || 0;
       const h = nice ? (num / nice) * innerH : 0;
       const x = padL + i * (barW + gap);
       const y = padT + innerH - h;
-      bars += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="4" fill="' + (num > 0 ? color : 'transparent') + '" />';
-      bars += '<text x="' + (x + barW / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" class="chart-label">' + esc(labels[i] || '') + '</text>';
+      const fill = marks[i] ? '#ffc23a' : (num > 0 ? color : 'transparent');
+      bars += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="4" fill="' + fill + '" />';
+      if (marks[i]) {
+        bars += '<circle cx="' + (x + barW / 2).toFixed(1) + '" cy="' + Math.max(6, y - 5).toFixed(1) + '" r="3.2" fill="#ffc23a" stroke="#0b1114" stroke-width="1" />';
+      }
+      if (i % showEvery === 0 || i === n - 1) {
+        bars += '<text x="' + (x + barW / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" class="chart-label">' + esc(labels[i] || '') + '</text>';
+      }
     });
 
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg" role="img" aria-label="' + esc(opts.aria || 'גרף') + '">' + grid + targetLine + bars + '</svg>';
@@ -80,28 +88,39 @@
     const nums = values.map(function (v) { return v == null || v === '' ? null : Number(v); });
     const present = nums.filter(function (v) { return v != null && !Number.isNaN(v); });
     const peak = present.reduce(function (m, v) { return Math.max(m, v); }, Number(target) || 0);
-    const nice = niceMax(peak);
+    const floor = present.length ? present.reduce(function (m, v) { return Math.min(m, v); }, peak) : 0;
+    const tighten = opts.tighten && present.length && floor > 0 && floor > peak * 0.5;
+    const niceLo = tighten ? Math.max(0, Math.floor((floor * 0.92) / (peak > 50 ? 5 : 1)) * (peak > 50 ? 5 : 1)) : 0;
+    const nice = niceMax(peak - niceLo) + niceLo;
+    const span = Math.max(nice - niceLo, 1);
     const innerW = W - padL - padR;
     const innerH = H - padT - padB;
     const n = Math.max(nums.length, 1);
     const step = n === 1 ? 0 : innerW / (n - 1);
+    const marks = opts.marks || [];
 
     function xy(i, v) {
       const x = padL + i * step;
-      const y = padT + innerH - (v / nice) * innerH;
+      const y = padT + innerH - ((v - niceLo) / span) * innerH;
       return { x: x, y: y };
+    }
+
+    function tickLabel(v) {
+      if (Math.abs(v - Math.round(v)) < 0.05) return String(Math.round(v));
+      return String(Math.round(v * 10) / 10);
     }
 
     let grid = '';
     [0, 0.5, 1].forEach(function (t) {
       const y = padT + innerH - t * innerH;
+      const val = niceLo + span * t;
       grid += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y + '" y2="' + y + '" class="chart-grid" />';
-      grid += '<text x="' + (W - 4) + '" y="' + (y + 3) + '" text-anchor="end" class="chart-label">' + Math.round(nice * t) + '</text>';
+      grid += '<text x="' + (W - 4) + '" y="' + (y + 3) + '" text-anchor="end" class="chart-label">' + tickLabel(val) + '</text>';
     });
 
     let targetLine = '';
     if (target != null && target !== '') {
-      const y = padT + innerH - (Number(target) / nice) * innerH;
+      const y = padT + innerH - ((Number(target) - niceLo) / span) * innerH;
       targetLine = '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '" class="chart-target" />';
     }
 
@@ -115,7 +134,11 @@
     let dots = '';
     pts.forEach(function (p, idx) {
       path += (idx === 0 ? 'M' : ' L') + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
-      dots += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.6" fill="' + color + '" />';
+      if (marks[p.i]) {
+        dots += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="4.2" fill="#ffc23a" stroke="#0b1114" stroke-width="1.2" />';
+      } else {
+        dots += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.6" fill="' + color + '" />';
+      }
     });
     const line = pts.length ? '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />' : '';
 

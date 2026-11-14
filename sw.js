@@ -1,5 +1,5 @@
 /* פיט — service worker */
-const CACHE = 'fit-tracker-v2';
+const CACHE = 'fit-tracker-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -10,10 +10,14 @@ const ASSETS = [
   './apple-touch-icon.png',
   './js/config.js',
   './js/engine.js',
+  './js/demo.js',
   './js/store.js',
+  './js/live.js',
+  './js/bodymap.js',
   './js/charts.js',
   './js/ui.js',
-  './js/app.js'
+  './js/app.js',
+  './version.json'
 ];
 
 self.addEventListener('install', (event) => {
