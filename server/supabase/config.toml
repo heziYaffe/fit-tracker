@@ -1,0 +1,5 @@
+# Public project ref (same as the API hostname). Used for CLI deploys.
+project_id = "wnqlaajfqimkaibcnsti"
+
+[functions.whoop]
+verify_jwt = false

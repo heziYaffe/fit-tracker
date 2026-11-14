@@ -4,3 +4,6 @@ screenshot*.png
 server/.env
 server/**/.env
 js/cloud-config.local.js
+
+# Supabase CLI temp / link state
+**/supabase/.temp/

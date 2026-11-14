@@ -1,9 +1,11 @@
 // Supabase Edge Function: Whoop OAuth2 + webhook + token refresh.
 // Deploy: supabase functions deploy whoop --no-verify-jwt
 // Secrets: WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET, WHOOP_REDIRECT_URI,
-//          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, APP_ORIGIN
+//          APP_ORIGIN, APP_RETURN_URL (optional).
+//          SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY are injected.
 //
 // Routes (PATH_PREFIX is the function URL):
+//   GET  /health           → { ok, whoop_configured } (no auth; safe before Whoop secrets exist)
 //   GET  /                 → start OAuth (requires ?access_token= or Authorization)
 //   GET  /callback         → Whoop redirect with ?code&state
 //   POST /webhook          → Whoop webhooks (signature verified)
@@ -17,8 +19,31 @@ const WHOOP_TOKEN = "https://api.prod.whoop.com/oauth/oauth2/token";
 const WHOOP_API = "https://api.prod.whoop.com/developer";
 const SCOPES = "read:recovery read:cycles read:sleep read:workout read:profile offline";
 
+function appOrigin() {
+  return (Deno.env.get("APP_ORIGIN") || "https://heziyaffe.github.io").replace(/\/+$/, "");
+}
+
+function appReturnUrl() {
+  const explicit = (Deno.env.get("APP_RETURN_URL") || "").replace(/\/+$/, "");
+  if (explicit) return explicit;
+  const origin = appOrigin();
+  if (origin.endsWith("/fit-tracker")) return origin;
+  return origin + "/fit-tracker";
+}
+
+function whoopConfigured() {
+  return !!(Deno.env.get("WHOOP_CLIENT_ID") && Deno.env.get("WHOOP_CLIENT_SECRET"));
+}
+
+function missingWhoopConfig() {
+  return json({
+    error: "whoop_not_configured",
+    message: "WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET are not set yet.",
+  }, 503);
+}
+
 const cors = {
-  "Access-Control-Allow-Origin": Deno.env.get("APP_ORIGIN") || "*",
+  "Access-Control-Allow-Origin": Deno.env.get("APP_ORIGIN") || "https://heziyaffe.github.io",
   "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 };
@@ -307,14 +332,24 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const parts = path.split("/").filter(Boolean);
-  // function name may be the first segment
-  const tail = parts[0] === "whoop" ? parts.slice(1) : parts;
+  // Platform may prefix /functions/v1/whoop or just /whoop.
+  const idx = parts.lastIndexOf("whoop");
+  const tail = idx >= 0 ? parts.slice(idx + 1) : parts;
   const route = "/" + tail.join("/");
 
   try {
+    if (req.method === "GET" && (route === "/health" || route === "/ready")) {
+      return json({
+        ok: true,
+        whoop_configured: whoopConfigured(),
+        redirect_uri_set: !!Deno.env.get("WHOOP_REDIRECT_URI"),
+      });
+    }
+
     if (req.method === "GET" && (route === "/" || route === "/start")) {
       const user = await userFromReq(req);
       if (!user) return json({ error: "auth_required" }, 401);
+      if (!whoopConfigured()) return missingWhoopConfig();
       const statePayload = user.id + "." + Date.now();
       const state = statePayload + "." + await signState(statePayload);
       const redirect = Deno.env.get("WHOOP_REDIRECT_URI") || "";
@@ -328,6 +363,7 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === "GET" && (route === "/callback" || url.searchParams.has("code"))) {
+      if (!whoopConfigured()) return missingWhoopConfig();
       const code = url.searchParams.get("code") || "";
       const state = url.searchParams.get("state") || "";
       const [userId, ts, sig] = state.split(".");
@@ -346,11 +382,12 @@ Deno.serve(async (req) => {
       await saveTokens(sb, userId, token, profile.user_id ? String(profile.user_id) : undefined);
       const tok = await getValidToken(sb, userId);
       if (tok) await pullRecent(sb, userId, tok.access_token).catch((e) => console.error(e));
-      const app = (Deno.env.get("APP_ORIGIN") || "https://heziyaffe.github.io/fit-tracker") + "/#/settings?whoop=connected";
+      const app = appReturnUrl() + "/#/settings?whoop=connected";
       return Response.redirect(app, 302);
     }
 
     if (req.method === "POST" && route === "/webhook") {
+      if (!Deno.env.get("WHOOP_CLIENT_SECRET")) return missingWhoopConfig();
       const raw = await req.text();
       if (!await verifyWhoopSignature(req, raw)) return json({ error: "bad_signature" }, 401);
       const event = JSON.parse(raw || "{}");
