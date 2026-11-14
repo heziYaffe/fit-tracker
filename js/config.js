@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '10';
+  const APP_VERSION = '11';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -144,8 +144,33 @@
     'לחיצת רגליים': { primary: ['quads'], secondary: ['glutes'] },
     'מתנייחים': { primary: ['hamstrings', 'glutes'], secondary: ['lowerback'] },
     'כפיפת רגליים': { primary: ['hamstrings'], secondary: [] },
-    'עליות שוקיים': { primary: ['calves'], secondary: [] }
+    'עליות שוקיים': { primary: ['calves'], secondary: [] },
+    'מתח צר': { primary: ['biceps'], secondary: ['lats', 'upperback'] },
+    'מתח אוסטרלי': { primary: ['upperback'], secondary: ['biceps', 'lats'] },
+    'מקבילים': { primary: ['triceps'], secondary: ['chest', 'shoulders'] },
+    'שכיבות סמיכה': { primary: ['chest'], secondary: ['shoulders', 'triceps'] },
+    'שכיבות סמיכה יהלום': { primary: ['triceps'], secondary: ['chest'] },
+    'שכיבות סמיכה בעמידת ידיים': { primary: ['shoulders'], secondary: ['triceps'] },
+    'הרמות רגליים בתלייה': { primary: ['abs'], secondary: [] },
+    'כפיפות בטן': { primary: ['abs'], secondary: [] },
+    'סקוואט משקל גוף': { primary: ['quads'], secondary: ['glutes'] },
+    'מכרעים': { primary: ['quads'], secondary: ['glutes', 'hamstrings'] }
   };
+
+  const BODYWEIGHT_EXERCISES = [
+    'מתח', 'מתח צר', 'מתח אוסטרלי', 'מקבילים', 'שכיבות סמיכה',
+    'שכיבות סמיכה יהלום', 'שכיבות סמיכה בעמידת ידיים',
+    'הרמות רגליים בתלייה', 'כפיפות בטן', 'סקוואט משקל גוף', 'מכרעים'
+  ];
+
+  const BODYWEIGHT_NAME_RE = /מתח|מקבילים|שכיבות סמיכה|כפיפות בטן|מכרעים|הרמות רגליים|סקוואט משקל גוף/;
+
+  function isBodyweightName(name) {
+    const n = String(name || '').trim();
+    if (!n) return false;
+    if (BODYWEIGHT_EXERCISES.indexOf(n) >= 0) return true;
+    return BODYWEIGHT_NAME_RE.test(n);
+  }
 
   const STARTER_FOODS = [
     { key: 'shake', name: 'שייק חלבון', protein: 25, calories: 130, carbs: 5, fat: 2 },
@@ -204,6 +229,8 @@
     SMALL_LIFTS,
     MUSCLES,
     EXERCISE_MUSCLES,
+    BODYWEIGHT_EXERCISES,
+    isBodyweightName,
     STARTER_FOODS,
     DAY_NAMES,
     MEAL_SLOTS

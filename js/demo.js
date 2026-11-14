@@ -54,10 +54,10 @@
         [3, 5, 130], [3, 5, 130], [3, 5, 132.5], [3, 5, 135]
       ],
       'מתח': [
-        [4, 6, 80], [4, 6, 80], [4, 7, 80], [4, 7, 80],
-        [4, 8, 80], [4, 6, 82.5], [4, 7, 82.5], [4, 8, 82.5],
-        [4, 8, 82.5], [4, 6, 85], [4, 7, 85], [4, 8, 85],
-        [4, 8, 85], [4, 9, 85], [4, 8, 87.5], [4, 8, 87.5]
+        [4, 6, 0], [4, 7, 0], [4, 8, 0], [4, 8, 0],
+        [4, 9, 0], [4, 10, 0], [4, 10, 0], [4, 11, 0],
+        [4, 12, 0], [3, 8, 5], [3, 9, 5], [3, 10, 5],
+        [4, 12, 0], [4, 13, 0], [4, 14, 0], [4, 15, 0]
       ],
       'חתירה': [
         [4, 8, 50], [4, 8, 50], [4, 8, 52.5], [4, 8, 52.5],
@@ -123,7 +123,8 @@
       if (!counters[name]) counters[name] = 0;
       const rec = pickPlan(name, counters[name]);
       counters[name] += 1;
-      return { name: name, sets: rec.sets, reps: rec.reps, weight: rec.weight };
+      const bw = !!(root.FitConfig && root.FitConfig.isBodyweightName && root.FitConfig.isBodyweightName(name));
+      return { name: name, sets: rec.sets, reps: rec.reps, weight: rec.weight, bodyweight: bw };
     }
 
     let wIndex = 0;
@@ -234,17 +235,23 @@
     }
 
 
-    function tex(id, name, sets, rmin, rmax, weight, rest, ss) {
+    function tex(id, name, sets, rmin, rmax, weight, rest, ss, opts) {
+      opts = opts || {};
+      const bw = opts.bodyweight != null
+        ? !!opts.bodyweight
+        : !!(root.FitConfig && root.FitConfig.isBodyweightName && root.FitConfig.isBodyweightName(name));
       return {
         id: 'dtex_' + id,
         name: name,
         sets: sets,
+        repsMode: opts.repsMode || 'range',
         repsMin: rmin,
         repsMax: rmax,
         weight: weight,
         restSec: rest,
         notes: '',
-        supersetId: ss || ''
+        supersetId: ss || '',
+        bodyweight: bw
       };
     }
 
@@ -259,7 +266,8 @@
           tex('p2', 'לחיצה בשיפוע', 3, 8, 10, 62.5, 90),
           tex('p3', 'לחיצת כתפיים', 4, 8, 8, 50, 90),
           tex('p4', 'פשיטת מרפקים', 3, 10, 12, 35, 75, 'ss_push_arms'),
-          tex('p5', 'פרפר', 3, 10, 12, 22, 75, 'ss_push_arms')
+          tex('p5', 'פרפר', 3, 10, 12, 22, 75, 'ss_push_arms'),
+          tex('p6', 'שכיבות סמיכה', 3, 12, 15, '', 60, '', { repsMode: 'max', bodyweight: true })
         ]
       },
       {
@@ -269,7 +277,7 @@
         type: 'back',
         exercises: [
           tex('u1', 'דדליפט', 4, 5, 5, 135, 150),
-          tex('u2', 'מתח', 4, 6, 8, 87.5, 120),
+          tex('u2', 'מתח', 4, 6, 8, '', 120, '', { repsMode: 'max', bodyweight: true }),
           tex('u3', 'חתירה', 4, 8, 8, 62.5, 90),
           tex('u4', 'פולדאון', 3, 10, 12, 57.5, 75),
           tex('u5', 'כפיפת מרפקים', 3, 8, 10, 26, 75)

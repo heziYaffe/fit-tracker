@@ -46,7 +46,7 @@
     (state.workouts || []).forEach(function (w) {
       if (!w || w.date < start || w.date > end) return;
       workouts += 1;
-      (w.exercises || []).forEach(function (ex) { volume += E().setVolume(ex); });
+      (w.exercises || []).forEach(function (ex) { volume += E().setVolume(ex, state, w.date); });
     });
     return { volume: volume, workouts: workouts };
   }

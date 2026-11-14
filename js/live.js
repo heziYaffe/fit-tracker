@@ -82,11 +82,13 @@
     const n = E().normName(name);
     if (!n) return null;
     const sug = E().suggestNextSet(Store().getState(), n, [], null);
+    const bw = E().isBodyweightName(n);
     session.exercises.push({
       name: n,
       targetWeight: sug.weight,
       targetReps: sug.reps,
       targetSets: 0,
+      repsMode: 'range',
       repsMin: sug.reps,
       repsMax: sug.reps,
       restSec: session.restSec,
@@ -94,7 +96,8 @@
       supersetId: '',
       suggestReason: sug.reason,
       sets: [],
-      fromTemplate: false
+      fromTemplate: false,
+      bodyweight: bw
     });
     session.currentEx = session.exercises.length - 1;
     session.draft.weight = sug.weight;
@@ -108,11 +111,25 @@
     session.currentEx = index;
     const ex = currentExercise();
     if (ex) {
-      const sug = E().suggestNextSet(Store().getState(), ex.name, ex.sets, null);
-      session.draft.weight = sug.weight;
-      session.draft.reps = sug.reps;
+      applyDraftForExercise(ex);
     }
     persist();
+  }
+
+  function applyDraftForExercise(ex) {
+    const sug = E().suggestNextSet(Store().getState(), ex.name, ex.sets, null);
+    const isMax = E().isMaxReps(ex);
+    const isBw = E().isBodyweightEx(ex, ex.name);
+    session.draft.weight = ex.sets.length
+      ? sug.weight
+      : (ex.targetWeight != null && ex.targetWeight !== '' ? ex.targetWeight : (isBw ? (sug.weight || 0) : sug.weight));
+    if (isMax) {
+      const best = E().bestRepsForExercise(Store().getState(), ex.name);
+      const last = ex.sets.length ? ex.sets[ex.sets.length - 1].reps : 0;
+      session.draft.reps = last || best || sug.reps || 8;
+    } else {
+      session.draft.reps = ex.sets.length ? sug.reps : (ex.targetReps || sug.reps);
+    }
   }
 
   function setDraft(patch) {
@@ -168,7 +185,8 @@
     ex.sets.push(row);
     const sug = E().suggestNextSet(Store().getState(), ex.name, ex.sets, null);
     session.draft.weight = sug.weight;
-    session.draft.reps = ex.targetReps || sug.reps;
+    if (E().isMaxReps(ex)) session.draft.reps = reps || sug.reps;
+    else session.draft.reps = ex.targetReps || sug.reps;
     startRest();
     const targetSets = Number(ex.targetSets) || 0;
     let advanced = false;
@@ -177,11 +195,7 @@
       if (next < session.exercises.length) {
         session.currentEx = next;
         const nxt = currentExercise();
-        if (nxt) {
-          const ns = E().suggestNextSet(Store().getState(), nxt.name, nxt.sets, null);
-          session.draft.weight = nxt.targetWeight || ns.weight;
-          session.draft.reps = nxt.targetReps || ns.reps;
-        }
+        if (nxt) applyDraftForExercise(nxt);
         advanced = true;
       }
     }
@@ -311,7 +325,8 @@
         sets: ex.sets.length,
         reps: top.reps,
         weight: top.weight,
-        setLogs: ex.sets.map(function (s) { return { weight: s.weight, reps: s.reps }; })
+        setLogs: ex.sets.map(function (s) { return { weight: s.weight, reps: s.reps }; }),
+        bodyweight: !!ex.bodyweight
       });
     });
     if (!exercises.length) return null;
@@ -327,21 +342,43 @@
   }
 
 
-  function planSuggestion(name, plannedWeight, repsMin, repsMax) {
+  function planSuggestion(name, plannedWeight, repsMin, repsMax, opts) {
+    opts = opts || {};
+    const isMax = opts.repsMode === 'max' || E().isMaxReps(opts);
+    const isBw = opts.bodyweight || E().isBodyweightName(name);
     const sug = E().suggestNextSet(Store().getState(), name, [], null);
-    const hasHist = !!(sug && sug.reason);
+    const hasHist = !!(sug && sug.reason && sug.reason.indexOf('אין היסטוריה') === -1);
+    const best = E().bestRepsForExercise(Store().getState(), name);
+    const planned = plannedWeight != null && plannedWeight !== '' ? Number(plannedWeight) : null;
+    if (isMax) {
+      const weight = hasHist
+        ? (sug.lastWeight != null ? sug.lastWeight : sug.weight)
+        : (planned != null ? planned : (isBw ? 0 : (sug.weight || 20)));
+      const reps = hasHist ? (sug.lastReps || sug.reps) : (best || 8);
+      return {
+        weight: weight,
+        reps: reps,
+        reason: best ? ('שיא MAX קודם: ' + best + ' חזרות') : (isBw ? 'משקל גוף · עד כשל' : 'עד כשל'),
+        bestMaxReps: best
+      };
+    }
     const reps = repsMin || sug.reps || 8;
     if (hasHist) {
+      let nextReps = sug.reps;
+      if (!isMax && repsMax && sug.reps > repsMax) nextReps = repsMax;
+      else if (!isMax && repsMin && sug.reps < repsMin) nextReps = repsMin;
       return {
         weight: sug.weight,
-        reps: repsMax && sug.reps > repsMax ? repsMax : (repsMin && sug.reps < repsMin ? repsMin : sug.reps),
-        reason: sug.reason
+        reps: nextReps,
+        reason: sug.reason,
+        bestMaxReps: best
       };
     }
     return {
-      weight: plannedWeight != null && plannedWeight !== '' ? Number(plannedWeight) : (sug.weight || 20),
+      weight: planned != null ? planned : (isBw ? 0 : (sug.weight || 20)),
       reps: reps,
-      reason: plannedWeight ? 'לפי התבנית' : (sug.reason || '')
+      reason: isBw ? 'משקל גוף' : (planned != null ? 'לפי התבנית' : (sug.reason || '')),
+      bestMaxReps: best
     };
   }
 
@@ -359,28 +396,34 @@
     (template.exercises || []).forEach(function (tex) {
       const name = E().normName(tex.name);
       if (!name) return;
-      const sug = planSuggestion(name, tex.weight, tex.repsMin, tex.repsMax);
+      const isMax = E().isMaxReps(tex);
+      const isBw = tex.bodyweight != null ? !!tex.bodyweight : E().isBodyweightName(name);
+      const sug = planSuggestion(name, tex.weight, tex.repsMin, tex.repsMax, {
+        repsMode: isMax ? 'max' : 'range',
+        bodyweight: isBw
+      });
       sess.exercises.push({
         name: name,
         targetSets: Number(tex.sets) || 3,
         targetWeight: sug.weight,
-        targetReps: sug.reps,
-        repsMin: Number(tex.repsMin) || sug.reps,
-        repsMax: Number(tex.repsMax) || sug.reps,
+        targetReps: isMax ? null : sug.reps,
+        repsMode: isMax ? 'max' : 'range',
+        repsMin: isMax ? tex.repsMin : (Number(tex.repsMin) || sug.reps),
+        repsMax: isMax ? tex.repsMax : (Number(tex.repsMax) || sug.reps),
         restSec: Number(tex.restSec) || sess.restSec,
         notes: tex.notes || '',
         supersetId: tex.supersetId || '',
         suggestReason: sug.reason,
+        bestMaxReps: sug.bestMaxReps || 0,
         sets: [],
         fromTemplate: true,
-        templateExId: tex.id
+        templateExId: tex.id,
+        bodyweight: isBw
       });
     });
     if (sess.exercises.length) {
       sess.currentEx = 0;
-      const ex = sess.exercises[0];
-      sess.draft.weight = ex.targetWeight;
-      sess.draft.reps = ex.targetReps;
+      applyDraftForExercise(sess.exercises[0]);
     }
     persist();
     return sess;
@@ -445,12 +488,14 @@
           id: ex.templateExId || undefined,
           name: ex.name,
           sets: ex.sets.length || ex.targetSets || 3,
+          repsMode: ex.repsMode || 'range',
           repsMin: ex.repsMin || (last && last.reps) || ex.targetReps || 8,
           repsMax: ex.repsMax || (last && last.reps) || ex.targetReps || 12,
           weight: last ? last.weight : (ex.targetWeight || ''),
           restSec: ex.restSec || session.restSec,
           notes: ex.notes || '',
-          supersetId: ex.supersetId || ''
+          supersetId: ex.supersetId || '',
+          bodyweight: !!ex.bodyweight
         };
       })
     };
@@ -466,7 +511,7 @@
       });
     });
     const volume = payload.exercises.reduce(function (sum, ex) {
-      return sum + E().setVolume(ex);
+      return sum + E().setVolume(ex, Store().getState(), session.date);
     }, 0);
     const saved = Store().addWorkout(payload);
     const summary = {

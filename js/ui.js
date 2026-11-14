@@ -175,6 +175,38 @@
     }).join('');
   }
 
+  function isMaxReps(ex) {
+    return E.isMaxReps ? E.isMaxReps(ex) : !!(ex && ex.repsMode === 'max');
+  }
+  function isBwEx(ex, name) {
+    return E.isBodyweightEx ? E.isBodyweightEx(ex, name) : !!(ex && ex.bodyweight);
+  }
+  function bwBadge(ex, name) {
+    return isBwEx(ex, name) ? '<span class="bw-badge">משקל גוף</span>' : '';
+  }
+  function maxBadge(ex) {
+    return isMaxReps(ex) ? '<span class="max-badge">MAX</span>' : '';
+  }
+  function repsTargetLabel(ex) {
+    if (isMaxReps(ex)) return 'MAX · עד כשל';
+    const a = ex.repsMin;
+    const b = ex.repsMax;
+    if (a == null && b == null) return '—';
+    if (a === b) return String(a);
+    return a + '–' + b;
+  }
+  function loadLabel(weight, bodyweight) {
+    const w = Number(weight) || 0;
+    if (bodyweight) return w > 0 ? ('משקל גוף +' + w + ' ק״ג') : 'משקל גוף';
+    return w + ' ק״ג';
+  }
+  function setShort(s, ex) {
+    const bw = isBwEx(ex, ex && ex.name);
+    const w = Number(s.weight) || 0;
+    if (bw) return w > 0 ? ('+' + w + '×' + s.reps) : (s.reps + ' חזרות');
+    return w + '×' + s.reps;
+  }
+
 
   const THEME_KEY = (C && C.THEME_KEY) || 'hazi-fit-theme';
   const DAY_LABELS = (C && C.DAY_NAMES) || [];
@@ -1203,11 +1235,13 @@
     const rows = items.map(function (it) {
       const last = it.last || {};
       const bits = [];
+      const bw = isBwEx(last, it.name);
       if (last.sets || last.reps) bits.push((last.sets || '?') + '×' + (last.reps || '?'));
-      if (last.weight) bits.push(last.weight + ' ק״ג');
+      if (bw) bits.push(loadLabel(last.weight, true));
+      else if (last.weight) bits.push(last.weight + ' ק״ג');
       return '<button type="button" class="list-item" data-action="open-exercise" data-name="' + esc(it.name) + '">' +
         '<div class="meta">' + esc(E.formatDay(it.lastDate)) + ' · ' + it.sessions + ' אימונים</div>' +
-        '<div class="title">' + esc(it.name) + '</div>' +
+        '<div class="title">' + esc(it.name) + ' ' + bwBadge(last, it.name) + '</div>' +
         (bits.length ? '<div class="sub">אחרון: ' + esc(bits.join(' · ')) + '</div>' : '') +
         '</button>';
     }).join('');
@@ -1217,7 +1251,7 @@
       ' · ' +
       '<button type="button" class="linkish' + (sort === 'freq' ? ' on' : '') + '" data-action="ex-sort" data-sort="freq">לפי תדירות</button>' +
       '</span></div>' +
-      '<p class="hp-legend" style="margin-top:-4px;margin-bottom:8px">לחצו על תרגיל כדי לראות נפח, משקל, 1RM ושיאים.</p>' +
+      '<p class="hp-legend" style="margin-top:-4px;margin-bottom:8px">לחצו על תרגיל כדי לראות התקדמות ושיאים.</p>' +
       '<div class="list">' + rows + '</div>';
   }
 
@@ -1241,44 +1275,65 @@
     const rateTxt = (Math.round(stats.prPerWeek * 10) / 10).toString();
     const pctTxt = Math.round(stats.prSessionPct * 100);
 
+    const bw = !!(stats.bodyweight || (E.isBodyweightName && E.isBodyweightName(name)));
+    const hasBodyKg = list.some(function (sess) { return sess.bodyWeightUsed > 0; });
+    const hasAdded = list.some(function (sess) { return (sess.topWeight || 0) > 0; });
     const table = stats.bestReps.length
       ? '<div class="reps-table">' + stats.bestReps.map(function (row) {
-          return '<div class="reps-row"><span>' + ltr(row.weight + ' ק״ג') + '</span><strong>' + row.reps + ' חזרות</strong><span class="muted">' + esc(E.formatDay(row.date)) + '</span></div>';
+          return '<div class="reps-row"><span>' + esc(loadLabel(row.weight, row.bodyweight || bw)) + '</span><strong>' + row.reps + ' חזרות</strong><span class="muted">' + esc(E.formatDay(row.date)) + '</span></div>';
         }).join('') + '</div>'
-      : '<p class="kicker">אין עדיין נתוני חזרות-למשקל.</p>';
+      : '<p class="kicker">אין עדיין נתוני חזרות.</p>';
 
     const history = list.slice().reverse().map(function (sess) {
       const rowBits = (sess.rows || []).map(function (e) {
-        return (e.sets || '?') + '×' + (e.reps || '?') + (e.weight ? ' · ' + e.weight + ' ק״ג' : '');
+        return (e.sets || '?') + '×' + (e.reps || '?') + ' · ' + loadLabel(e.weight, bw || isBwEx(e, name));
       }).join(' · ');
+      const sub = bw
+        ? ('שיא ' + (sess.maxReps || 0) + ' חזרות · סה״כ ' + (sess.totalReps || 0) + (hasBodyKg ? ' · נפח ' + ltr(String(Math.round(sess.volume))) : ''))
+        : ('נפח ' + ltr(String(Math.round(sess.volume))) + ' · 1RM משוער ' + ltr((Math.round(sess.e1rm * 10) / 10) + ' ק״ג'));
       return '<div class="list-item">' +
         '<div class="meta">' + esc(E.formatDayLong(sess.date)) + (sess.isPR ? ' ' + prTags(sess.prTypes) : (sess.isBaseline ? ' <span class="pr-tag dim">בסיס</span>' : '')) + '</div>' +
         '<div class="title">' + esc(rowBits) + '</div>' +
-        '<div class="sub">נפח ' + ltr(String(Math.round(sess.volume))) + ' · 1RM משוער ' + ltr((Math.round(sess.e1rm * 10) / 10) + ' ק״ג') + '</div>' +
+        '<div class="sub">' + sub + '</div>' +
         '</div>';
     }).join('');
 
+    const charts = bw
+      ? ('<section class="card"><h2>שיא חזרות בסט</h2>' +
+        Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.maxReps || 0; }), marks: marks, color: '#d36bff', tighten: true, aria: 'שיא חזרות בסט' }) +
+        '<p class="hp-legend">השיא הנוכחי: ' + (stats.currentMaxReps || 0) + ' חזרות. נקודה צהובה = שיא.</p></section>' +
+        '<section class="card"><h2>סה״כ חזרות לאימון</h2>' +
+        Charts.barChart({ labels: labels, values: list.map(function (sess) { return sess.totalReps || 0; }), marks: marks, color: '#8ab4ff', aria: 'סה״כ חזרות', height: 170 }) +
+        '</section>' +
+        (hasAdded ? ('<section class="card"><h2>תוספת משקל</h2>' +
+          Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.topWeight || 0; }), marks: marks, color: '#ffb14a', tighten: true, aria: 'תוספת משקל' }) +
+          '<p class="hp-legend">משקל נוסף מעבר למשקל הגוף, למשל חגורת משקולות.</p></section>') : '') +
+        (hasBodyKg ? ('<section class="card"><h2>נפח (משקל גוף + תוספת)</h2>' +
+          Charts.barChart({ labels: labels, values: list.map(function (sess) { return sess.volume; }), marks: marks, color: '#ffb14a', aria: 'נפח', height: 170 }) +
+          '<p class="hp-legend">נפח = חזרות × (משקל גוף באותו יום + תוספת).</p></section>') : ''))
+      : ('<section class="card"><h2>נפח כולל לאימון</h2>' +
+        Charts.barChart({ labels: labels, values: list.map(function (sess) { return sess.volume; }), marks: marks, color: '#8ab4ff', aria: 'נפח כולל', height: 170 }) +
+        '<p class="hp-legend">נפח = סטים × חזרות × משקל. נקודה צהובה / עמודה צהובה = שיא.</p></section>' +
+        '<section class="card"><h2>משקל בסט הכבד</h2>' +
+        Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.topWeight; }), marks: marks, color: '#d36bff', tighten: true, aria: 'משקל בסט הכבד' }) +
+        '</section>' +
+        '<section class="card"><h2>1RM משוער (Epley)</h2>' +
+        Charts.lineChart({ labels: labels, values: list.map(function (sess) { return Math.round(sess.e1rm * 10) / 10; }), marks: marks, color: '#ffb14a', tighten: true, aria: '1RM משוער' }) +
+        '<p class="hp-legend">נוסחת Epley: משקל × (1 + חזרות/30). השיא הנוכחי: ' + ltr((Math.round(stats.currentMaxE1rm * 10) / 10) + ' ק״ג') + '.</p></section>');
+
     return '<header class="page-head">' +
       '<button type="button" class="btn" data-action="close-exercise">חזרה</button>' +
-      '<h1>' + esc(name) + '</h1></header>' +
+      '<h1>' + esc(name) + ' ' + (bw ? '<span class="bw-badge">משקל גוף</span>' : '') + '</h1></header>' +
       '<div class="stats-grid">' +
       '<div class="metric-pill"><div class="label">שיאים סה״כ</div><div class="value">' + stats.totalPRs + '</div></div>' +
       '<div class="metric-pill"><div class="label">שיאים ב־30 יום</div><div class="value">' + stats.prLast30 + '</div></div>' +
       '<div class="metric-pill"><div class="label">שיאים לשבוע</div><div class="value">' + ltr(rateTxt) + '</div></div>' +
       '<div class="metric-pill"><div class="label">% אימונים עם שיא</div><div class="value">' + pctTxt + '<span class="unit">%</span></div></div>' +
       '<div class="metric-pill"><div class="label">ימים מאז שיא</div><div class="value">' + esc(sinceText) + '</div></div>' +
-      '<div class="metric-pill"><div class="label">אימונים</div><div class="value">' + stats.totalSessions + '</div></div>' +
+      '<div class="metric-pill"><div class="label">' + (bw ? 'שיא חזרות' : 'אימונים') + '</div><div class="value">' + (bw ? (stats.currentMaxReps || 0) : stats.totalSessions) + '</div></div>' +
       '</div>' +
-      '<section class="card"><h2>נפח כולל לאימון</h2>' +
-      Charts.barChart({ labels: labels, values: list.map(function (sess) { return sess.volume; }), marks: marks, color: '#8ab4ff', aria: 'נפח כולל', height: 170 }) +
-      '<p class="hp-legend">נפח = סטים × חזרות × משקל. נקודה צהובה / עמודה צהובה = שיא.</p></section>' +
-      '<section class="card"><h2>משקל בסט הכבד</h2>' +
-      Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.topWeight; }), marks: marks, color: '#d36bff', tighten: true, aria: 'משקל בסט הכבד' }) +
-      '</section>' +
-      '<section class="card"><h2>1RM משוער (Epley)</h2>' +
-      Charts.lineChart({ labels: labels, values: list.map(function (sess) { return Math.round(sess.e1rm * 10) / 10; }), marks: marks, color: '#ffb14a', tighten: true, aria: '1RM משוער' }) +
-      '<p class="hp-legend">נוסחת Epley: משקל × (1 + חזרות/30). השיא הנוכחי: ' + ltr((Math.round(stats.currentMaxE1rm * 10) / 10) + ' ק״ג') + '.</p></section>' +
-      '<section class="card"><h2>שיא חזרות לפי משקל</h2>' + table + '</section>' +
+      charts +
+      '<section class="card"><h2>' + (bw ? 'שיא חזרות לפי עומס' : 'שיא חזרות לפי משקל') + '</h2>' + table + '</section>' +
       '<div class="section-title"><h2>היסטוריית אימונים</h2></div>' +
       '<div class="list">' + history + '</div>';
   }
@@ -1451,11 +1506,20 @@
         '<button type="button" class="icon-btn" data-action="move-tex" data-index="' + i + '" data-dir="1" aria-label="למטה">↓</button>' +
         '<button type="button" class="icon-btn" data-action="del-tex" data-index="' + i + '" aria-label="מחיקה">×</button>' +
         '</div></div>' +
+        '<div class="builder-flags">' +
+        '<button type="button" class="chip' + (isBwEx(ex, ex.name) ? ' active' : '') + '" data-action="toggle-tex-bw" data-index="' + i + '">משקל גוף</button>' +
+        '</div>' +
         '<div class="builder-grid">' +
         '<label class="field"><span>סטים</span><input type="number" min="1" data-tex="' + i + '" data-texk="sets" value="' + esc(ex.sets || 3) + '" /></label>' +
-        '<label class="field"><span>טווח חזרות</span><div class="live-add"><input type="number" min="1" data-tex="' + i + '" data-texk="repsMin" value="' + esc(ex.repsMin || 8) + '" /><input type="number" min="1" data-tex="' + i + '" data-texk="repsMax" value="' + esc(ex.repsMax || 12) + '" /></div></label>' +
-        '<label class="field"><span>משקל יעד (אופציונלי)</span><input type="number" min="0" step="0.5" data-tex="' + i + '" data-texk="weight" value="' + esc(ex.weight === 0 ? 0 : (ex.weight || '')) + '" placeholder="ק״ג" /></label>' +
         '<label class="field"><span>מנוחה (שנ׳)</span><input type="number" min="15" step="15" data-tex="' + i + '" data-texk="restSec" value="' + esc(ex.restSec || 90) + '" /></label>' +
+        '<label class="field span-2"><span>טווח חזרות</span><div class="reps-editor">' +
+        (isMaxReps(ex)
+          ? '<div class="max-display">MAX · עד כשל</div>'
+          : '<div class="live-add"><input type="number" min="1" data-tex="' + i + '" data-texk="repsMin" value="' + esc(ex.repsMin || 8) + '" /><input type="number" min="1" data-tex="' + i + '" data-texk="repsMax" value="' + esc(ex.repsMax || 12) + '" /></div>') +
+        '<button type="button" class="chip max-chip' + (isMaxReps(ex) ? ' active' : '') + '" data-action="toggle-tex-max" data-index="' + i + '">MAX</button>' +
+        '</div></label>' +
+        '<label class="field span-2"><span>' + (isBwEx(ex, ex.name) ? 'תוספת משקל (אופציונלי)' : 'משקל יעד (אופציונלי)') + '</span>' +
+        '<input type="number" min="0" step="0.5" data-tex="' + i + '" data-texk="weight" value="' + esc(ex.weight === 0 ? 0 : (ex.weight || '')) + '" placeholder="' + (isBwEx(ex, ex.name) ? '+ ק״ג, למשל חגורה' : 'ק״ג') + '" /></label>' +
         '</div>' +
         '<label class="field"><span>הערות</span><input type="text" data-tex="' + i + '" data-texk="notes" value="' + esc(ex.notes || '') + '" placeholder="אופציונלי" /></label>' +
         (ss ? '' : '<button type="button" class="linkish" data-action="superset-tex" data-index="' + i + '">סופרסט עם הבא</button>') +
@@ -1465,7 +1529,7 @@
     const groups = exercisesByMuscle().map(function (g) {
       return '<div class="lib-group"><h3>' + esc(g.label) + '</h3><div class="chips">' +
         g.items.map(function (n) {
-          return '<button type="button" class="chip" data-action="add-tex-name" data-name="' + esc(n) + '">' + esc(n) + '</button>';
+          return '<button type="button" class="chip" data-action="add-tex-name" data-name="' + esc(n) + '">' + esc(n) + (E.isBodyweightName && E.isBodyweightName(n) ? ' <span class="bw-dot">גוף</span>' : '') + '</button>';
         }).join('') + '</div></div>';
     }).join('');
 
@@ -1694,13 +1758,18 @@
       return '<button type="button" class="chip' + (draft.type === t.id ? ' active' : '') + '" data-action="draft-type" data-type="' + t.id + '">' + esc(t.label) + '</button>';
     }).join('');
     const exercises = (draft.exercises || []).map(function (ex, i) {
+      const bw = isBwEx(ex, ex.name);
       return '<div class="ex-block">' +
         '<div class="ex-row">' +
         '<input type="text" data-ex="' + i + '" data-exk="name" placeholder="תרגיל" autocomplete="off" value="' + esc(ex.name || '') + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="sets" min="0" placeholder="סטים" value="' + esc(ex.sets || '') + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="reps" min="0" placeholder="חזרות" value="' + esc(ex.reps || '') + '" />' +
-        '<input type="number" data-ex="' + i + '" data-exk="weight" min="0" step="0.5" placeholder="ק״ג" value="' + esc(ex.weight || '') + '" />' +
+        '<input type="number" data-ex="' + i + '" data-exk="weight" min="0" step="0.5" placeholder="' + (bw ? '+ ק״ג' : 'ק״ג') + '" value="' + esc(ex.weight || '') + '" />' +
         '<button type="button" class="icon-btn" data-action="remove-ex" data-index="' + i + '" aria-label="מחיקה">×</button>' +
+        '</div>' +
+        '<div class="builder-flags tight">' +
+        '<button type="button" class="chip' + (bw ? ' active' : '') + '" data-action="toggle-sheet-bw" data-index="' + i + '">משקל גוף</button>' +
+        (bw ? bwBadge(ex, ex.name) : '') +
         '</div>' +
         '<div class="ex-suggest" data-ex-suggest="' + i + '" hidden></div>' +
         '<div class="ex-last" data-ex-last="' + i + '"></div>' +
@@ -1887,7 +1956,7 @@
     const lastHtml = lastSets.length
       ? '<div class="last-sets"><div class="label">פעם קודמת</div><div class="set-pills">' +
         lastSets.map(function (s, i) {
-          return '<span class="set-pill">סט ' + (i + 1) + ': ' + s.weight + '×' + s.reps + '</span>';
+          return '<span class="set-pill">סט ' + (i + 1) + ': ' + setShort(s, ex) + '</span>';
         }).join('') + '</div></div>'
       : '<p class="hp-legend">אין היסטוריה לתרגיל הזה עדיין.</p>';
     const C_R = 2 * Math.PI * 52;
@@ -1909,19 +1978,25 @@
       const done = item.sets.length;
       const target = Number(item.targetSets) || 0;
       const sets = item.sets.map(function (s, si) {
-        return 'סט ' + (si + 1) + ' ' + s.weight + '×' + s.reps + (s.pr ? ' ⭐' : '');
+        return 'סט ' + (si + 1) + ' ' + setShort(s, item) + (s.pr ? ' ⭐' : '');
       }).join(' · ') || 'אין סטים עדיין';
       return '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
-        '<div class="title">' + (i + 1) + '. ' + esc(item.name) + (target ? ' · ' + done + '/' + target : '') + '</div>' +
+        '<div class="title">' + (i + 1) + '. ' + esc(item.name) + ' ' + maxBadge(item) + ' ' + bwBadge(item, item.name) + (target ? ' · ' + done + '/' + target : '') + '</div>' +
         '<div class="sub">' + esc(sets) + '</div></button>';
     }).join('');
     const suggest = ex ? (ex.suggestReason || '') : '';
     const planned = ex && ex.targetSets
-      ? '<p class="planned">מתוכנן: ' + ex.targetSets + ' סטים × ' + (ex.repsMin === ex.repsMax ? ex.repsMin : (ex.repsMin + '–' + ex.repsMax)) + ' · יעד ' + (ex.targetWeight || '—') + ' ק״ג</p>'
+      ? '<p class="planned">מתוכנן: ' + ex.targetSets + ' סטים × ' + repsTargetLabel(ex) +
+        ' · ' + loadLabel(ex.targetWeight, isBwEx(ex, ex.name)) + '</p>'
+      : '';
+    const maxHint = ex && isMaxReps(ex)
+      ? '<p class="max-hint">הזינו כמה חזרות יצאו בפועל' +
+        (ex.bestMaxReps ? ' · שיא MAX קודם: <strong>' + ex.bestMaxReps + '</strong> חזרות' : '') +
+        '</p>'
       : '';
     const setList = ex ? '<ul class="set-list">' +
       (ex.sets.map(function (s, i) {
-        return '<li class="done"><span>סט ' + (i + 1) + '</span><span>' + s.weight + ' × ' + s.reps + (s.pr ? ' ⭐' : '') + '</span></li>';
+        return '<li class="done"><span>סט ' + (i + 1) + '</span><span>' + setShort(s, ex) + (s.pr ? ' ⭐' : '') + '</span></li>';
       }).join('')) +
       '<li class="current"><span>סט ' + (ex.sets.length + 1) + '</span><span>עכשיו</span></li>' +
       (ex.targetSets ? Array.from({ length: Math.max(0, ex.targetSets - ex.sets.length - 1) }).map(function (_, i) {
@@ -1941,22 +2016,22 @@
       '<details class="live-type"' + (sess.templateId ? '' : ' open') + '><summary>סוג אימון</summary><div class="chips">' + chips + '</div></details>' +
       restBar +
       (ex
-        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + '</h1>' + planned +
+        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' + planned + maxHint +
           lastHtml +
           (ex.notes ? '<p class="hp-legend">' + esc(ex.notes) + '</p>' : '') +
-          (suggest ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
+          (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
           (pr.isPR ? '<div class="live-pr">⭐ שיא חדש בסט הזה! ' + prTags(pr.types) + '</div>' : '') +
           setList +
           '<div class="step-grid">' +
-          '<div class="step-col"><div class="label">משקל (ק״ג)</div>' +
+          '<div class="step-col"><div class="label">' + (isBwEx(ex, ex.name) ? 'תוספת (ק״ג)' : 'משקל (ק״ג)') + '</div>' +
           '<div class="big-stepper">' +
           '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="-2.5">−2.5</button>' +
           '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="-1.25">−1.25</button>' +
           '<div class="step-val" id="live-weight">' + sess.draft.weight + '</div>' +
           '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="1.25">+1.25</button>' +
           '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="2.5">+2.5</button>' +
-          '</div></div>' +
-          '<div class="step-col"><div class="label">חזרות</div>' +
+          '</div>' + (isBwEx(ex, ex.name) ? '<p class="hp-legend" style="text-align:center;margin-top:6px">0 = בלי תוספת, רק משקל גוף</p>' : '') + '</div>' +
+          '<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'חזרות שהושלמו' : 'חזרות') + '</div>' +
           '<div class="big-stepper">' +
           '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="-1">−</button>' +
           '<div class="step-val" id="live-reps">' + sess.draft.reps + '</div>' +
@@ -2145,11 +2220,15 @@
     const last = E.lastPerformance(state(), name, draft.date, draft.id);
     if (!draft.exercises[i]) draft.exercises[i] = { name: '', sets: '', reps: '', weight: '' };
     draft.exercises[i].name = name;
+    if (draft.exercises[i].bodyweight == null) {
+      draft.exercises[i].bodyweight = !!(last && last.last && last.last.bodyweight) || !!(E.isBodyweightName && E.isBodyweightName(name));
+    }
     if (last) {
       const e = last.last;
       if (force || !draft.exercises[i].sets) draft.exercises[i].sets = e.sets;
       if (force || !draft.exercises[i].reps) draft.exercises[i].reps = e.reps;
       if (force || !draft.exercises[i].weight) draft.exercises[i].weight = e.weight;
+      if (e.bodyweight != null && draft.exercises[i].bodyweight == null) draft.exercises[i].bodyweight = !!e.bodyweight;
     }
     renderOverlay();
   }
@@ -2528,11 +2607,45 @@
       if (!String(name).trim()) { toast('יש להזין שם תרגיל'); return; }
       if (!ui.editingTemplate.exercises) ui.editingTemplate.exercises = [];
       const sug = root.FitLive && root.FitLive.planSuggestion ? root.FitLive.planSuggestion(name, '', 8, 12) : { weight: '', reps: 8 };
+      const n = String(name).trim();
+      const bw = !!(E.isBodyweightName && E.isBodyweightName(n));
       ui.editingTemplate.exercises.push({
-        id: 'tex_' + Date.now(), name: String(name).trim(), sets: 3,
-        repsMin: sug.reps || 8, repsMax: sug.reps || 12, weight: sug.weight || '', restSec: 90, notes: '', supersetId: ''
+        id: 'tex_' + Date.now(), name: n, sets: 3,
+        repsMode: 'range',
+        repsMin: sug.reps || 8, repsMax: sug.reps || 12,
+        weight: bw ? (sug.weight || '') : (sug.weight || ''),
+        restSec: 90, notes: '', supersetId: '',
+        bodyweight: bw
       });
       render();
+      return;
+    }
+    if (action === 'toggle-tex-max') {
+      collectTemplateDraft();
+      const ex = ui.editingTemplate.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.repsMode = isMaxReps(ex) ? 'range' : 'max';
+      render();
+      return;
+    }
+    if (action === 'toggle-tex-bw') {
+      collectTemplateDraft();
+      const ex = ui.editingTemplate.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.bodyweight = !isBwEx(ex, ex.name);
+      if (ex.bodyweight && (ex.weight === 20 || ex.weight === 20.0)) ex.weight = '';
+      render();
+      return;
+    }
+    if (action === 'toggle-sheet-bw') {
+      const draft = workoutDraft();
+      if (!draft) return;
+      collectWorkoutDraftFromDom();
+      const ex = draft.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.bodyweight = !isBwEx(ex, ex.name);
+      renderOverlay();
+      fillLastHints();
       return;
     }
     if (action === 'del-tex') {

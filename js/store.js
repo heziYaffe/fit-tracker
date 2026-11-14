@@ -33,18 +33,40 @@
   }
 
 
+  function parseRepsMode(ex) {
+    if (ex.repsMode === 'max') return 'max';
+    if (ex.repsMode === 'range') return 'range';
+    const a = String(ex.repsMin == null ? '' : ex.repsMin).toUpperCase();
+    const b = String(ex.repsMax == null ? '' : ex.repsMax).toUpperCase();
+    if (a === 'MAX' || b === 'MAX') return 'max';
+    return 'range';
+  }
+
+  function numReps(val, fallback) {
+    if (val == null || val === '') return fallback;
+    if (String(val).toUpperCase() === 'MAX') return fallback;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
   function normalizeTex(ex) {
     ex = ex || {};
+    const name = ex.name || '';
+    const bodyweight = ex.bodyweight == null
+      ? !!(C.isBodyweightName && C.isBodyweightName(name))
+      : !!ex.bodyweight;
     return {
       id: ex.id || uid(),
-      name: ex.name || '',
+      name: name,
       sets: Number(ex.sets) || 3,
-      repsMin: ex.repsMin != null && ex.repsMin !== '' ? Number(ex.repsMin) : 8,
-      repsMax: ex.repsMax != null && ex.repsMax !== '' ? Number(ex.repsMax) : 12,
+      repsMode: parseRepsMode(ex),
+      repsMin: numReps(ex.repsMin, 8),
+      repsMax: numReps(ex.repsMax, 12),
       weight: ex.weight != null && ex.weight !== '' ? Number(ex.weight) : '',
       restSec: ex.restSec != null && ex.restSec !== '' ? Number(ex.restSec) : (C.REST_DEFAULT_SEC || 90),
       notes: ex.notes || '',
-      supersetId: ex.supersetId || ''
+      supersetId: ex.supersetId || '',
+      bodyweight: bodyweight
     };
   }
 
