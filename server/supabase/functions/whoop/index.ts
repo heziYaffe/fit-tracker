@@ -207,30 +207,66 @@ function localDateFromStart(start: string, offset?: string) {
   return d.toISOString().slice(0, 10);
 }
 
+function hoursFromMilli(ms: unknown) {
+  const n = Number(ms || 0);
+  return n ? Math.round((n / 3_600_000) * 100) / 100 : null;
+}
+
+function numOrNull(v: unknown) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function mapSleep(sleep: Record<string, unknown>) {
   const score = (sleep.score || {}) as Record<string, unknown>;
   const stages = (score.stage_summary || {}) as Record<string, unknown>;
-  const inBed = Number(stages.total_in_bed_time_milli || stages.total_sleep_time_milli || 0);
-  const hours = inBed ? Math.round((inBed / 3_600_000) * 100) / 100 : null;
-  const perf = score.sleep_performance_percentage != null ? Number(score.sleep_performance_percentage) : null;
+  const sleepHours = hoursFromMilli(stages.total_sleep_time_milli) || hoursFromMilli(stages.total_in_bed_time_milli);
+  const sleepInBedHours = hoursFromMilli(stages.total_in_bed_time_milli);
+  const perf = numOrNull(score.sleep_performance_percentage);
   const date = localDateFromStart(String(sleep.end || sleep.start || ""), String(sleep.timezone_offset || ""));
   const notes = perf != null ? ("ביצועי שינה " + Math.round(perf) + "%") : "";
-  return { date, sleepHours: hours, sleepPerformance: perf, notes };
+  return {
+    date,
+    sleepHours,
+    sleepInBedHours,
+    sleepPerformance: perf,
+    sleepEfficiency: numOrNull(score.sleep_efficiency_percentage),
+    sleepConsistency: numOrNull(score.sleep_consistency_percentage),
+    sleepLightHours: hoursFromMilli(stages.total_light_sleep_time_milli),
+    sleepDeepHours: hoursFromMilli(stages.total_slow_wave_sleep_time_milli),
+    sleepRemHours: hoursFromMilli(stages.total_rem_sleep_time_milli),
+    sleepAwakeHours: hoursFromMilli(stages.total_awake_time_milli),
+    sleepCycles: numOrNull(stages.sleep_cycle_count),
+    sleepDisturbances: numOrNull(stages.disturbance_count),
+    respiratoryRate: numOrNull(score.respiratory_rate),
+    notes,
+  };
 }
 
 function mapRecovery(rec: Record<string, unknown>, date: string) {
   const score = (rec.score || {}) as Record<string, unknown>;
   return {
     date,
-    recoveryPct: score.recovery_score != null ? Number(score.recovery_score) : null,
-    hrv: score.hrv_rmssd_milli != null ? Number(score.hrv_rmssd_milli) : (score.hrv_rmssd != null ? Number(score.hrv_rmssd) : null),
+    recoveryPct: numOrNull(score.recovery_score),
+    hrv: numOrNull(score.hrv_rmssd_milli != null ? score.hrv_rmssd_milli : score.hrv_rmssd),
+    rhr: numOrNull(score.resting_heart_rate),
+    spo2: numOrNull(score.spo2_percentage),
+    skinTempC: numOrNull(score.skin_temp_celsius),
   };
 }
 
 function mapCycle(cycle: Record<string, unknown>) {
   const score = (cycle.score || {}) as Record<string, unknown>;
   const date = localDateFromStart(String(cycle.start || ""), String(cycle.timezone_offset || ""));
-  return { date, strain: score.strain != null ? Number(score.strain) : null };
+  return {
+    date,
+    strain: numOrNull(score.strain),
+    kilojoule: numOrNull(score.kilojoule),
+    avgHr: numOrNull(score.average_heart_rate),
+    maxHr: numOrNull(score.max_heart_rate),
+    cycleId: cycle.id != null ? String(cycle.id) : null,
+  };
 }
 
 function mapWorkout(w: Record<string, unknown>) {
@@ -330,20 +366,32 @@ async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: 
   const end = new Date();
   const start = new Date(end.getTime() - 14 * 86400000);
   const q = "?start=" + start.toISOString() + "&end=" + end.toISOString() + "&limit=25";
-  const sleeps = await whoopGet(access, "/v2/activity/sleep" + q).catch(() => ({ records: [] }));
-  for (const s of sleeps.records || []) {
-    await upsertMetric(sb, userId, mapSleep(s));
+  const cycleDateById: Record<string, string> = {};
+  const cycles = await whoopGet(access, "/v2/cycle" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
+  for (const c of cycles.records || []) {
+    const mapped = mapCycle(c);
+    if (c.id != null && mapped.date) cycleDateById[String(c.id)] = mapped.date;
+    await upsertMetric(sb, userId, mapped);
   }
-  const recs = await whoopGet(access, "/v2/recovery" + q).catch(() => ({ records: [] }));
+  const sleeps = await whoopGet(access, "/v2/activity/sleep" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
+  const sleepDateById: Record<string, { date: string; cycleId?: string }> = {};
+  for (const s of sleeps.records || []) {
+    const mapped = mapSleep(s);
+    if (s.id != null && mapped.date) {
+      sleepDateById[String(s.id)] = { date: mapped.date, cycleId: s.cycle_id != null ? String(s.cycle_id) : undefined };
+    }
+    await upsertMetric(sb, userId, mapped);
+  }
+  const recs = await whoopGet(access, "/v2/recovery" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
   for (const r of recs.records || []) {
-    const date = localDateFromStart(String(r.updated_at || r.created_at || end.toISOString()), "");
+    const cycleId = r.cycle_id != null ? String(r.cycle_id) : "";
+    const sleepId = r.sleep_id != null ? String(r.sleep_id) : "";
+    const date = (cycleId && cycleDateById[cycleId])
+      || (sleepId && sleepDateById[sleepId] && sleepDateById[sleepId].date)
+      || localDateFromStart(String(r.created_at || r.updated_at || end.toISOString()), "");
     await upsertMetric(sb, userId, mapRecovery(r, date));
   }
-  const cycles = await whoopGet(access, "/v2/cycle" + q).catch(() => ({ records: [] }));
-  for (const c of cycles.records || []) {
-    await upsertMetric(sb, userId, mapCycle(c));
-  }
-  const workouts = await whoopGet(access, "/v2/activity/workout" + q).catch(() => ({ records: [] }));
+  const workouts = await whoopGet(access, "/v2/activity/workout" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
   for (const w of workouts.records || []) {
     await upsertWorkout(sb, userId, mapWorkout(w));
   }

@@ -227,6 +227,118 @@
     return map;
   }
 
+  const METRIC_SNAPSHOT_KEYS = [
+    'sleepHours', 'sleepInBedHours', 'sleepPerformance', 'sleepEfficiency', 'sleepConsistency',
+    'sleepLightHours', 'sleepDeepHours', 'sleepRemHours', 'sleepAwakeHours',
+    'sleepCycles', 'sleepDisturbances', 'respiratoryRate',
+    'recoveryPct', 'hrv', 'rhr', 'spo2', 'skinTempC',
+    'strain', 'kilojoule', 'avgHr', 'maxHr'
+  ];
+
+  function isPresent(val) {
+    return val !== null && val !== undefined && val !== '';
+  }
+
+  function asNum(val) {
+    if (!isPresent(val)) return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function metricSnapshot(state, iso) {
+    const rows = (metricsOn(state, iso) || []).slice();
+    const out = { date: iso, sources: [], records: rows, hasWhoop: false, hasAny: false };
+    function apply(row) {
+      if (!row) return;
+      if (row.source) {
+        out.sources.push(row.source);
+        if (row.source === 'whoop') out.hasWhoop = true;
+      }
+      METRIC_SNAPSHOT_KEYS.forEach(function (key) {
+        const n = asNum(row[key]);
+        if (n === null) return;
+        out[key] = n;
+      });
+      if (row.notes) out.notes = row.notes;
+      if (row.source) out.source = row.source;
+    }
+    rows.filter(function (r) { return (r.source || 'manual') !== 'whoop'; }).forEach(apply);
+    rows.filter(function (r) { return r.source === 'whoop'; }).forEach(apply);
+    out.hasAny = METRIC_SNAPSHOT_KEYS.some(function (k) { return isPresent(out[k]); });
+    if (out.hasAny && out.sources.indexOf('whoop') >= 0) out.hasWhoop = true;
+    return out;
+  }
+
+  function formatHoursClock(hours) {
+    const n = asNum(hours);
+    if (n === null) return '';
+    const sign = n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    var h = Math.floor(abs);
+    var m = Math.round((abs - h) * 60);
+    if (m === 60) { h += 1; m = 0; }
+    return sign + h + ':' + String(m).padStart(2, '0');
+  }
+
+  function recoveryZone(pct) {
+    const n = asNum(pct);
+    if (n === null) return null;
+    if (n >= 67) return 'green';
+    if (n >= 34) return 'yellow';
+    return 'red';
+  }
+
+  function homeInsight(state, iso) {
+    const m = metricSnapshot(state, iso);
+    const workouts = workoutsOn(state, iso) || [];
+    const rec = asNum(m.recoveryPct);
+    const sleepP = asNum(m.sleepPerformance);
+    const sleepH = asNum(m.sleepHours);
+    const strain = asNum(m.strain);
+    const zone = recoveryZone(rec);
+    const hasCore = rec !== null || sleepP !== null || strain !== null;
+    if (!hasCore) {
+      return {
+        title: 'אין עדיין נתוני Whoop',
+        body: 'אחרי חיבור ומשיכת נתונים יופיעו כאן שינה, התאוששות ומאמץ ליום שנבחר.',
+        tone: 'empty'
+      };
+    }
+    var title = 'סיכום היום';
+    var body = '';
+    var tone = zone || 'neutral';
+    if (zone === 'red') {
+      title = 'הגוף בשיקום';
+      body = 'ההתאוששות ' + Math.round(rec) + '% — יום אדום. כדאי אימון קל יותר, או מנוחה, שינה והידרציה.';
+    } else if (zone === 'yellow') {
+      title = 'הגוף מתאושש';
+      body = 'ההתאוששות ' + Math.round(rec) + '% — יום מתון. אפשר להתאמן, בלי להגזים במאמץ.';
+    } else if (zone === 'green') {
+      title = 'מוכנים ליום חזק';
+      body = 'ההתאוששות ' + Math.round(rec) + '% — יום טוב לאימון איכותי.';
+    } else if (sleepP !== null) {
+      title = sleepP < 60 ? 'שינה חלקית' : 'שינה טובה';
+      body = 'ביצועי השינה ' + Math.round(sleepP) + '%.';
+    } else if (strain !== null) {
+      title = 'מאמץ היום';
+      body = 'המאמץ עומד על ' + (Math.round(strain * 10) / 10) + ' מתוך 21.';
+    }
+    if (sleepP !== null && sleepP < 50) {
+      body += (body ? ' ' : '') + 'ביצועי השינה היו ' + Math.round(sleepP) + '% בלבד.';
+    } else if (sleepH !== null && sleepH < 6 && !(sleepP !== null && sleepP < 50)) {
+      body += (body ? ' ' : '') + 'זמן השינה היה קצר (' + formatHoursClock(sleepH) + ').';
+    }
+    if (strain !== null && strain >= 14) {
+      body += (body ? ' ' : '') + 'המאמץ כבר גבוה היום — תנו לגוף מנוחה.';
+    }
+    if (workouts.length && zone === 'red') {
+      body += (body ? ' ' : '') + 'כבר תועד אימון — עדיף עכשיו יום התאוששות.';
+    } else if (!workouts.length && zone === 'green') {
+      body += (body ? ' ' : '') + 'עדיין לא תועד אימון, וזה יום טוב לצאת אליו.';
+    }
+    return { title: title, body: body.trim(), tone: tone };
+  }
+
   function metricHitsRule(value, rule) {
     if (rule.min === null || rule.min === undefined) return false;
     if (value === null || value === undefined || value === '') return false;
@@ -955,6 +1067,10 @@
     bestStreak: bestStreak,
     computeConsistency: computeConsistency,
     bestMetricsByDate: bestMetricsByDate,
+    metricSnapshot: metricSnapshot,
+    formatHoursClock: formatHoursClock,
+    recoveryZone: recoveryZone,
+    homeInsight: homeInsight,
     levelFromTotalXP: levelFromTotalXP,
     computeXP: computeXP,
     computeAchievements: computeAchievements,

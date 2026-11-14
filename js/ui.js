@@ -31,6 +31,7 @@
     seenXP: null,
     suppressCeleb: false,
     animHome: false,
+    homeDate: null,
     swapMeal: null
   };
 
@@ -481,29 +482,332 @@
     return Object.keys(groups).map(function (k) { return groups[k]; }).filter(function (g) { return g.items.length; }).concat(other.items.length ? [other] : []);
   }
 
-  function renderHome() {
-    const s = state();
-    const now = new Date();
-    const today = E.todayISO(now);
-    const cons = E.computeConsistency(s, now);
-    const xp = E.computeXP(s, now);
-    const badges = E.computeAchievements(s, xp);
-    const name = s.settings.displayName || 'Hazi';
-    const dateLabel = now.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  function homeDay() {
+    const today = E.todayISO();
+    var day = ui.homeDate || today;
+    if (day > today) day = today;
+    const min = E.addDays(today, -60);
+    if (day < min) day = min;
+    if (day === today) ui.homeDate = null;
+    else ui.homeDate = day;
+    return { today: today, day: day, isToday: day === today };
+  }
+
+  function scoreRing(opts) {
+    const compact = !!opts.compact;
+    const size = compact ? 78 : 108;
+    const r = compact ? 28 : 42;
+    const sw = compact ? 6.5 : 7.5;
+    const c = 2 * Math.PI * r;
+    const empty = !!opts.empty;
+    const p = empty ? 0 : Math.max(0, Math.min(1, Number(opts.pct) || 0));
+    const off = c * (1 - p);
+    const color = opts.color || 'var(--accent)';
+    const mid = size / 2;
+    const action = opts.action ? (' data-action="' + esc(opts.action) + '"') : '';
+    const kind = opts.kind ? (' data-kind="' + esc(opts.kind) + '"') : '';
+    const valHtml = empty ? '—' : (opts.value || '');
+    return '<button type="button" class="score-ring"' + action + kind + ' aria-label="' + esc(opts.label || '') + (empty ? '' : (', ' + String(opts.value || '').replace(/<[^>]+>/g, ''))) + '">' +
+      '<span class="score-dial">' +
+      '<svg viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true">' +
+      '<circle class="ring-track" cx="' + mid + '" cy="' + mid + '" r="' + r + '" stroke-width="' + sw + '"/>' +
+      (empty ? '' : ('<circle class="ring-fill" cx="' + mid + '" cy="' + mid + '" r="' + r + '" stroke="' + color + '" stroke-width="' + sw + '" stroke-dasharray="' + c.toFixed(2) + '" stroke-dashoffset="' + off.toFixed(2) + '"/>')) +
+      '</svg>' +
+      '<span class="score-num' + (empty ? ' empty' : '') + '"' + (empty ? '' : (' style="color:' + color + '"')) + '>' + valHtml + '</span>' +
+      '</span>' +
+      '<span class="score-label">' + esc(opts.label || '') + (opts.chev === false ? '' : '<i class="chev" aria-hidden="true">›</i>') + '</span>' +
+      '</button>';
+  }
+
+  function recoveryColor(zone) {
+    if (zone === 'green') return 'var(--whoop-green)';
+    if (zone === 'yellow') return 'var(--whoop-yellow)';
+    if (zone === 'red') return 'var(--whoop-red)';
+    return 'var(--text-dim)';
+  }
+
+  function whoopSportLabel(name) {
+    const map = {
+      walking: 'הליכה', running: 'ריצה', cycling: 'רכיבה', weightlifting: 'משקולות',
+      dance: 'ריקוד', swimming: 'שחייה', yoga: 'יוגה', hiking: 'טיול', activity: 'פעילות'
+    };
+    const key = String(name || '').toLowerCase();
+    return map[key] || name || 'Whoop';
+  }
+
+  function fmtPct(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '';
+    return Math.round(v) + '%';
+  }
+
+  function fmtStrain(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '';
+    return String(Math.round(v * 10) / 10);
+  }
+
+  function fmtHrv(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '';
+    return String(Math.round(v * 10) / 10);
+  }
+
+  function renderDatePill(info) {
+    const label = info.isToday ? 'היום' : E.formatDay(info.day);
+    return '<div class="date-pill" role="group" aria-label="בחירת יום">' +
+      '<button type="button" data-action="home-prev-day" aria-label="יום קודם">‹</button>' +
+      '<button type="button" class="date-pill-label' + (info.isToday ? ' is-today' : '') + '" data-action="home-today">' + esc(label) + '</button>' +
+      '<button type="button" data-action="home-next-day" aria-label="יום הבא"' + (info.isToday ? ' disabled' : '') + '>›</button>' +
+      '</div>';
+  }
+
+  function renderWhoopDashboard(s, info) {
+    const snap = E.metricSnapshot ? E.metricSnapshot(s, info.day) : {};
+    const st = window.FitSync ? FitSync.status() : { signedIn: false, whoop: {} };
+    const whoopSt = st.whoop || {};
+    const signedIn = !!st.signedIn;
+    const connected = !!(whoopSt.connected || (whoopSt.link && whoopSt.link.connected_at));
+    const rec = snap.recoveryPct;
+    const sleepP = snap.sleepPerformance;
+    const strain = snap.strain;
+    const zone = E.recoveryZone ? E.recoveryZone(rec) : null;
+    const hasSleep = sleepP != null;
+    const hasRec = rec != null;
+    const hasStrain = strain != null;
+    const rings = '<div class="whoop-rings" aria-label="מדדי Whoop">' +
+      scoreRing({
+        label: 'שינה', action: 'open-whoop-ring', kind: 'sleep',
+        empty: !hasSleep, pct: hasSleep ? Number(sleepP) / 100 : 0,
+        value: hasSleep ? esc(fmtPct(sleepP)) : '—',
+        color: 'var(--whoop-sleep)'
+      }) +
+      scoreRing({
+        label: 'התאוששות', action: 'open-whoop-ring', kind: 'recovery',
+        empty: !hasRec, pct: hasRec ? Number(rec) / 100 : 0,
+        value: hasRec ? esc(fmtPct(rec)) : '—',
+        color: recoveryColor(zone)
+      }) +
+      scoreRing({
+        label: 'מאמץ', action: 'open-whoop-ring', kind: 'strain',
+        empty: !hasStrain, pct: hasStrain ? Number(strain) / 21 : 0,
+        value: hasStrain ? esc(fmtStrain(strain)) : '—',
+        color: 'var(--whoop-strain)'
+      }) +
+      '</div>';
+
+    var actions = '';
+    if (!signedIn) {
+      actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="tab" data-tab="settings">התחברות לחשבון</button></div>';
+    } else if (!connected) {
+      actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="whoop-connect">חבר Whoop</button></div>';
+    } else if (!hasSleep && !hasRec && !hasStrain) {
+      actions = '<div class="whoop-empty-actions"><button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>';
+    }
+
+    const insight = (E.homeInsight ? E.homeInsight(s, info.day) : { title: '', body: '', tone: 'empty' });
+    const insightCard = '<section class="card insight-card tone-' + esc(insight.tone || 'empty') + '">' +
+      '<h2>' + esc(insight.title) + '</h2>' +
+      '<p>' + esc(insight.body) + '</p></section>';
+
+    const hrv = snap.hrv;
+    const rhr = snap.rhr;
+    const sleepH = snap.sleepHours;
+    const tile2 = (rhr != null)
+      ? { kind: 'recovery', kicker: 'דופק מנוחה', val: String(Math.round(rhr)), unit: 'bpm', empty: false }
+      : (sleepH != null
+        ? { kind: 'sleep', kicker: 'משך שינה', val: E.formatHoursClock(sleepH), unit: 'שעות', empty: false }
+        : { kind: 'sleep', kicker: 'משך שינה', val: '—', unit: '', empty: true });
+    const tiles = '<div class="dash-tiles">' +
+      '<button type="button" class="dash-tile" data-action="open-whoop-ring" data-kind="recovery">' +
+      '<p class="kicker">HRV</p>' +
+      '<div class="dash-tile-val' + (hrv == null ? ' empty' : '') + '">' + (hrv == null ? '—' : esc(fmtHrv(hrv))) + (hrv == null ? '' : ' <span>ms</span>') + '</div></button>' +
+      '<button type="button" class="dash-tile" data-action="open-whoop-ring" data-kind="' + tile2.kind + '">' +
+      '<p class="kicker">' + esc(tile2.kicker) + '</p>' +
+      '<div class="dash-tile-val' + (tile2.empty ? ' empty' : '') + '">' + esc(tile2.val) + (tile2.unit && !tile2.empty ? (' <span>' + esc(tile2.unit) + '</span>') : '') + '</div></button>' +
+      '</div>';
+
+    return rings + actions + insightCard + tiles;
+  }
+
+  function renderFitRings(s, info, cons, xp) {
     const pTarget = E.proteinTarget(s);
     const wTarget = E.waterTarget(s);
     const cTarget = Number(s.settings.dailyCalorieTarget) || 0;
-    const nut = E.nutritionOn(s, today);
+    const nut = E.nutritionOn(s, info.day);
     const protein = nut ? Number(nut.protein) || 0 : 0;
     const calories = nut ? Number(nut.calories) || 0 : 0;
     const water = nut ? Number(nut.water) || 0 : 0;
-    const workouts = E.workoutsOn(s, today);
+    const workouts = E.workoutsOn(s, info.day) || [];
+    const dayEvents = (xp.events || []).filter(function (e) { return e.date === info.day; });
+    const dayXP = dayEvents.reduce(function (sum, e) { return sum + (Number(e.xp) || 0); }, 0);
+    const nutPct = cTarget ? (calories / cTarget) : (pTarget ? protein / pTarget : 0);
+    const nutVal = cTarget
+      ? (Math.round(calories) + '')
+      : (Math.round(protein) + '');
+    const nutEmpty = cTarget ? !calories : !protein;
+    const waterPct = wTarget ? water / wTarget : 0;
+    const consPct = cons && cons.hasData ? cons.combined : 0;
+    const workoutDone = workouts.length > 0;
+    return '<p class="section-kicker">המדדים שלנו</p>' +
+      '<div class="fit-rings" aria-label="המדדים של פיט">' +
+      scoreRing({
+        compact: true, label: 'עקביות', action: 'open-fit-ring', kind: 'consistency',
+        empty: !(cons && cons.hasData), pct: consPct,
+        value: (cons && cons.hasData) ? esc(Math.round(cons.combined * 100) + '%') : '—',
+        color: 'var(--accent)'
+      }) +
+      scoreRing({
+        compact: true, label: cTarget ? 'קלוריות' : 'חלבון', action: 'open-fit-ring', kind: 'nutrition',
+        empty: nutEmpty && !(cTarget ? calories : protein), pct: nutPct,
+        value: (cTarget ? calories : protein) ? esc(nutVal) : '—',
+        color: 'var(--protein)'
+      }) +
+      scoreRing({
+        compact: true, label: 'מים', action: 'open-fit-ring', kind: 'water',
+        empty: !water, pct: waterPct,
+        value: water ? esc((E.formatLiters ? E.formatLiters(water) : String(water))) : '—',
+        color: 'var(--water)'
+      }) +
+      scoreRing({
+        compact: true, label: 'אימון', action: 'open-fit-ring', kind: 'workout',
+        empty: !workoutDone && !dayXP, pct: workoutDone ? 1 : 0,
+        value: workoutDone ? (dayXP ? esc('+' + dayXP) : '✓') : '—',
+        color: 'var(--accent-2)'
+      }) +
+      '</div>';
+  }
+
+  function metricRow(label, value) {
+    if (value == null || value === '') return '';
+    return '<div class="metric-row"><span class="label">' + esc(label) + '</span><span class="value">' + value + '</span></div>';
+  }
+
+  function renderWhoopDetailSheet() {
+    const props = (ui.modal && ui.modal.props) || {};
+    const s = state();
+    const day = props.date || (homeDay().day);
+    const snap = E.metricSnapshot ? E.metricSnapshot(s, day) : {};
+    const kind = props.kind || 'recovery';
+    const titles = { sleep: 'שינה', recovery: 'התאוששות', strain: 'מאמץ' };
+    const title = titles[kind] || 'Whoop';
+    var body = '';
+    if (kind === 'sleep') {
+      body += metricRow('ביצועי שינה', snap.sleepPerformance != null ? ltr(fmtPct(snap.sleepPerformance)) : '');
+      body += metricRow('משך שינה', snap.sleepHours != null ? ltr(E.formatHoursClock(snap.sleepHours)) : '');
+      body += metricRow('זמן במיטה', snap.sleepInBedHours != null ? ltr(E.formatHoursClock(snap.sleepInBedHours)) : '');
+      body += metricRow('יעילות', snap.sleepEfficiency != null ? ltr(fmtPct(snap.sleepEfficiency)) : '');
+      body += metricRow('עקביות שינה', snap.sleepConsistency != null ? ltr(fmtPct(snap.sleepConsistency)) : '');
+      body += metricRow('שינה קלה', snap.sleepLightHours != null ? ltr(E.formatHoursClock(snap.sleepLightHours)) : '');
+      body += metricRow('שינה עמוקה', snap.sleepDeepHours != null ? ltr(E.formatHoursClock(snap.sleepDeepHours)) : '');
+      body += metricRow('REM', snap.sleepRemHours != null ? ltr(E.formatHoursClock(snap.sleepRemHours)) : '');
+      body += metricRow('ערות', snap.sleepAwakeHours != null ? ltr(E.formatHoursClock(snap.sleepAwakeHours)) : '');
+      body += metricRow('מחזורים', snap.sleepCycles != null ? ltr(String(Math.round(snap.sleepCycles))) : '');
+      body += metricRow('הפרעות', snap.sleepDisturbances != null ? ltr(String(Math.round(snap.sleepDisturbances))) : '');
+      body += metricRow('קצב נשימה', snap.respiratoryRate != null ? ltr((Math.round(snap.respiratoryRate * 10) / 10) + ' / דק׳') : '');
+    } else if (kind === 'recovery') {
+      const zone = E.recoveryZone ? E.recoveryZone(snap.recoveryPct) : null;
+      const zoneLabel = zone === 'green' ? 'ירוק' : (zone === 'yellow' ? 'צהוב' : (zone === 'red' ? 'אדום' : ''));
+      body += metricRow('התאוששות', snap.recoveryPct != null ? ltr(fmtPct(snap.recoveryPct) + (zoneLabel ? ' · ' + zoneLabel : '')) : '');
+      body += metricRow('HRV', snap.hrv != null ? ltr(fmtHrv(snap.hrv) + ' ms') : '');
+      body += metricRow('דופק מנוחה', snap.rhr != null ? ltr(Math.round(snap.rhr) + ' bpm') : '');
+      body += metricRow('ספיגת חמצן', snap.spo2 != null ? ltr((Math.round(snap.spo2 * 10) / 10) + '%') : '');
+      body += metricRow('טמפ׳ עור', snap.skinTempC != null ? ltr((Math.round(snap.skinTempC * 10) / 10) + '°C') : '');
+    } else {
+      body += metricRow('מאמץ', snap.strain != null ? ltr(fmtStrain(snap.strain) + ' / 21') : '');
+      body += metricRow('אנרגיה', snap.kilojoule != null ? ltr(Math.round(snap.kilojoule) + ' קג׳ול') : '');
+      body += metricRow('דופק ממוצע', snap.avgHr != null ? ltr(Math.round(snap.avgHr) + ' bpm') : '');
+      body += metricRow('דופק שיא', snap.maxHr != null ? ltr(Math.round(snap.maxHr) + ' bpm') : '');
+      const wos = (E.workoutsOn(s, day) || []).filter(function (w) { return w.source === 'whoop'; });
+      if (wos.length) {
+        body += wos.map(function (w) {
+          const bits = [whoopSportLabel(w.customType || w.type)];
+          if (w.duration) bits.push(w.duration + ' דק׳');
+          if (w.notes) bits.push(w.notes.replace(/^Whoop\s*·\s*/, ''));
+          return metricRow('אימון Whoop', esc(bits.join(' · ')));
+        }).join('');
+      }
+    }
+    if (!body) body = '<p class="hp-legend">אין פירוט זמין ליום הזה. מוצגים רק שדות שמסונכרנים בפועל.</p>';
+    return '<div class="sheet" role="dialog" aria-label="' + esc(title) + '"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>' + esc(title) + '</h2>' +
+      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+      '<p class="kicker">' + esc(E.formatDayLong(day)) + '</p>' +
+      '<div class="metric-rows">' + body + '</div></div>';
+  }
+
+  function renderFitDetailSheet() {
+    const props = (ui.modal && ui.modal.props) || {};
+    const s = state();
+    const infoDay = props.date || homeDay().day;
+    const cons = E.computeConsistency(s, E.parseISO(infoDay));
+    const nut = E.nutritionOn(s, infoDay);
+    const pTarget = E.proteinTarget(s);
+    const wTarget = E.waterTarget(s);
+    const cTarget = Number(s.settings.dailyCalorieTarget) || 0;
+    const protein = nut ? Number(nut.protein) || 0 : 0;
+    const calories = nut ? Number(nut.calories) || 0 : 0;
+    const water = nut ? Number(nut.water) || 0 : 0;
+    const workouts = E.workoutsOn(s, infoDay) || [];
+    const kind = props.kind || 'consistency';
+    const titles = { consistency: 'עקביות', nutrition: 'תזונה', water: 'מים', workout: 'אימון' };
+    var body = '';
+    var go = '';
+    if (kind === 'consistency') {
+      body += metricRow('מד עקביות', cons.hasData ? ltr(Math.round(cons.combined * 100) + '%') : '—');
+      body += metricRow('אימונים ב־14 יום', ltr((cons.workoutsDone || 0) + ' / ' + (cons.expectedWorkouts || 0)));
+      body += metricRow('ימים ביעד חלבון', ltr((cons.proteinHits || 0) + ' / ' + (cons.days || 0)));
+      body += metricRow('רצף נוכחי', ltr(String(cons.streak || 0)));
+      go = '<button type="button" class="btn wide" data-action="tab" data-tab="progress">להתקדמות</button>';
+    } else if (kind === 'nutrition') {
+      body += metricRow('חלבון', ltr(Math.round(protein) + ' / ' + pTarget + ' גרם'));
+      if (cTarget) body += metricRow('קלוריות', ltr(Math.round(calories) + ' / ' + cTarget + ' קק״ל'));
+      go = '<button type="button" class="btn primary wide" data-action="tab" data-tab="nutrition">לתזונה</button>';
+    } else if (kind === 'water') {
+      const wl = waterLabel(water, wTarget, s);
+      body += metricRow('כמות', ltr(wl.progress));
+      if (wl.units) body += metricRow('יחידות', esc(wl.units));
+      go = '<button type="button" class="btn primary wide" data-action="tab" data-tab="nutrition">לתזונה</button>';
+    } else {
+      if (!workouts.length) body += '<p class="hp-legend">עדיין לא תועד אימון ביום הזה.</p>';
+      body += workouts.map(function (w) {
+        return metricRow(typeLabel(w), esc((w.duration ? (w.duration + ' דק׳') : (w.source === 'whoop' ? whoopSportLabel(w.customType) : 'תועד'))));
+      }).join('');
+      go = '<button type="button" class="btn primary wide" data-action="open-start">התחלת אימון</button>';
+    }
+    return '<div class="sheet" role="dialog" aria-label="' + esc(titles[kind] || 'מדד') + '"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>' + esc(titles[kind] || 'מדד') + '</h2>' +
+      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+      '<p class="kicker">' + esc(E.formatDayLong(infoDay)) + '</p>' +
+      '<div class="metric-rows">' + body + '</div>' + go + '</div>';
+  }
+
+  function renderHome() {
+    const s = state();
+    const now = new Date();
+    const info = homeDay();
+    const today = info.today;
+    const day = info.day;
+    const cons = E.computeConsistency(s, E.parseISO(day));
+    const xp = E.computeXP(s, now);
+    const badges = E.computeAchievements(s, xp);
+    const name = s.settings.displayName || 'Hazi';
+    const pTarget = E.proteinTarget(s);
+    const wTarget = E.waterTarget(s);
+    const cTarget = Number(s.settings.dailyCalorieTarget) || 0;
+    const nut = E.nutritionOn(s, day);
+    const protein = nut ? Number(nut.protein) || 0 : 0;
+    const calories = nut ? Number(nut.calories) || 0 : 0;
+    const water = nut ? Number(nut.water) || 0 : 0;
+    const workouts = E.workoutsOn(s, day);
     const lastW = Store.latestWeight();
-    const weightToday = (s.weights || []).find(function (w) { return w.date === today; });
+    const weightToday = (s.weights || []).find(function (w) { return w.date === day; });
     const level = xp.level;
     const unlocked = badges.filter(function (b) { return b.unlocked; });
-    const todayBits = xp.todayEvents.map(function (e) { return ltr('+' + e.xp) + ' ' + esc(e.label); });
-    const metrics = E.bestMetricsByDate(s)[today];
+    const dayEvents = (xp.events || []).filter(function (e) { return e.date === day; });
+    const todayBits = dayEvents.map(function (e) { return ltr('+' + e.xp) + ' ' + esc(e.label); });
+    const metrics = E.metricSnapshot ? E.metricSnapshot(s, day) : E.bestMetricsByDate(s)[day];
     const hpCls = hpClass(cons.combined, cons.hasData);
 
     let install = '';
@@ -516,9 +820,9 @@
 
     const workoutLine = workouts.length
       ? workouts.map(function (w) { return typeLabel(w); }).join(' · ')
-      : 'עדיין לא תועד אימון היום';
+      : 'עדיין לא תועד אימון ביום הזה';
 
-    const dayMenu = Store.getDayMenu(today) || (Store.autoApplyMenu ? Store.autoApplyMenu(today) : null);
+    const dayMenu = Store.getDayMenu(day) || (Store.autoApplyMenu ? Store.autoApplyMenu(day) : null);
     let mealBit = '';
     if (dayMenu && dayMenu.meals && dayMenu.meals.length) {
       const eaten = dayMenu.meals.filter(function (m) { return m.status === 'eaten'; }).length;
@@ -529,7 +833,50 @@
     }
 
     return install + emptyDemoCta() +
-      pageHead('<div><p class="kicker">' + esc(dateLabel) + '</p><h1>שלום, ' + esc(name) + '</h1></div>') +
+      '<p class="section-kicker">שלום, ' + esc(name) + '</p>' +
+      renderDatePill(info) +
+      renderWhoopDashboard(s, info) +
+      renderFitRings(s, info, cons, xp) +
+
+      '<section class="card"><h2>היום שלי</h2>' +
+      '<div class="today-row"><div class="today-ico">🏋️</div><div>' +
+      '<div class="label">אימון</div>' +
+      '<div class="value' + (workouts.length ? '' : ' muted') + '">' + esc(workoutLine) + '</div></div>' +
+      (workouts.length ? '' : '<button type="button" class="btn tiny primary" data-action="open-start">התחלה</button>') +
+      '</div>' +
+      '<div class="today-row"><div class="today-ico">🥩</div><div>' +
+      '<div class="label">חלבון</div>' +
+      '<div class="value">' + ltr(protein + ' / ' + pTarget) + ' <span class="unit">גרם</span></div>' +
+      '<div class="protein-mini"><i style="width:' + Math.min(100, pTarget ? protein / pTarget * 100 : 0) + '%"></i></div>' +
+      '</div><div class="today-side">' +
+      '<button type="button" class="btn tiny" data-action="bump-protein" data-date="' + day + '" data-delta="25">+25</button>' +
+      '<button type="button" class="btn tiny" data-action="bump-protein" data-date="' + day + '" data-delta="50">+50</button>' +
+      '</div></div>' +
+      '<div class="today-row"><div class="today-ico water-ico-wrap">' + waterIcon(vesselOf(s).kind) + '</div><div>' +
+      '<div class="label">מים</div>' +
+      '<div class="value">' + ltr(waterLabel(water, wTarget, s).progress) +
+      ' <span class="unit">' + esc(waterLabel(water, wTarget, s).units) + '</span></div></div>' +
+      '<div class="today-side"><button type="button" class="btn tiny" data-action="bump-water" data-date="' + day + '" data-delta="1">+1</button></div>' +
+      '</div>' +
+      (cTarget ? '<div class="today-row"><div class="today-ico">🔥</div><div><div class="label">קלוריות</div><div class="value">' + ltr(calories + ' / ' + cTarget) + ' <span class="unit">קק״ל</span></div></div></div>' : '') +
+      mealBit +
+      '<div class="today-row"><div class="today-ico">⚖️</div><div>' +
+      '<div class="label">משקל</div>' +
+      '<div class="value' + (weightToday || lastW ? '' : ' muted') + '">' +
+      (weightToday ? ltr(String(weightToday.weight)) + ' ק״ג' : (lastW ? 'אחרון: ' + ltr(String(lastW.weight)) + ' ק״ג (' + esc(E.formatDay(lastW.date)) + ')' : 'טרם תועד')) +
+      '</div></div>' +
+      '<button type="button" class="btn tiny" data-action="open-weight">+' + (weightToday ? 'עדכון' : 'משקל') + '</button>' +
+      '</div>' +
+      renderTodayMetrics(metrics) +
+      '</section>' +
+
+      '<div class="section-title"><h2>הוספה מהירה</h2></div>' +
+      '<div class="quick-row cols-4">' +
+      '<button type="button" class="btn" data-action="open-start">+ אימון</button>' +
+      '<button type="button" class="btn" data-action="tab" data-tab="nutrition">+ תזונה</button>' +
+      '<button type="button" class="btn" data-action="open-weight">+ משקל</button>' +
+      '<button type="button" class="btn" data-action="open-metrics" data-date="' + day + '">+ מדדים</button>' +
+      '</div>' +
 
       '<section class="card level-card">' +
       '<div class="level-badge" aria-label="רמה ' + level.level + '">' + level.level + '</div>' +
@@ -538,7 +885,7 @@
       '<div class="xp-track" role="progressbar" aria-valuenow="' + Math.round(level.progress * 100) + '" aria-valuemin="0" aria-valuemax="100">' +
       '<div class="xp-fill" style="width:' + Math.round(level.progress * 100) + '%"></div></div>' +
       '<p class="xp-sub">' + ltr(level.xpInLevel + ' / ' + level.xpNeeded + ' XP') + ' לרמה הבאה · סה״כ ' + ltr(level.total + ' XP') + '</p>' +
-      (todayBits.length ? '<p class="xp-today">היום: ' + todayBits.join(' · ') + '</p>' : '<p class="xp-today">תעדו אימון, תזונה או מדדים כדי לצבור XP</p>') +
+      (todayBits.length ? '<p class="xp-today">' + (info.isToday ? 'היום' : esc(E.formatDay(day))) + ': ' + todayBits.join(' · ') + '</p>' : '<p class="xp-today">תעדו אימון, תזונה או מדדים כדי לצבור XP</p>') +
       '</div></section>' +
 
       '<section class="card hp-card">' +
@@ -560,76 +907,30 @@
       '<div class="streak"><span class="streak-flame" aria-hidden="true">🔥</span><div>' +
       '<strong>' + cons.streak + '</strong> <span>' + (cons.streak === 1 ? 'יום רצף' : 'ימי רצף') + '</span>' +
       '</div></div>' +
-      '<p class="hp-formula">' + (cons.hasData ? 'המד משקלל אימונים מול היעד השבועי (יחסית ל־14 יום) ואת מספר הימים שבהם עמדתם ביעד החלבון.' : 'המד יתחיל להתמלא אחרי שתעדו אימון או תזונה. הוא משקלל אימונים מול היעד השבועי (יחסית ל־14 יום) ואת מספר הימים ביעד החלבון.') + '</p>' +
       '</section>' +
-
-      '<div class="rings" aria-label="טבעות היום">' +
-      activityRing(workouts.length ? 1 : 0, 'var(--accent)', 'אימון', workouts.length ? '✓' : '—') +
-      activityRing(pTarget ? protein / pTarget : 0, 'var(--protein)', 'חלבון', ltr(protein + '/' + pTarget)) +
-      activityRing(wTarget ? water / wTarget : 0, 'var(--water)', 'מים', ltr((E.formatLiters ? E.formatLiters(water) : water) + '/' + (E.formatLiters ? E.formatLiters(wTarget) : wTarget))) +
-      '</div>' +
-
-      '<section class="card"><h2>היום</h2>' +
-      '<div class="today-row"><div class="today-ico">🏋️</div><div>' +
-      '<div class="label">אימון</div>' +
-      '<div class="value' + (workouts.length ? '' : ' muted') + '">' + esc(workoutLine) + '</div></div>' +
-      (workouts.length ? '' : '<button type="button" class="btn tiny primary" data-action="open-start">התחלה</button>') +
-      '</div>' +
-      '<div class="today-row"><div class="today-ico">🥩</div><div>' +
-      '<div class="label">חלבון</div>' +
-      '<div class="value">' + ltr(protein + ' / ' + pTarget) + ' <span class="unit">גרם</span></div>' +
-      '<div class="protein-mini"><i style="width:' + Math.min(100, pTarget ? protein / pTarget * 100 : 0) + '%"></i></div>' +
-      '</div><div class="today-side">' +
-      '<button type="button" class="btn tiny" data-action="bump-protein" data-date="' + today + '" data-delta="25">+25</button>' +
-      '<button type="button" class="btn tiny" data-action="bump-protein" data-date="' + today + '" data-delta="50">+50</button>' +
-      '</div></div>' +
-      '<div class="today-row"><div class="today-ico water-ico-wrap">' + waterIcon(vesselOf(s).kind) + '</div><div>' +
-      '<div class="label">מים</div>' +
-      '<div class="value">' + ltr(waterLabel(water, wTarget, s).progress) +
-      ' <span class="unit">' + esc(waterLabel(water, wTarget, s).units) + '</span></div></div>' +
-      '<div class="today-side"><button type="button" class="btn tiny" data-action="bump-water" data-date="' + today + '" data-delta="1">+1</button></div>' +
-      '</div>' +
-      (cTarget ? '<div class="today-row"><div class="today-ico">🔥</div><div><div class="label">קלוריות</div><div class="value">' + ltr(calories + ' / ' + cTarget) + ' <span class="unit">קק״ל</span></div></div></div>' : '') +
-      mealBit +
-      '<div class="today-row"><div class="today-ico">⚖️</div><div>' +
-      '<div class="label">משקל</div>' +
-      '<div class="value' + (weightToday || lastW ? '' : ' muted') + '">' +
-      (weightToday ? ltr(String(weightToday.weight)) + ' ק״ג' : (lastW ? 'אחרון: ' + ltr(String(lastW.weight)) + ' ק״ג (' + esc(E.formatDay(lastW.date)) + ')' : 'טרם תועד')) +
-      '</div></div>' +
-      '<button type="button" class="btn tiny" data-action="open-weight">+' + (weightToday ? 'עדכון' : 'משקל') + '</button>' +
-      '</div>' +
-      renderTodayMetrics(metrics) +
-      '</section>' +
-
-      '<div class="section-title"><h2>הוספה מהירה</h2></div>' +
-      '<div class="quick-row cols-4">' +
-      '<button type="button" class="btn" data-action="open-start">+ אימון</button>' +
-      '<button type="button" class="btn" data-action="tab" data-tab="nutrition">+ תזונה</button>' +
-      '<button type="button" class="btn" data-action="open-weight">+ משקל</button>' +
-      '<button type="button" class="btn" data-action="open-metrics">+ מדדים</button>' +
-      '</div>' +
 
       renderWeeklyCard(s) +
       renderMiniBodyMap(s) +
       renderRecentPRs(s) +
-      renderFoodsStrip(E.todayISO()) +
+      renderFoodsStrip(day) +
 
       '<div class="section-title"><h2>הישגים</h2><span class="kicker">' + unlocked.length + '/' + badges.length + '</span></div>' +
       '<section class="card"><div class="badges">' + badges.map(renderBadge).join('') + '</div></section>';
   }
 
   function renderTodayMetrics(m) {
-    if (!m) {
+    if (!m || !(m.hasAny || m.sleepHours != null || m.recoveryPct != null || m.strain != null || m.hrv != null || m.sleepPerformance != null)) {
       return '<div class="today-row"><div class="today-ico">❤️</div><div>' +
         '<div class="label">מדדים</div>' +
-        '<div class="value muted">שינה, התאוששות, HRV — עדיין לא תועדו היום</div></div>' +
+        '<div class="value muted">שינה, התאוששות, HRV — עדיין לא תועדו ביום הזה</div></div>' +
         '<button type="button" class="btn tiny" data-action="open-metrics">תיעוד</button></div>';
     }
     const bits = [];
-    if (m.sleepHours != null) bits.push(m.sleepHours + ' שע׳ שינה');
-    if (m.recoveryPct != null) bits.push(m.recoveryPct + '% התאוששות');
-    if (m.strain != null) bits.push('Strain ' + m.strain);
-    if (m.hrv != null) bits.push('HRV ' + m.hrv);
+    if (m.sleepPerformance != null) bits.push(Math.round(m.sleepPerformance) + '% שינה');
+    else if (m.sleepHours != null) bits.push((E.formatHoursClock ? E.formatHoursClock(m.sleepHours) : m.sleepHours) + ' שע׳ שינה');
+    if (m.recoveryPct != null) bits.push(Math.round(m.recoveryPct) + '% התאוששות');
+    if (m.strain != null) bits.push('מאמץ ' + (Math.round(Number(m.strain) * 10) / 10));
+    if (m.hrv != null) bits.push('HRV ' + (Math.round(Number(m.hrv) * 10) / 10));
     return '<div class="today-row"><div class="today-ico">❤️</div><div>' +
       '<div class="label">מדדים</div>' +
       '<div class="value">' + esc(bits.join(' · ') || 'תועד') + '</div></div>' +
@@ -1897,6 +2198,8 @@
     else if (type === 'levelup') overlay.innerHTML = renderLevelUp();
     else if (type === 'unlock') overlay.innerHTML = renderUnlock();
     else if (type === 'swap-food') overlay.innerHTML = renderSwapFoodSheet();
+    else if (type === 'whoop-detail') overlay.innerHTML = renderWhoopDetailSheet();
+    else if (type === 'fit-detail') overlay.innerHTML = renderFitDetailSheet();
     else overlay.innerHTML = '';
     bindSheetDrag(overlay);
   }
@@ -2745,7 +3048,11 @@
     const action = btn.dataset.action;
     const s = state();
 
-    if (action === 'tab') { setTab(btn.dataset.tab); return; }
+    if (action === 'tab') {
+      if (btn.dataset.tab === 'nutrition' && ui.homeDate) ui.nutritionDate = ui.homeDate;
+      setTab(btn.dataset.tab);
+      return;
+    }
     if (action === 'close') { closeModal(); return; }
     if (action === 'set-theme') { applyTheme(btn.dataset.theme); render(); haptic(8); return; }
     if (action === 'open-summary') {
@@ -2810,6 +3117,37 @@
         if (!opened) location.href = url;
         toast('אשר ב-Whoop וחזור לאפליקציה');
       }).catch(function (e) { toast(e.message || 'שגיאה בהתחברות ל-Whoop'); });
+      return;
+    }
+    if (action === 'home-prev-day') {
+      const today = E.todayISO();
+      const cur = ui.homeDate || today;
+      const min = E.addDays(today, -60);
+      const prev = E.addDays(cur, -1);
+      ui.homeDate = prev < min ? min : prev;
+      if (ui.homeDate === today) ui.homeDate = null;
+      render();
+      return;
+    }
+    if (action === 'home-next-day') {
+      const today = E.todayISO();
+      const cur = ui.homeDate || today;
+      const next = E.addDays(cur, 1);
+      ui.homeDate = next >= today ? null : next;
+      render();
+      return;
+    }
+    if (action === 'home-today') {
+      ui.homeDate = null;
+      render();
+      return;
+    }
+    if (action === 'open-whoop-ring') {
+      openModal('whoop-detail', { kind: btn.dataset.kind || 'recovery', date: (homeDay().day) });
+      return;
+    }
+    if (action === 'open-fit-ring') {
+      openModal('fit-detail', { kind: btn.dataset.kind || 'consistency', date: (homeDay().day) });
       return;
     }
     if (action === 'whoop-refresh') {

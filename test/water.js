@@ -25,7 +25,7 @@ const E = ctx.FitEngine;
 const Store = ctx.FitStore;
 function assert(c, m) { if (!c) throw new Error(m); }
 
-assert(C.APP_VERSION === '19', 'version ' + C.APP_VERSION);
+assert(C.APP_VERSION === '20', 'version ' + C.APP_VERSION);
 assert(E.formatLiters(2000) === '2', '2L got ' + E.formatLiters(2000));
 assert(E.formatLiters(1500) === '1.5', '1.5L got ' + E.formatLiters(1500));
 assert(E.formatWaterProgress(1500, 3000) === '1.5 / 3 ל׳', E.formatWaterProgress(1500, 3000));

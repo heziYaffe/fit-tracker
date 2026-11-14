@@ -1,5 +1,5 @@
 /* פיט — service worker */
-const CACHE = 'fit-tracker-v19';
+const CACHE = 'fit-tracker-v20';
 const ASSETS = [
   './',
   './index.html',
