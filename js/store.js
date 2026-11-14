@@ -27,6 +27,93 @@
     });
   }
 
+
+  function normalizeTex(ex) {
+    ex = ex || {};
+    return {
+      id: ex.id || uid(),
+      name: ex.name || '',
+      sets: Number(ex.sets) || 3,
+      repsMin: ex.repsMin != null && ex.repsMin !== '' ? Number(ex.repsMin) : 8,
+      repsMax: ex.repsMax != null && ex.repsMax !== '' ? Number(ex.repsMax) : 12,
+      weight: ex.weight != null && ex.weight !== '' ? Number(ex.weight) : '',
+      restSec: ex.restSec != null && ex.restSec !== '' ? Number(ex.restSec) : (C.REST_DEFAULT_SEC || 90),
+      notes: ex.notes || '',
+      supersetId: ex.supersetId || ''
+    };
+  }
+
+  function normalizeTemplate(t) {
+    t = t || {};
+    return {
+      id: t.id || uid(),
+      name: t.name || '',
+      days: Array.isArray(t.days) ? t.days.map(Number) : [],
+      type: t.type || '',
+      exercises: (t.exercises || []).map(normalizeTex)
+    };
+  }
+
+  function normalizeMenuFood(f) {
+    f = f || {};
+    return {
+      id: f.id || uid(),
+      foodId: f.foodId || '',
+      name: f.name || '',
+      qty: Number(f.qty) || 1,
+      protein: Number(f.protein) || 0,
+      calories: Number(f.calories) || 0,
+      carbs: f.carbs === '' || f.carbs == null ? '' : Number(f.carbs),
+      fat: f.fat === '' || f.fat == null ? '' : Number(f.fat)
+    };
+  }
+
+  function normalizeMeal(m) {
+    m = m || {};
+    return {
+      id: m.id || uid(),
+      name: m.name || '',
+      time: m.time || '',
+      foods: (m.foods || []).map(normalizeMenuFood),
+      status: m.status || 'pending'
+    };
+  }
+
+  function normalizeMenu(menu) {
+    menu = menu || {};
+    return {
+      id: menu.id || uid(),
+      name: menu.name || '',
+      days: Array.isArray(menu.days) ? menu.days.map(Number) : [],
+      applyOn: menu.applyOn || '',
+      meals: (menu.meals || []).map(normalizeMeal)
+    };
+  }
+
+  function mealTotals(meal) {
+    const out = { protein: 0, calories: 0, carbs: 0, fat: 0, hasCarbs: false, hasFat: false };
+    (meal && meal.foods || []).forEach(function (f) {
+      const q = Number(f.qty) || 1;
+      out.protein += (Number(f.protein) || 0) * q;
+      out.calories += (Number(f.calories) || 0) * q;
+      if (f.carbs !== '' && f.carbs != null) { out.carbs += (Number(f.carbs) || 0) * q; out.hasCarbs = true; }
+      if (f.fat !== '' && f.fat != null) { out.fat += (Number(f.fat) || 0) * q; out.hasFat = true; }
+    });
+    return out;
+  }
+
+  function menuTotals(menu) {
+    const out = { protein: 0, calories: 0, carbs: 0, fat: 0, hasCarbs: false, hasFat: false };
+    (menu && menu.meals || []).forEach(function (m) {
+      const t = mealTotals(m);
+      out.protein += t.protein;
+      out.calories += t.calories;
+      if (t.hasCarbs) { out.carbs += t.carbs; out.hasCarbs = true; }
+      if (t.hasFat) { out.fat += t.fat; out.hasFat = true; }
+    });
+    return out;
+  }
+
   function defaultState() {
     return {
       version: 1,
@@ -35,7 +122,10 @@
       nutrition: [],
       weights: [],
       metrics: [],
-      foods: starterFoods()
+      foods: starterFoods(),
+      templates: [],
+      menus: [],
+      dayMenus: []
     };
   }
 
@@ -50,7 +140,10 @@
       nutrition: Array.isArray(raw.nutrition) ? raw.nutrition : [],
       weights: Array.isArray(raw.weights) ? raw.weights : [],
       metrics: Array.isArray(raw.metrics) ? raw.metrics : [],
-      foods: foods
+      foods: foods,
+      templates: Array.isArray(raw.templates) ? raw.templates.map(normalizeTemplate) : [],
+      menus: Array.isArray(raw.menus) ? raw.menus.map(normalizeMenu) : [],
+      dayMenus: Array.isArray(raw.dayMenus) ? raw.dayMenus : []
     };
   }
 
@@ -351,6 +444,191 @@
     return food;
   }
 
+
+  function listTemplates() {
+    return (state.templates || []).slice();
+  }
+  function getTemplate(id) {
+    return (state.templates || []).find(function (t) { return t.id === id; }) || null;
+  }
+  function addTemplate(data) {
+    const row = normalizeTemplate(Object.assign({}, data, { id: (data && data.id) || uid() }));
+    state.templates = state.templates || [];
+    state.templates.push(row);
+    commit();
+    return row;
+  }
+  function updateTemplate(id, patch) {
+    const row = getTemplate(id);
+    if (!row) return null;
+    const next = normalizeTemplate(Object.assign({}, row, patch, { id: row.id }));
+    state.templates = state.templates.map(function (t) { return t.id === id ? next : t; });
+    commit();
+    return next;
+  }
+  function deleteTemplate(id) {
+    state.templates = (state.templates || []).filter(function (t) { return t.id !== id; });
+    commit();
+  }
+  function duplicateTemplate(id) {
+    const src = getTemplate(id);
+    if (!src) return null;
+    const copy = normalizeTemplate(JSON.parse(JSON.stringify(src)));
+    copy.id = uid();
+    copy.name = (src.name || 'תבנית') + ' (עותק)';
+    copy.exercises = (copy.exercises || []).map(function (ex) { ex.id = uid(); return ex; });
+    state.templates.push(copy);
+    commit();
+    return copy;
+  }
+
+  function listMenus() {
+    return (state.menus || []).slice();
+  }
+  function getMenu(id) {
+    return (state.menus || []).find(function (m) { return m.id === id; }) || null;
+  }
+  function addMenu(data) {
+    const row = normalizeMenu(Object.assign({}, data, { id: (data && data.id) || uid() }));
+    state.menus = state.menus || [];
+    state.menus.push(row);
+    commit();
+    return row;
+  }
+  function updateMenu(id, patch) {
+    const row = getMenu(id);
+    if (!row) return null;
+    const next = normalizeMenu(Object.assign({}, row, patch, { id: row.id }));
+    state.menus = state.menus.map(function (m) { return m.id === id ? next : m; });
+    commit();
+    return next;
+  }
+  function deleteMenu(id) {
+    state.menus = (state.menus || []).filter(function (m) { return m.id !== id; });
+    commit();
+  }
+  function duplicateMenu(id) {
+    const src = getMenu(id);
+    if (!src) return null;
+    const copy = normalizeMenu(JSON.parse(JSON.stringify(src)));
+    copy.id = uid();
+    copy.name = (src.name || 'תפריט') + ' (עותק)';
+    copy.meals = (copy.meals || []).map(function (m) {
+      m.id = uid();
+      m.foods = (m.foods || []).map(function (f) { f.id = uid(); return f; });
+      return m;
+    });
+    state.menus.push(copy);
+    commit();
+    return copy;
+  }
+
+  function getDayMenu(date) {
+    return (state.dayMenus || []).find(function (d) { return d.date === date; }) || null;
+  }
+
+  function applyMenuToDate(menuId, date) {
+    const menu = getMenu(menuId);
+    if (!menu) return null;
+    const clone = {
+      date: date,
+      menuId: menu.id,
+      menuName: menu.name,
+      meals: (menu.meals || []).map(function (m) {
+        const meal = normalizeMeal(JSON.parse(JSON.stringify(m)));
+        meal.id = meal.id || uid();
+        meal.status = 'pending';
+        meal.foods = (meal.foods || []).map(function (f) { f.id = uid(); return f; });
+        return meal;
+      })
+    };
+    state.dayMenus = (state.dayMenus || []).filter(function (d) { return d.date !== date; });
+    state.dayMenus.push(clone);
+    commit();
+    return clone;
+  }
+
+  function updateDayMenu(date, patch) {
+    const row = getDayMenu(date);
+    if (!row) return null;
+    Object.assign(row, patch, { date: row.date });
+    commit();
+    return row;
+  }
+
+  function setMealStatus(date, mealId, status) {
+    const day = getDayMenu(date);
+    if (!day) return null;
+    const meal = (day.meals || []).find(function (m) { return m.id === mealId; });
+    if (!meal) return null;
+    const prev = meal.status || 'pending';
+    if (status === 'eaten' && prev !== 'eaten') {
+      const tot = mealTotals(meal);
+      const cur = getNutrition(date) || { protein: 0, calories: 0, carbs: 0, fat: 0 };
+      const patch = {
+        protein: (Number(cur.protein) || 0) + tot.protein,
+        calories: (Number(cur.calories) || 0) + tot.calories
+      };
+      if (tot.hasCarbs) patch.carbs = (Number(cur.carbs) || 0) + tot.carbs;
+      if (tot.hasFat) patch.fat = (Number(cur.fat) || 0) + tot.fat;
+      meal.status = 'eaten';
+      upsertNutrition(date, patch);
+      return meal;
+    }
+    if (status === 'skipped') {
+      meal.status = 'skipped';
+      commit();
+      return meal;
+    }
+    if (status === 'pending') {
+      meal.status = 'pending';
+      commit();
+      return meal;
+    }
+    return meal;
+  }
+
+  function patchDayMeal(date, mealId, patch) {
+    const day = getDayMenu(date);
+    if (!day) return null;
+    const meal = (day.meals || []).find(function (m) { return m.id === mealId; });
+    if (!meal) return null;
+    Object.assign(meal, patch, { id: meal.id });
+    commit();
+    return meal;
+  }
+
+  function replaceDayMealFood(date, mealId, foodId, nextFood) {
+    const day = getDayMenu(date);
+    if (!day) return null;
+    const meal = (day.meals || []).find(function (m) { return m.id === mealId; });
+    if (!meal) return null;
+    meal.foods = (meal.foods || []).map(function (f) {
+      return f.id === foodId ? normalizeMenuFood(Object.assign({}, f, nextFood, { id: f.id })) : f;
+    });
+    commit();
+    return meal;
+  }
+
+  function pickAutoMenu(date) {
+    const menus = state.menus || [];
+    if (!menus.length) return null;
+    const dow = root.FitEngine.parseISO(date).getDay();
+    const trained = (state.workouts || []).some(function (w) { return w.date === date; });
+    let found = menus.find(function (m) { return (m.days || []).map(Number).indexOf(dow) >= 0; });
+    if (found) return found;
+    if (trained) found = menus.find(function (m) { return m.applyOn === 'workout'; });
+    else found = menus.find(function (m) { return m.applyOn === 'rest'; });
+    return found || null;
+  }
+
+  function autoApplyMenu(date) {
+    if (getDayMenu(date)) return getDayMenu(date);
+    const menu = pickAutoMenu(date);
+    if (!menu) return null;
+    return applyMenuToDate(menu.id, date);
+  }
+
   function exportJSON() {
     return {
       app: 'fit-tracker',
@@ -362,7 +640,10 @@
         nutrition: state.nutrition,
         weights: state.weights,
         metrics: state.metrics,
-        foods: state.foods
+        foods: state.foods,
+        templates: state.templates,
+        menus: state.menus,
+        dayMenus: state.dayMenus
       }
     };
   }
@@ -370,7 +651,7 @@
   function importJSON(payload) {
     const raw = payload && payload.data ? payload.data : payload;
     if (!raw || typeof raw !== 'object') throw new Error('invalid');
-    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics;
+    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus;
     if (!hasAny) throw new Error('invalid');
     state = normalize(raw);
     commit();
@@ -411,7 +692,31 @@
     useFood: useFood,
     isDemoMode: isDemoMode,
     enterDemoMode: enterDemoMode,
-    exitDemoMode: exitDemoMode
+    exitDemoMode: exitDemoMode,
+    listTemplates: listTemplates,
+    getTemplate: getTemplate,
+    addTemplate: addTemplate,
+    updateTemplate: updateTemplate,
+    deleteTemplate: deleteTemplate,
+    duplicateTemplate: duplicateTemplate,
+    listMenus: listMenus,
+    getMenu: getMenu,
+    addMenu: addMenu,
+    updateMenu: updateMenu,
+    deleteMenu: deleteMenu,
+    duplicateMenu: duplicateMenu,
+    getDayMenu: getDayMenu,
+    applyMenuToDate: applyMenuToDate,
+    updateDayMenu: updateDayMenu,
+    setMealStatus: setMealStatus,
+    patchDayMeal: patchDayMeal,
+    replaceDayMealFood: replaceDayMealFood,
+    pickAutoMenu: pickAutoMenu,
+    autoApplyMenu: autoApplyMenu,
+    mealTotals: mealTotals,
+    menuTotals: menuTotals,
+    normalizeTemplate: normalizeTemplate,
+    normalizeMenu: normalizeMenu
   };
 
   root.FitStore = FitStore;

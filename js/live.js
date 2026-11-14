@@ -48,7 +48,10 @@
       exercises: [],
       draft: { weight: 20, reps: 8 },
       restUntil: null,
-      notes: ''
+      notes: '',
+      templateId: opts.templateId || '',
+      templateName: opts.templateName || '',
+      templateSnapshot: opts.templateSnapshot || null
     };
     persist();
     requestWakeLock();
@@ -83,8 +86,15 @@
       name: n,
       targetWeight: sug.weight,
       targetReps: sug.reps,
+      targetSets: 0,
+      repsMin: sug.reps,
+      repsMax: sug.reps,
+      restSec: session.restSec,
+      notes: '',
+      supersetId: '',
       suggestReason: sug.reason,
-      sets: []
+      sets: [],
+      fromTemplate: false
     });
     session.currentEx = session.exercises.length - 1;
     session.draft.weight = sug.weight;
@@ -160,7 +170,23 @@
     session.draft.weight = sug.weight;
     session.draft.reps = ex.targetReps || sug.reps;
     startRest();
+    const targetSets = Number(ex.targetSets) || 0;
+    let advanced = false;
+    if (targetSets && ex.sets.length >= targetSets) {
+      const next = session.currentEx + 1;
+      if (next < session.exercises.length) {
+        session.currentEx = next;
+        const nxt = currentExercise();
+        if (nxt) {
+          const ns = E().suggestNextSet(Store().getState(), nxt.name, nxt.sets, null);
+          session.draft.weight = nxt.targetWeight || ns.weight;
+          session.draft.reps = nxt.targetReps || ns.reps;
+        }
+        advanced = true;
+      }
+    }
     persist();
+    row.advanced = advanced;
     return row;
   }
 
@@ -177,7 +203,10 @@
 
   function startRest() {
     if (!session) return;
-    session.restUntil = nowMs() + session.restSec * 1000;
+    const ex = currentExercise();
+    const sec = (ex && ex.restSec) ? ex.restSec : session.restSec;
+    session.restUntil = nowMs() + Math.max(15, Number(sec) || 90) * 1000;
+    session.restTotal = Math.max(15, Number(sec) || 90);
     persist();
   }
 
@@ -297,6 +326,136 @@
     };
   }
 
+
+  function planSuggestion(name, plannedWeight, repsMin, repsMax) {
+    const sug = E().suggestNextSet(Store().getState(), name, [], null);
+    const hasHist = !!(sug && sug.reason);
+    const reps = repsMin || sug.reps || 8;
+    if (hasHist) {
+      return {
+        weight: sug.weight,
+        reps: repsMax && sug.reps > repsMax ? repsMax : (repsMin && sug.reps < repsMin ? repsMin : sug.reps),
+        reason: sug.reason
+      };
+    }
+    return {
+      weight: plannedWeight != null && plannedWeight !== '' ? Number(plannedWeight) : (sug.weight || 20),
+      reps: reps,
+      reason: plannedWeight ? 'לפי התבנית' : (sug.reason || '')
+    };
+  }
+
+  function startFromTemplate(template, opts) {
+    opts = opts || {};
+    if (!template) return start(opts);
+    const snapshot = JSON.parse(JSON.stringify(template));
+    const sess = start(Object.assign({}, opts, {
+      type: template.type || opts.type || 'full',
+      customType: template.name || '',
+      templateId: template.id,
+      templateName: template.name,
+      templateSnapshot: snapshot
+    }));
+    (template.exercises || []).forEach(function (tex) {
+      const name = E().normName(tex.name);
+      if (!name) return;
+      const sug = planSuggestion(name, tex.weight, tex.repsMin, tex.repsMax);
+      sess.exercises.push({
+        name: name,
+        targetSets: Number(tex.sets) || 3,
+        targetWeight: sug.weight,
+        targetReps: sug.reps,
+        repsMin: Number(tex.repsMin) || sug.reps,
+        repsMax: Number(tex.repsMax) || sug.reps,
+        restSec: Number(tex.restSec) || sess.restSec,
+        notes: tex.notes || '',
+        supersetId: tex.supersetId || '',
+        suggestReason: sug.reason,
+        sets: [],
+        fromTemplate: true,
+        templateExId: tex.id
+      });
+    });
+    if (sess.exercises.length) {
+      sess.currentEx = 0;
+      const ex = sess.exercises[0];
+      sess.draft.weight = ex.targetWeight;
+      sess.draft.reps = ex.targetReps;
+    }
+    persist();
+    return sess;
+  }
+
+  function skipExercise() {
+    if (!session) return;
+    const next = session.currentEx + 1;
+    if (next < session.exercises.length) selectExercise(next);
+  }
+
+  function moveExercise(index, dir) {
+    if (!session) return;
+    const to = index + dir;
+    if (to < 0 || to >= session.exercises.length) return;
+    const arr = session.exercises;
+    const tmp = arr[index];
+    arr[index] = arr[to];
+    arr[to] = tmp;
+    if (session.currentEx === index) session.currentEx = to;
+    else if (session.currentEx === to) session.currentEx = index;
+    persist();
+  }
+
+  function nextExercise() {
+    if (!session) return null;
+    return session.exercises[session.currentEx + 1] || null;
+  }
+
+  function progress() {
+    if (!session || !session.exercises.length) return { current: 0, total: 0 };
+    return { current: session.currentEx + 1, total: session.exercises.length };
+  }
+
+  function restTotal() {
+    if (!session) return 0;
+    return session.restTotal || session.restSec || 90;
+  }
+
+  function templateChanged() {
+    if (!session || !session.templateSnapshot) return false;
+    const snap = session.templateSnapshot.exercises || [];
+    if (snap.length !== session.exercises.length) return true;
+    for (let i = 0; i < snap.length; i++) {
+      const a = snap[i];
+      const b = session.exercises[i];
+      if (E().normName(a.name) !== E().normName(b.name)) return true;
+      if ((Number(a.sets) || 0) !== (Number(b.targetSets) || b.sets.length || 0)) return true;
+    }
+    return session.exercises.some(function (ex) { return !ex.fromTemplate && ex.sets.length; })
+      || session.exercises.some(function (ex) { return ex.fromTemplate && ex.sets.length !== (Number(ex.targetSets) || 0); });
+  }
+
+  function templatePayloadFromSession() {
+    if (!session) return null;
+    return {
+      exercises: session.exercises.filter(function (ex) {
+        return ex.sets.length || ex.fromTemplate;
+      }).map(function (ex) {
+        const last = ex.sets.length ? ex.sets[ex.sets.length - 1] : null;
+        return {
+          id: ex.templateExId || undefined,
+          name: ex.name,
+          sets: ex.sets.length || ex.targetSets || 3,
+          repsMin: ex.repsMin || (last && last.reps) || ex.targetReps || 8,
+          repsMax: ex.repsMax || (last && last.reps) || ex.targetReps || 12,
+          weight: last ? last.weight : (ex.targetWeight || ''),
+          restSec: ex.restSec || session.restSec,
+          notes: ex.notes || '',
+          supersetId: ex.supersetId || ''
+        };
+      })
+    };
+  }
+
   function finish() {
     const payload = toWorkout();
     if (!payload) return null;
@@ -316,7 +475,11 @@
       volume: volume,
       prs: prs,
       xp: (C().XP_RULES.workoutLogged || {}).xp || 40,
-      exercises: payload.exercises
+      exercises: payload.exercises,
+      templateId: session.templateId || '',
+      templateName: session.templateName || '',
+      templateChanged: templateChanged(),
+      templatePayload: templatePayloadFromSession()
     };
     discard();
     return summary;
@@ -348,7 +511,16 @@
     releaseWakeLock: releaseWakeLock,
     toWorkout: toWorkout,
     finish: finish,
-    persist: persist
+    persist: persist,
+    startFromTemplate: startFromTemplate,
+    skipExercise: skipExercise,
+    moveExercise: moveExercise,
+    nextExercise: nextExercise,
+    progress: progress,
+    restTotal: restTotal,
+    templateChanged: templateChanged,
+    templatePayloadFromSession: templatePayloadFromSession,
+    planSuggestion: planSuggestion
   };
 
   root.FitLive = FitLive;

@@ -8,7 +8,8 @@
   const DEMO_MODE_KEY = 'hazi-fit-demo-mode';
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
-  const APP_VERSION = '4';
+  const THEME_KEY = 'hazi-fit-theme';
+  const APP_VERSION = '6';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -152,6 +153,19 @@
     { key: 'yogurt', name: 'יוגורט חלבון', protein: 20, calories: 120, carbs: 6, fat: 0.5 },
     { key: 'eggs', name: '3 ביצים', protein: 18, calories: 210, carbs: 1, fat: 15 }
   ];
+
+  const DAY_NAMES = [
+    { id: 0, short: 'א׳', label: 'ראשון' },
+    { id: 1, short: 'ב׳', label: 'שני' },
+    { id: 2, short: 'ג׳', label: 'שלישי' },
+    { id: 3, short: 'ד׳', label: 'רביעי' },
+    { id: 4, short: 'ה׳', label: 'חמישי' },
+    { id: 5, short: 'ו׳', label: 'שישי' },
+    { id: 6, short: 'ש׳', label: 'שבת' }
+  ];
+
+  const MEAL_SLOTS = ['בוקר', 'צהריים', 'לפני אימון', 'אחרי אימון', 'ערב', 'ביניים'];
+
   const DEFAULT_SETTINGS = {
     weeklyWorkoutTarget: 4,
     dailyProteinTarget: 150,
@@ -166,6 +180,7 @@
     DEMO_MODE_KEY,
     CONSISTENCY_DAYS,
     INSTALL_DISMISS_KEY,
+    THEME_KEY,
     APP_VERSION,
     WORKOUT_TYPES,
     XP_RULES,
@@ -178,7 +193,9 @@
     SMALL_LIFTS,
     MUSCLES,
     EXERCISE_MUSCLES,
-    STARTER_FOODS
+    STARTER_FOODS,
+    DAY_NAMES,
+    MEAL_SLOTS
   };
 
   root.FitConfig = FitConfig;

@@ -233,6 +233,143 @@
       });
     }
 
+
+    function tex(id, name, sets, rmin, rmax, weight, rest, ss) {
+      return {
+        id: 'dtex_' + id,
+        name: name,
+        sets: sets,
+        repsMin: rmin,
+        repsMax: rmax,
+        weight: weight,
+        restSec: rest,
+        notes: '',
+        supersetId: ss || ''
+      };
+    }
+
+    const templates = [
+      {
+        id: 'dtpl_push',
+        name: 'Push A',
+        days: [0, 4],
+        type: 'chest',
+        exercises: [
+          tex('p1', 'לחיצת חזה', 4, 8, 8, 80, 120),
+          tex('p2', 'לחיצה בשיפוע', 3, 8, 10, 62.5, 90),
+          tex('p3', 'לחיצת כתפיים', 4, 8, 8, 50, 90),
+          tex('p4', 'פשיטת מרפקים', 3, 10, 12, 35, 75, 'ss_push_arms'),
+          tex('p5', 'פרפר', 3, 10, 12, 22, 75, 'ss_push_arms')
+        ]
+      },
+      {
+        id: 'dtpl_pull',
+        name: 'Pull A',
+        days: [1, 5],
+        type: 'back',
+        exercises: [
+          tex('u1', 'דדליפט', 4, 5, 5, 135, 150),
+          tex('u2', 'מתח', 4, 6, 8, 87.5, 120),
+          tex('u3', 'חתירה', 4, 8, 8, 62.5, 90),
+          tex('u4', 'פולדאון', 3, 10, 12, 57.5, 75),
+          tex('u5', 'כפיפת מרפקים', 3, 8, 10, 26, 75)
+        ]
+      },
+      {
+        id: 'dtpl_legs',
+        name: 'Legs A',
+        days: [2, 6],
+        type: 'legs',
+        exercises: [
+          tex('l1', 'סקוואט', 5, 5, 5, 120, 150),
+          tex('l2', 'לחיצת רגליים', 3, 10, 12, 180, 120),
+          tex('l3', 'מתנייחים', 3, 8, 8, 87.5, 90),
+          tex('l4', 'כפיפת רגליים', 3, 10, 12, 45, 75),
+          tex('l5', 'עליות שוקיים', 3, 12, 15, 65, 60)
+        ]
+      }
+    ];
+
+    function mfood(id, foodId, name, qty, protein, calories, carbs, fat) {
+      return { id: 'dmf_' + id, foodId: foodId, name: name, qty: qty, protein: protein, calories: calories, carbs: carbs, fat: fat };
+    }
+    const menus = [
+      {
+        id: 'dmenu_train',
+        name: 'יום אימון',
+        days: [],
+        applyOn: 'workout',
+        meals: [
+          { id: 'dml_t1', name: 'בוקר', time: '08:00', foods: [
+            mfood('t1a', 'food_yogurt', 'יוגורט חלבון', 1, 20, 120, 6, 0.5),
+            mfood('t1b', 'food_eggs', '3 ביצים', 1, 18, 210, 1, 15)
+          ]},
+          { id: 'dml_t2', name: 'לפני אימון', time: '11:30', foods: [
+            mfood('t2a', 'food_shake', 'שייק חלבון', 1, 25, 130, 5, 2)
+          ]},
+          { id: 'dml_t3', name: 'צהריים', time: '13:30', foods: [
+            mfood('t3a', 'food_chicken', 'חזה עוף 200 גרם', 1, 62, 330, 0, 7),
+            mfood('t3b', 'food_rice', 'אורז 200 גרם', 1, 5, 260, 56, 0.5)
+          ]},
+          { id: 'dml_t4', name: 'אחרי אימון', time: '17:00', foods: [
+            mfood('t4a', 'food_shake', 'שייק חלבון', 1, 25, 130, 5, 2)
+          ]},
+          { id: 'dml_t5', name: 'ערב', time: '20:00', foods: [
+            mfood('t5a', 'food_yogurt', 'יוגורט חלבון', 1, 20, 120, 6, 0.5)
+          ]}
+        ]
+      },
+      {
+        id: 'dmenu_rest',
+        name: 'יום מנוחה',
+        days: [],
+        applyOn: 'rest',
+        meals: [
+          { id: 'dml_r1', name: 'בוקר', time: '09:00', foods: [
+            mfood('r1a', 'food_yogurt', 'יוגורט חלבון', 1, 20, 120, 6, 0.5),
+            mfood('r1b', 'food_eggs', '3 ביצים', 1, 18, 210, 1, 15)
+          ]},
+          { id: 'dml_r2', name: 'צהריים', time: '13:00', foods: [
+            mfood('r2a', 'food_chicken', 'חזה עוף 200 גרם', 1, 62, 330, 0, 7),
+            mfood('r2b', 'food_rice', 'אורז 200 גרם', 1, 5, 260, 56, 0.5)
+          ]},
+          { id: 'dml_r3', name: 'ערב', time: '19:30', foods: [
+            mfood('r3a', 'food_yogurt', 'יוגורט חלבון', 1, 20, 120, 6, 0.5)
+          ]}
+        ]
+      }
+    ];
+
+    /* Today is a training day in the demo (legs if Saturday). Prefill a plan with 3 meals eaten
+       so the checklist and protein totals tell one consistent story. */
+    const todayMeals = JSON.parse(JSON.stringify(menus[0].meals));
+    todayMeals.forEach(function (m, i) {
+      m.status = i < 3 ? 'eaten' : 'pending';
+      m.foods.forEach(function (f) { f.id = f.id + '_today'; });
+    });
+    const eatenTot = { protein: 0, calories: 0 };
+    todayMeals.forEach(function (m) {
+      if (m.status !== 'eaten') return;
+      m.foods.forEach(function (f) {
+        const q = Number(f.qty) || 1;
+        eatenTot.protein += (Number(f.protein) || 0) * q;
+        eatenTot.calories += (Number(f.calories) || 0) * q;
+      });
+    });
+    nutrition.forEach(function (n) {
+      if (n.date === today) {
+        n.protein = eatenTot.protein;
+        n.calories = eatenTot.calories;
+        n.notes = 'לפי תפריט יום אימון';
+      }
+    });
+    const dayMenus = [{
+      date: today,
+      menuId: 'dmenu_train',
+      menuName: 'יום אימון',
+      meals: todayMeals
+    }];
+
     return {
       version: 1,
       settings: Object.assign({}, C.DEFAULT_SETTINGS, {
@@ -252,7 +389,10 @@
         { id: 'food_yogurt', name: 'יוגורט חלבון', protein: 20, calories: 120, carbs: 6, fat: 0.5, uses: 11, starter: true },
         { id: 'food_eggs', name: '3 ביצים', protein: 18, calories: 210, carbs: 1, fat: 15, uses: 9, starter: true },
         { id: 'food_rice', name: 'אורז 200 גרם', protein: 5, calories: 260, carbs: 56, fat: 0.5, uses: 8, starter: false }
-      ]
+      ],
+      templates: templates,
+      menus: menus,
+      dayMenus: dayMenus
     };
   }
 

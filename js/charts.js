@@ -10,6 +10,27 @@
       .replace(/"/g, '&quot;');
   }
 
+
+  function starPath(cx, cy, r) {
+    let d = '';
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI / 2 + i * (Math.PI * 2 / 5);
+      const b = a + Math.PI / 5;
+      const x1 = cx + Math.cos(a) * r;
+      const y1 = cy + Math.sin(a) * r;
+      const x2 = cx + Math.cos(b) * (r * 0.4);
+      const y2 = cy + Math.sin(b) * (r * 0.4);
+      d += (i === 0 ? 'M' : 'L') + x1.toFixed(1) + ' ' + y1.toFixed(1) + ' L' + x2.toFixed(1) + ' ' + y2.toFixed(1) + ' ';
+    }
+    return d + 'Z';
+  }
+
+  let gid = 0;
+  function uid(prefix) {
+    gid += 1;
+    return (prefix || 'c') + gid;
+  }
+
   function niceMax(value) {
     const v = Math.max(Number(value) || 0, 1);
     const pow = Math.pow(10, Math.floor(Math.log10(v)));
@@ -22,7 +43,7 @@
     const labels = opts.labels || [];
     const values = opts.values || [];
     const target = opts.target;
-    const color = opts.color || '#3ee0a0';
+    const color = opts.color || '#d36bff';
     const W = opts.width || 320;
     const H = opts.height || 180;
     const padL = 6;
@@ -61,10 +82,13 @@
       const h = nice ? (num / nice) * innerH : 0;
       const x = padL + i * (barW + gap);
       const y = padT + innerH - h;
-      const fill = marks[i] ? '#ffc23a' : (num > 0 ? color : 'transparent');
-      bars += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="4" fill="' + fill + '" />';
+      const fill = marks[i] ? '#ffc46b' : (num > 0 ? color : 'transparent');
+      const tip = esc((labels[i] || '') + ' · ' + num);
+      bars += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="6" fill="' + fill + '" data-action="chart-tip" data-tip="' + tip + '" />';
       if (marks[i]) {
-        bars += '<circle cx="' + (x + barW / 2).toFixed(1) + '" cy="' + Math.max(6, y - 5).toFixed(1) + '" r="3.2" fill="#ffc23a" stroke="#0b1114" stroke-width="1" />';
+        const sx = x + barW / 2;
+        const sy = Math.max(8, y - 7);
+        bars += '<path d="' + starPath(sx, sy, 5) + '" fill="#ffc46b" stroke="#0c0714" stroke-width="0.8" />';
       }
       if (i % showEvery === 0 || i === n - 1) {
         bars += '<text x="' + (x + barW / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" class="chart-label">' + esc(labels[i] || '') + '</text>';
@@ -78,7 +102,7 @@
     const labels = opts.labels || [];
     const values = opts.values || [];
     const target = opts.target;
-    const color = opts.color || '#ffb14a';
+    const color = opts.color || '#ff3dce';
     const W = opts.width || 320;
     const H = opts.height || 180;
     const padL = 6;
@@ -134,13 +158,25 @@
     let dots = '';
     pts.forEach(function (p, idx) {
       path += (idx === 0 ? 'M' : ' L') + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
+      const tip = esc((labels[p.i] || '') + ' · ' + nums[p.i]);
       if (marks[p.i]) {
-        dots += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="4.2" fill="#ffc23a" stroke="#0b1114" stroke-width="1.2" />';
+        dots += '<path d="' + starPath(p.x, p.y, 6) + '" fill="#ffc46b" stroke="#0c0714" stroke-width="1" data-action="chart-tip" data-tip="' + tip + '" />';
       } else {
-        dots += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.6" fill="' + color + '" />';
+        dots += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="3.2" fill="' + color + '" stroke="#0c0714" stroke-width="1" data-action="chart-tip" data-tip="' + tip + '" />';
       }
     });
-    const line = pts.length ? '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />' : '';
+    const gidFill = uid('lg');
+    let area = '';
+    if (pts.length) {
+      const last = pts[pts.length - 1];
+      const first = pts[0];
+      const baseY = padT + innerH;
+      area = '<defs><linearGradient id="' + gidFill + '" x1="0" y1="0" x2="0" y2="1">' +
+        '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.32"/>' +
+        '<stop offset="100%" stop-color="' + color + '" stop-opacity="0"/></linearGradient></defs>';
+      area += '<path d="' + path + ' L' + last.x.toFixed(1) + ' ' + baseY.toFixed(1) + ' L' + first.x.toFixed(1) + ' ' + baseY.toFixed(1) + ' Z" fill="url(#' + gidFill + ')" />';
+    }
+    const line = pts.length ? '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" />' : '';
 
     let xlabels = '';
     const showEvery = Math.max(1, Math.ceil(n / 7));
@@ -150,7 +186,7 @@
       xlabels += '<text x="' + x.toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" class="chart-label">' + esc(lab) + '</text>';
     });
 
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg" role="img" aria-label="' + esc(opts.aria || 'גרף') + '">' + grid + targetLine + line + dots + xlabels + '</svg>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg" role="img" aria-label="' + esc(opts.aria || 'גרף') + '">' + area + grid + targetLine + line + dots + xlabels + '</svg>';
   }
 
   function heatmap(opts) {
