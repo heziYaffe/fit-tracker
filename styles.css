@@ -1565,3 +1565,25 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
   position: relative;
   top: -2px;
 }
+
+.quick-field input {
+  font-size: 1.05rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+.quick-hint {
+  margin: 4px 0 10px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.quick-hint.err { color: var(--danger); font-weight: 650; }
+button.linkish.add-rest {
+  display: inline-flex;
+  margin: 10px 0 4px;
+  font-weight: 700;
+}
+.rest-field { margin-top: 10px; }
+.reps-editor input[type="text"] { flex: 1; min-width: 0; text-align: center; }

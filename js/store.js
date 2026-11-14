@@ -55,6 +55,9 @@
     const bodyweight = ex.bodyweight == null
       ? !!(C.isBodyweightName && C.isBodyweightName(name))
       : !!ex.bodyweight;
+    const rawWeight = (ex.weight != null && ex.weight !== '') ? ex.weight
+      : ((ex.targetWeight != null && ex.targetWeight !== '') ? ex.targetWeight : '');
+    const rest = (ex.restSec === '' || ex.restSec == null) ? '' : Number(ex.restSec);
     return {
       id: ex.id || uid(),
       name: name,
@@ -62,8 +65,8 @@
       repsMode: parseRepsMode(ex),
       repsMin: numReps(ex.repsMin, 8),
       repsMax: numReps(ex.repsMax, 12),
-      weight: ex.weight != null && ex.weight !== '' ? Number(ex.weight) : '',
-      restSec: ex.restSec != null && ex.restSec !== '' ? Number(ex.restSec) : (C.REST_DEFAULT_SEC || 90),
+      weight: rawWeight === '' ? '' : (Number.isFinite(Number(rawWeight)) ? Number(rawWeight) : ''),
+      restSec: rest === '' || !Number.isFinite(rest) ? '' : rest,
       notes: ex.notes || '',
       supersetId: ex.supersetId || '',
       bodyweight: bodyweight

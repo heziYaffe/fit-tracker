@@ -4,6 +4,7 @@
 
   const C = root.FitConfig;
   const E = root.FitEngine;
+  const P = root.FitPlanParse || {};
   const Store = root.FitStore;
   const Charts = root.FitCharts;
 
@@ -1509,18 +1510,26 @@
         '<div class="builder-flags">' +
         '<button type="button" class="chip' + (isBwEx(ex, ex.name) ? ' active' : '') + '" data-action="toggle-tex-bw" data-index="' + i + '">משקל גוף</button>' +
         '</div>' +
+        '<label class="field quick-field"><span>הזנה מהירה</span>' +
+        '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="quick" value="' + esc(P.formatQuick(ex)) + '" placeholder="3×8-12×50" /></label>' +
+        '<p class="quick-hint' + (ex._quickError ? ' err' : '') + '" data-quick-hint="' + i + '">' +
+        (ex._quickError ? 'לא הצלחתי לקרוא. נסו 3*8-12*50 או 3x8-12x50' : 'סטים × טווח חזרות × משקל, למשל 3*8-12*50 או 3x8-12') +
+        '</p>' +
         '<div class="builder-grid">' +
-        '<label class="field"><span>סטים</span><input type="number" min="1" data-tex="' + i + '" data-texk="sets" value="' + esc(ex.sets || 3) + '" /></label>' +
-        '<label class="field"><span>מנוחה (שנ׳)</span><input type="number" min="15" step="15" data-tex="' + i + '" data-texk="restSec" value="' + esc(ex.restSec || 90) + '" /></label>' +
+        '<label class="field"><span>סטים</span><input type="number" min="1" data-tex="' + i + '" data-texk="sets" value="' + esc(ex.sets || '') + '" /></label>' +
+        '<label class="field"><span>' + (isBwEx(ex, ex.name) ? 'תוספת (ק״ג)' : 'משקל') + '</span>' +
+        '<input type="number" min="0" step="0.5" data-tex="' + i + '" data-texk="weight" value="' + esc(ex.weight === 0 ? 0 : (ex.weight || '')) + '" placeholder="' + (isBwEx(ex, ex.name) ? '+ ק״ג' : 'ק״ג, אופציונלי') + '" /></label>' +
         '<label class="field span-2"><span>טווח חזרות</span><div class="reps-editor">' +
-        (isMaxReps(ex)
-          ? '<div class="max-display">MAX · עד כשל</div>'
-          : '<div class="live-add"><input type="number" min="1" data-tex="' + i + '" data-texk="repsMin" value="' + esc(ex.repsMin || 8) + '" /><input type="number" min="1" data-tex="' + i + '" data-texk="repsMax" value="' + esc(ex.repsMax || 12) + '" /></div>') +
+        '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="repsRange" value="' + esc(P.formatRepsRange(ex)) + '" placeholder="8-12" />' +
         '<button type="button" class="chip max-chip' + (isMaxReps(ex) ? ' active' : '') + '" data-action="toggle-tex-max" data-index="' + i + '">MAX</button>' +
         '</div></label>' +
-        '<label class="field span-2"><span>' + (isBwEx(ex, ex.name) ? 'תוספת משקל (אופציונלי)' : 'משקל יעד (אופציונלי)') + '</span>' +
-        '<input type="number" min="0" step="0.5" data-tex="' + i + '" data-texk="weight" value="' + esc(ex.weight === 0 ? 0 : (ex.weight || '')) + '" placeholder="' + (isBwEx(ex, ex.name) ? '+ ק״ג, למשל חגורה' : 'ק״ג') + '" /></label>' +
         '</div>' +
+        (ex.restSec !== '' && ex.restSec != null
+          ? '<label class="field rest-field"><span>מנוחה (שנ׳)</span><div class="reps-editor">' +
+            '<input type="number" min="15" step="15" data-tex="' + i + '" data-texk="restSec" value="' + esc(ex.restSec) + '" />' +
+            '<button type="button" class="linkish" data-action="hide-tex-rest" data-index="' + i + '">הסרה</button>' +
+            '</div></label>'
+          : '<button type="button" class="linkish add-rest" data-action="show-tex-rest" data-index="' + i + '">+ מנוחה</button>') +
         '<label class="field"><span>הערות</span><input type="text" data-tex="' + i + '" data-texk="notes" value="' + esc(ex.notes || '') + '" placeholder="אופציונלי" /></label>' +
         (ss ? '' : '<button type="button" class="linkish" data-action="superset-tex" data-index="' + i + '">סופרסט עם הבא</button>') +
         '</div>';
@@ -2382,16 +2391,100 @@
   function syncTex(el) {
     if (!ui.editingTemplate) return;
     const i = Number(el.dataset.tex);
-    if (!ui.editingTemplate.exercises[i]) return;
+    const ex = ui.editingTemplate.exercises[i];
+    if (!ex) return;
     const k = el.dataset.texk;
-    const num = ['sets', 'repsMin', 'repsMax', 'weight', 'restSec'].indexOf(k) >= 0;
-    ui.editingTemplate.exercises[i][k] = num ? (el.value === '' ? '' : Number(el.value)) : el.value;
+    if (k === 'quick' || k === 'repsRange') return;
+    const num = ['sets', 'weight', 'restSec'].indexOf(k) >= 0;
+    ex[k] = num ? (el.value === '' ? '' : Number(el.value)) : el.value;
   }
+
+  function setQuickHint(i, error) {
+    const hint = document.querySelector('[data-quick-hint="' + i + '"]');
+    if (!hint) return;
+    hint.classList.toggle('err', !!error);
+    hint.textContent = error
+      ? 'לא הצלחתי לקרוא. נסו 3*8-12*50 או 3x8-12x50'
+      : 'סטים × טווח חזרות × משקל, למשל 3*8-12*50 או 3x8-12';
+  }
+
+  function refreshTexFields(i, except) {
+    const ex = ui.editingTemplate && ui.editingTemplate.exercises[i];
+    const card = document.querySelector('.builder-ex[data-ex-index="' + i + '"]');
+    if (!ex || !card) return;
+    const sets = card.querySelector('[data-texk="sets"]');
+    const reps = card.querySelector('[data-texk="repsRange"]');
+    const weight = card.querySelector('[data-texk="weight"]');
+    const quick = card.querySelector('[data-texk="quick"]');
+    const maxChip = card.querySelector('[data-action="toggle-tex-max"]');
+    if (sets && except !== 'sets') sets.value = ex.sets == null || ex.sets === '' ? '' : ex.sets;
+    if (reps && except !== 'repsRange') reps.value = P.formatRepsRange(ex);
+    if (weight && except !== 'weight') weight.value = ex.weight === 0 ? 0 : (ex.weight || '');
+    if (quick && except !== 'quick') quick.value = P.formatQuick(ex);
+    if (maxChip) maxChip.classList.toggle('active', isMaxReps(ex));
+    if (except !== 'quick') setQuickHint(i, false);
+    ex._quickError = false;
+  }
+
+  function onTexInput(el) {
+    if (!ui.editingTemplate) return;
+    const i = Number(el.dataset.tex);
+    const ex = ui.editingTemplate.exercises[i];
+    if (!ex) return;
+    const k = el.dataset.texk;
+    if (k === 'quick') {
+      const parsed = P.parseQuick(el.value);
+      if (parsed.empty) {
+        ex._quickError = false;
+        setQuickHint(i, false);
+        return;
+      }
+      if (!parsed.ok) {
+        ex._quickError = true;
+        setQuickHint(i, true);
+        return;
+      }
+      ex._quickError = false;
+      P.applyParsed(ex, parsed);
+      refreshTexFields(i, 'quick');
+      return;
+    }
+    if (k === 'repsRange') {
+      const parsed = P.parseRepsRange(el.value);
+      if (parsed.empty) return;
+      if (!parsed.ok) return;
+      P.applyParsed(ex, parsed);
+      refreshTexFields(i, 'repsRange');
+      return;
+    }
+    syncTex(el);
+    if (k === 'sets' || k === 'weight') refreshTexFields(i, k);
+  }
+
   function collectTemplateDraft() {
     if (!ui.editingTemplate) return;
     const name = document.getElementById('tpl-name');
     if (name) ui.editingTemplate.name = name.value;
-    document.querySelectorAll('[data-tex]').forEach(syncTex);
+    document.querySelectorAll('[data-tex]').forEach(function (el) {
+      const i = Number(el.dataset.tex);
+      const ex = ui.editingTemplate.exercises[i];
+      if (!ex) return;
+      const k = el.dataset.texk;
+      if (k === 'quick') {
+        const parsed = P.parseQuick(el.value);
+        if (parsed.ok) {
+          P.applyParsed(ex, parsed);
+          ex._quickError = false;
+        }
+        return;
+      }
+      if (k === 'repsRange') {
+        const parsed = P.parseRepsRange(el.value);
+        if (parsed.ok) P.applyParsed(ex, parsed);
+        return;
+      }
+      syncTex(el);
+    });
   }
   function syncMeal(el) {
     if (!ui.editingMenu) return;
@@ -2614,7 +2707,7 @@
         repsMode: 'range',
         repsMin: sug.reps || 8, repsMax: sug.reps || 12,
         weight: bw ? (sug.weight || '') : (sug.weight || ''),
-        restSec: 90, notes: '', supersetId: '',
+        restSec: '', notes: '', supersetId: '',
         bodyweight: bw
       });
       render();
@@ -2634,6 +2727,24 @@
       if (!ex) return;
       ex.bodyweight = !isBwEx(ex, ex.name);
       if (ex.bodyweight && (ex.weight === 20 || ex.weight === 20.0)) ex.weight = '';
+      render();
+      return;
+    }
+    if (action === 'show-tex-rest') {
+      collectTemplateDraft();
+      const ex = ui.editingTemplate.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.restSec = C.REST_DEFAULT_SEC || 90;
+      render();
+      const input = document.querySelector('.builder-ex[data-ex-index="' + btn.dataset.index + '"] [data-texk="restSec"]');
+      if (input) input.focus();
+      return;
+    }
+    if (action === 'hide-tex-rest') {
+      collectTemplateDraft();
+      const ex = ui.editingTemplate.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.restSec = '';
       render();
       return;
     }
@@ -3337,7 +3448,7 @@
       if (el && (el.dataset.draft || el.dataset.ex != null)) syncDraftFromInput(el);
       if (el && el.dataset.exk === 'name') updateExAutocomplete(el);
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);
-      if (el && el.dataset.tex != null) syncTex(el);
+      if (el && el.dataset.tex != null) onTexInput(el);
       if (el && el.dataset.meal != null) syncMeal(el);
     });
     window.addEventListener('hashchange', onHash);
