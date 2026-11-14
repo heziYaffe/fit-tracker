@@ -196,7 +196,8 @@
       const missProtein = dow === 6 || (dow === 5 && rng() < 0.45) || rng() < 0.08;
       const protein = missProtein ? 110 + Math.round(rng() * 30) : 150 + Math.round(rng() * 35);
       const calories = missProtein ? 1900 + Math.round(rng() * 300) : 2200 + Math.round(rng() * 350);
-      const water = (dow === 6 && rng() < 0.5) ? 5 + Math.round(rng() * 2) : 7 + Math.round(rng() * 3);
+      const cups = (dow === 6 && rng() < 0.5) ? 5 + Math.round(rng() * 2) : 7 + Math.round(rng() * 3);
+      const water = cups * ((C && C.WATER_CUP_ML) || 250);
       nutrition.push({
         id: 'demo_n_' + iso,
         date: iso,
@@ -398,7 +399,10 @@
         weeklyWorkoutTarget: 4,
         dailyProteinTarget: 150,
         dailyCalorieTarget: 2400,
-        dailyWaterTarget: 8,
+        dailyWaterTarget: (C.WATER_DEFAULT_GOAL_ML || 2000),
+        waterInMl: true,
+        waterVessel: 'cup',
+        waterVesselMl: (C.WATER_CUP_ML || 250),
         displayName: 'Hazi'
       }),
       workouts: workouts,

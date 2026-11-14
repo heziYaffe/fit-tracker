@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '13';
+  const APP_VERSION = '14';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -226,11 +226,21 @@
     lastFired: { workoutDate: '', meals: {}, lowHpDate: '' }
   };
 
+  const WATER_CUP_ML = 250;
+  const WATER_DEFAULT_GOAL_ML = 2000;
+  const WATER_VESSEL_PRESETS = {
+    cup: [200, 250, 300],
+    bottle: [500, 750, 1000, 1500]
+  };
+
   const DEFAULT_SETTINGS = {
     weeklyWorkoutTarget: 4,
     dailyProteinTarget: 150,
     dailyCalorieTarget: '',
-    dailyWaterTarget: 8,
+    dailyWaterTarget: WATER_DEFAULT_GOAL_ML,
+    waterInMl: true,
+    waterVessel: 'cup',
+    waterVesselMl: WATER_CUP_ML,
     displayName: 'Hazi',
     notifications: Object.assign({}, DEFAULT_NOTIFICATIONS)
   };
@@ -251,6 +261,9 @@
     ACHIEVEMENTS,
     DEFAULT_SETTINGS,
     DEFAULT_NOTIFICATIONS,
+    WATER_CUP_ML,
+    WATER_DEFAULT_GOAL_ML,
+    WATER_VESSEL_PRESETS,
     REST_DEFAULT_SEC,
     SMALL_LIFTS,
     MUSCLES,

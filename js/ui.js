@@ -291,6 +291,33 @@
     return map[kind] || '';
   }
 
+  function waterIcon(kind, cls) {
+    const bottle = kind === 'bottle';
+    if (bottle) {
+      return '<svg class="water-ico ' + (cls || '') + '" viewBox="0 0 32 44" aria-hidden="true">' +
+        '<rect class="water-cap" x="12" y="1.2" width="8" height="4.2" rx="1.2" />' +
+        '<path class="water-body" d="M13.2 5.4h5.6v3.6c2.5 1.15 4 3.4 4 7.1v19.6A3.7 3.7 0 0 1 19.2 39.4h-6.4A3.7 3.7 0 0 1 9.2 35.7V16.1c0-3.7 1.5-5.95 4-7.1V5.4z"/>' +
+        '<path class="water-fill" d="M12.6 18.5h6.8v16.4A2 2 0 0 1 17.5 37h-3a2 2 0 0 1-1.9-2.1V18.5z"/>' +
+        '</svg>';
+    }
+    return '<svg class="water-ico ' + (cls || '') + '" viewBox="0 0 32 40" aria-hidden="true">' +
+      '<path class="water-body" d="M7.2 5.2h17.6l-1.55 24.5A4.3 4.3 0 0 1 19 34.2h-6a4.3 4.3 0 0 1-4.25-4.5L7.2 5.2z"/>' +
+      '<path class="water-rim" d="M6.2 5.2h19.6"/>' +
+      '<path class="water-fill" d="M9.6 14.2h12.8l-1.05 14.4A2.4 2.4 0 0 1 19 31.1h-6a2.4 2.4 0 0 1-2.35-2.4L9.6 14.2z"/>' +
+      '</svg>';
+  }
+
+  function vesselOf(s) {
+    return E.waterVessel ? E.waterVessel(s || state()) : { kind: 'cup', ml: 250, label: 'כוס', labelPlural: 'כוסות', labelOne: 'כוס' };
+  }
+
+  function waterLabel(current, target, s) {
+    const v = vesselOf(s);
+    const prog = E.formatWaterProgress ? E.formatWaterProgress(current, target) : ((current || 0) + ' / ' + (target || 0) + ' מ״ל');
+    const units = E.formatWaterUnits ? E.formatWaterUnits(current, v) : '';
+    return { progress: prog, units: units, vessel: v };
+  }
+
   function fmtMacros(t, compact) {
     if (!t) return '';
     const bits = [Math.round(t.protein) + ' ג׳ חלבון', Math.round(t.calories) + ' קק״ל'];
@@ -539,7 +566,7 @@
       '<div class="rings" aria-label="טבעות היום">' +
       activityRing(workouts.length ? 1 : 0, 'var(--accent)', 'אימון', workouts.length ? '✓' : '—') +
       activityRing(pTarget ? protein / pTarget : 0, 'var(--protein)', 'חלבון', ltr(protein + '/' + pTarget)) +
-      activityRing(wTarget ? water / wTarget : 0, 'var(--water)', 'מים', ltr(water + '/' + wTarget)) +
+      activityRing(wTarget ? water / wTarget : 0, 'var(--water)', 'מים', ltr((E.formatLiters ? E.formatLiters(water) : water) + '/' + (E.formatLiters ? E.formatLiters(wTarget) : wTarget))) +
       '</div>' +
 
       '<section class="card"><h2>היום</h2>' +
@@ -556,9 +583,10 @@
       '<button type="button" class="btn tiny" data-action="bump-protein" data-date="' + today + '" data-delta="25">+25</button>' +
       '<button type="button" class="btn tiny" data-action="bump-protein" data-date="' + today + '" data-delta="50">+50</button>' +
       '</div></div>' +
-      '<div class="today-row"><div class="today-ico">💧</div><div>' +
+      '<div class="today-row"><div class="today-ico water-ico-wrap">' + waterIcon(vesselOf(s).kind) + '</div><div>' +
       '<div class="label">מים</div>' +
-      '<div class="value">' + ltr(water + ' / ' + wTarget) + ' <span class="unit">כוסות</span></div></div>' +
+      '<div class="value">' + ltr(waterLabel(water, wTarget, s).progress) +
+      ' <span class="unit">' + esc(waterLabel(water, wTarget, s).units) + '</span></div></div>' +
       '<div class="today-side"><button type="button" class="btn tiny" data-action="bump-water" data-date="' + today + '" data-delta="1">+1</button></div>' +
       '</div>' +
       (cTarget ? '<div class="today-row"><div class="today-ico">🔥</div><div><div class="label">קלוריות</div><div class="value">' + ltr(calories + ' / ' + cTarget) + ' <span class="unit">קק״ל</span></div></div></div>' : '') +
@@ -672,11 +700,18 @@
     const isToday = date === E.todayISO();
     const title = isToday ? 'היום' : E.formatDayLong(date);
 
+    const vessel = vesselOf(s);
+    const currentMl = Number(nut.water) || 0;
+    const filledUnits = Math.floor((currentMl + 0.001) / vessel.ml);
+    const targetUnits = Math.max(1, Math.ceil((wTarget || vessel.ml) / vessel.ml));
+    const maxUnits = Math.min(24, Math.max(targetUnits, filledUnits, 4));
     const cups = [];
-    const maxCups = Math.max(wTarget, Number(nut.water) || 0, 8);
-    for (let i = 1; i <= maxCups; i++) {
-      cups.push('<button type="button" class="cup' + (i <= (Number(nut.water) || 0) ? ' on' : '') + '" data-action="set-water" data-date="' + date + '" data-value="' + i + '" aria-label="כוס ' + i + '"></button>');
+    for (let i = 1; i <= maxUnits; i++) {
+      const on = i <= filledUnits;
+      const label = vessel.label + ' ' + i;
+      cups.push('<button type="button" class="vessel-btn ' + vessel.kind + (on ? ' on' : '') + '" data-action="set-water" data-date="' + date + '" data-value="' + i + '" aria-label="' + label + '">' + waterIcon(vessel.kind) + '</button>');
     }
+    const wLab = waterLabel(currentMl, wTarget, s);
 
     const recent = s.nutrition.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 7);
     let recentHtml = '';
@@ -688,7 +723,7 @@
             '<div class="meta">' + esc(E.formatDay(n.date)) + (ok ? ' · יעד חלבון ✓' : '') + '</div>' +
             '<div class="title">' + (Number(n.protein) || 0) + ' גרם חלבון' +
             (n.calories ? ' · ' + n.calories + ' קק״ל' : '') +
-            (n.water ? ' · ' + n.water + ' כוסות' : '') + '</div></button>';
+            (n.water ? ' · ' + (E.formatWaterUnits ? E.formatWaterUnits(n.water, vesselOf(s)) : (n.water + ' מ״ל')) : '') + '</div></button>';
         }).join('') + '</div>';
     } else {
       recentHtml = '<div class="empty"><p>אין נתוני תזונה עדיין. הזינו חלבון, קלוריות או מים ליום הזה.</p></div>';
@@ -731,10 +766,16 @@
       '</label></section>' +
 
       '<section class="card">' +
-      '<div class="metric"><div><span class="label kicker">מים</span><div><span class="big">' + ltr(String(Number(nut.water) || 0)) + '</span><span class="unit"> / ' + ltr(String(wTarget)) + ' כוסות</span></div></div></div>' +
+      '<div class="metric"><div class="today-ico water-ico-wrap">' + waterIcon(vessel.kind) + '</div><div><span class="label kicker">מים</span><div><span class="big">' + ltr(wLab.progress) + '</span></div>' +
+      '<div class="unit">' + esc(wLab.units) + ' · ' + vessel.ml + ' מ״ל ל' + vessel.label + '</div></div></div>' +
       '<div class="cups">' + cups.join('') + '</div>' +
       '<div class="adders"><button type="button" class="btn tiny" data-action="bump-water" data-date="' + date + '" data-delta="-1">−1</button>' +
-      '<button type="button" class="btn tiny" data-action="bump-water" data-date="' + date + '" data-delta="1">+1</button></div>' +
+      '<button type="button" class="btn tiny" data-action="bump-water" data-date="' + date + '" data-delta="1">+1 ' + esc(vessel.label) + '</button></div>' +
+      '<div class="partial-water"><label class="field"><span>הוספה חלקית (מ״ל)</span>' +
+      '<div class="reps-editor">' +
+      '<input type="number" min="1" step="50" inputmode="numeric" id="water-partial-ml" placeholder="למשל 100" />' +
+      '<button type="button" class="btn tiny" data-action="add-water-ml" data-date="' + date + '">הוסף</button>' +
+      '</div></label></div>' +
       '</section>' +
 
       '<section class="card"><label class="field"><span>הערות</span>' +
@@ -1099,6 +1140,7 @@
       '</div>' +
       '<section class="card"><h2>תזונה ושינה</h2>' +
       '<p>חלבון: ' + nutr.hits + ' מתוך ' + nutr.days + ' ימים (' + Math.round((nutr.rate || 0) * 100) + '%)</p>' +
+      '<p class="water-summary">' + waterIcon(vesselOf(state()).kind, 'inline') + ' מים: ' + (nutr.waterHits || 0) + ' מתוך ' + nutr.days + ' ימים ביעד</p>' +
       '<p>שינה ממוצעת: ' + (stats.sleepAvg != null ? stats.sleepAvg.toFixed(1) + ' שעות' : 'אין נתונים') + '</p>' +
       '<p>התאוששות ממוצעת: ' + (stats.recoveryAvg != null ? Math.round(stats.recoveryAvg) + '%' : 'אין נתונים') + '</p>' +
       '<p>רצף בסוף השבוע: ' + stats.streak + ' ימים</p>' +
@@ -1389,6 +1431,36 @@
       '<div class="list">' + history + '</div>';
   }
 
+
+  function renderWaterSettings(s) {
+    const set = s.settings || {};
+    const v = vesselOf(s);
+    const goal = E.waterTarget(s);
+    const presets = ((C.WATER_VESSEL_PRESETS || {})[v.kind] || []).slice();
+    const isCustom = presets.indexOf(v.ml) === -1;
+    const presetChips = presets.map(function (ml) {
+      return '<button type="button" class="chip' + (v.ml === ml ? ' active' : '') + '" data-action="set-vessel-ml" data-ml="' + ml + '">' + ml + ' מ״ל</button>';
+    }).join('') +
+      '<button type="button" class="chip' + (isCustom ? ' active' : '') + '" data-action="vessel-custom">מותאם</button>';
+    return '<section class="card"><h2>מים</h2>' +
+      '<div class="water-preview">' +
+      '<div class="today-ico water-ico-wrap large">' + waterIcon(v.kind) + '</div>' +
+      '<div><div class="label">כלי השתייה</div><div class="value">' + esc(v.label) + ' של ' + v.ml + ' מ״ל</div></div></div>' +
+      '<div class="chips" style="margin:10px 0">' +
+      '<button type="button" class="chip' + (v.kind === 'cup' ? ' active' : '') + '" data-action="set-water-vessel" data-kind="cup">כוס</button>' +
+      '<button type="button" class="chip' + (v.kind === 'bottle' ? ' active' : '') + '" data-action="set-water-vessel" data-kind="bottle">בקבוק</button>' +
+      '</div>' +
+      '<div class="field"><span>נפח הכלי</span><div class="chips">' + presetChips + '</div></div>' +
+      '<label class="field"><span>נפח מותאם (מ״ל)</span>' +
+      '<input type="number" min="50" step="50" inputmode="numeric" data-action="setting-vessel-ml" value="' + v.ml + '" /></label>' +
+      '<div class="setting"><div class="grow"><div>יעד מים יומי</div><div class="desc">גם ל־XP, מוצג בליטרים</div></div>' +
+      '<div class="stepper">' +
+      '<button type="button" data-action="step-water-goal" data-delta="-250" aria-label="הורדה">−</button>' +
+      '<div class="num">' + ltr(E.formatLiters(goal) + ' ל׳') + '</div>' +
+      '<button type="button" data-action="step-water-goal" data-delta="250" aria-label="העלאה">+</button>' +
+      '</div></div></section>';
+  }
+
   function renderSettings() {
     const s = state();
     const set = s.settings;
@@ -1477,12 +1549,9 @@
       '<input type="number" min="1" step="5" inputmode="numeric" data-action="setting" data-key="dailyProteinTarget" value="' + (Number(set.dailyProteinTarget) || 150) + '" style="width:90px" /></div>' +
       '<div class="setting"><div class="grow"><div>יעד קלוריות יומי</div><div class="desc">אופציונלי — השאירו ריק כדי להסתיר</div></div>' +
       '<input type="number" min="0" step="50" inputmode="numeric" data-action="setting" data-key="dailyCalorieTarget" value="' + esc(set.dailyCalorieTarget == null ? '' : set.dailyCalorieTarget) + '" placeholder="אין" style="width:90px" /></div>' +
-      '<div class="setting"><div class="grow"><div>יעד מים יומי</div><div class="desc">כוסות ליום, גם ל־XP</div></div>' +
-      '<div class="stepper">' +
-      '<button type="button" data-action="step-setting" data-key="dailyWaterTarget" data-delta="-1" aria-label="הורדה">−</button>' +
-      '<div class="num">' + (Number(set.dailyWaterTarget) || 8) + '</div>' +
-      '<button type="button" data-action="step-setting" data-key="dailyWaterTarget" data-delta="1" aria-label="העלאה">+</button>' +
-      '</div></div>' +
+      '</section>' +
+      renderWaterSettings(s) +
+      '<section class="card">' +
       '<div class="setting"><div class="grow"><div>משקל גוף</div><div class="desc">' +
       (lastW ? 'אחרון: ' + lastW.weight + ' ק״ג · ' + E.formatDay(lastW.date) : 'טרם תועד') +
       '</div></div>' +
@@ -1726,7 +1795,8 @@
         (st === 'pending'
           ? '<div class="live-actions"><button type="button" class="btn primary" data-action="eat-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">אכלתי</button>' +
             '<button type="button" class="btn" data-action="skip-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">דילוג</button></div>'
-          : '<p class="kicker">' + (st === 'eaten' ? 'נאכלה ✓' : 'דולגה') + '</p>') +
+          : '<div class="live-actions"><p class="kicker">' + (st === 'eaten' ? 'נאכלה ✓' : 'דולגה') + '</p>' +
+            '<button type="button" class="linkish" data-action="undo-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">ביטול</button></div>') +
         '</div>';
     }).join('');
     return header +
@@ -1973,7 +2043,11 @@
 
   function renderFoodsLibrary(date) {
     const foods = Store.listFoods();
-    const chips = foods.map(function (f) {
+    const q = String(ui.foodQuery || '').trim();
+    const filtered = q
+      ? foods.filter(function (f) { return String(f.name || '').indexOf(q) >= 0; })
+      : foods;
+    const rows = filtered.map(function (f) {
       const bits = [f.protein + 'ג׳ חלבון', f.calories + ' קק״ל'];
       if (f.carbs !== '' && f.carbs != null) bits.push(f.carbs + ' פחמ׳');
       if (f.fat !== '' && f.fat != null) bits.push(f.fat + ' שומן');
@@ -1989,7 +2063,8 @@
     return '<section class="card"><div class="section-title" style="margin-top:0"><h2>ספריית מאכלים</h2>' +
       '<button type="button" class="linkish" data-action="edit-food" data-id="">+ מאכל</button></div>' +
       '<p class="hp-legend">לחיצה מוסיפה את הערכים ליום הנבחר. הפריטים השכיחים מופיעים ראשונים.</p>' +
-      (chips || '<p class="kicker">הספרייה ריקה.</p>') +
+      (foods.length ? '<label class="field"><span>חיפוש</span><input type="search" id="food-query" value="' + esc(ui.foodQuery || '') + '" placeholder="שם המאכל" autocomplete="off" /></label>' : '') +
+      (rows || (foods.length ? '<p class="kicker">אין מאכלים שמתאימים לחיפוש.</p>' : '<p class="kicker">הספרייה ריקה.</p>')) +
       '</section>';
   }
 
@@ -3069,6 +3144,11 @@
       toast('הארוחה דולגה');
       return;
     }
+    if (action === 'undo-meal') {
+      Store.setMealStatus(btn.dataset.date, btn.dataset.mid, 'pending');
+      toast('הסימון בוטל');
+      return;
+    }
     if (action === 'swap-food') {
       ui.swapMeal = { date: btn.dataset.date, mealId: btn.dataset.mid, foodId: btn.dataset.fid };
       openModal('swap-food');
@@ -3330,12 +3410,54 @@
     if (action === 'save-metrics') { saveMetrics(); return; }
     if (action === 'bump-protein') { bump(btn.dataset.date, 'protein', Number(btn.dataset.delta)); return; }
     if (action === 'bump-calories') { bump(btn.dataset.date, 'calories', Number(btn.dataset.delta)); return; }
-    if (action === 'bump-water') { bump(btn.dataset.date, 'water', Number(btn.dataset.delta)); return; }
+    if (action === 'bump-water') {
+      const v = vesselOf(s);
+      const sign = Number(btn.dataset.delta) >= 0 ? 1 : -1;
+      bump(btn.dataset.date, 'water', sign * v.ml);
+      return;
+    }
+    if (action === 'add-water-ml') {
+      const input = document.getElementById('water-partial-ml');
+      const ml = Number(input && input.value);
+      if (!(ml > 0)) { toast('הזינו כמות במ״ל'); return; }
+      bump(btn.dataset.date, 'water', ml);
+      if (input) input.value = '';
+      toast('נוספו ' + ml + ' מ״ל');
+      return;
+    }
     if (action === 'set-water') {
       const cur = Store.getNutrition(btn.dataset.date);
-      const val = Number(btn.dataset.value);
-      const next = cur && Number(cur.water) === val ? val - 1 : val;
+      const v = vesselOf(s);
+      const units = Number(btn.dataset.value);
+      const asMl = Math.round(units * v.ml);
+      const current = cur ? (Number(cur.water) || 0) : 0;
+      const filled = Math.floor((current + 0.001) / v.ml);
+      const next = filled === units ? Math.round((units - 1) * v.ml) : asMl;
       Store.upsertNutrition(btn.dataset.date, { water: Math.max(0, next) });
+      return;
+    }
+    if (action === 'set-water-vessel') {
+      const kind = btn.dataset.kind === 'bottle' ? 'bottle' : 'cup';
+      const presets = (C.WATER_VESSEL_PRESETS || {})[kind] || [];
+      const curMl = Number(s.settings.waterVesselMl) || 0;
+      const ml = presets.indexOf(curMl) >= 0 ? curMl : (presets[kind === 'bottle' ? 0 : 1] || (kind === 'bottle' ? 500 : 250));
+      Store.updateSettings({ waterVessel: kind, waterVesselMl: ml, waterInMl: true });
+      return;
+    }
+    if (action === 'set-vessel-ml') {
+      const ml = Math.max(50, Number(btn.dataset.ml) || 0);
+      Store.updateSettings({ waterVesselMl: ml, waterInMl: true });
+      return;
+    }
+    if (action === 'vessel-custom') {
+      const input = document.querySelector('[data-action="setting-vessel-ml"]');
+      if (input) { input.focus(); input.select(); }
+      return;
+    }
+    if (action === 'step-water-goal') {
+      const cur = E.waterTarget(s);
+      const next = Math.max(250, Math.min(8000, cur + Number(btn.dataset.delta)));
+      Store.updateSettings({ dailyWaterTarget: next, waterInMl: true });
       return;
     }
     if (action === 'shift-day') {
@@ -3456,6 +3578,12 @@
       if (key === 'lowHpThreshold') patch[key] = Math.max(10, Math.min(90, Number(val) || 50));
       else patch[key] = val;
       FitNotify.patchNotifications(patch);
+      return;
+    }
+    if (el.dataset.action === 'setting-vessel-ml') {
+      const ml = Math.max(50, Math.round(Number(el.value) || 0));
+      if (!(ml >= 50)) return;
+      Store.updateSettings({ waterVesselMl: ml, waterInMl: true });
       return;
     }
     if (el.dataset.action === 'setting') {
@@ -3624,6 +3752,16 @@
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);
       if (el && el.dataset.tex != null) onTexInput(el);
       if (el && el.dataset.meal != null) syncMeal(el);
+      if (el && el.id === 'food-query') {
+        ui.foodQuery = el.value;
+        const pos = el.selectionStart;
+        render();
+        const q = document.getElementById('food-query');
+        if (q) {
+          q.focus();
+          try { q.setSelectionRange(pos, pos); } catch (err) { /* ignore */ }
+        }
+      }
     });
     window.addEventListener('hashchange', onHash);
     window.addEventListener('popstate', function () {

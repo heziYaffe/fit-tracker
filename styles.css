@@ -1603,3 +1603,39 @@ button.linkish.add-rest {
 .hold-banner.overtime .hold-count,
 .hold-banner.overtime .rest-label { color: var(--accent-2); }
 .live-hold-start { margin-top: 8px; font-size: 1.2rem; padding: 18px; }
+
+.today-ico.water-ico-wrap { color: var(--water); }
+.today-ico.water-ico-wrap.large { width: 64px; height: 64px; }
+.water-ico { width: 26px; height: 28px; display: block; }
+.today-ico.large .water-ico { width: 36px; height: 40px; }
+.water-ico .water-body, .water-ico .water-cap, .water-ico .water-rim {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.water-ico .water-fill { fill: currentColor; opacity: 0.22; stroke: none; }
+.water-ico-wrap .water-fill { opacity: 0.35; }
+.vessel-btn {
+  width: 46px;
+  height: 58px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--water) 45%, var(--text-dim));
+  min-height: 44px;
+  border-radius: 12px;
+}
+.vessel-btn .water-ico { width: 100%; height: 100%; }
+.vessel-btn .water-fill { opacity: 0; }
+.vessel-btn.on { color: var(--water); }
+.vessel-btn.on .water-fill { opacity: 0.42; }
+.water-preview { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.water-preview .value { font-weight: 650; }
+.partial-water { margin-top: 10px; }
+.partial-water .reps-editor { display: flex; gap: 8px; align-items: center; }
+.partial-water input { flex: 1; }
+.water-summary { display: flex; align-items: center; gap: 8px; }
+.water-ico.inline { width: 18px; height: 22px; flex: 0 0 auto; color: var(--water); }
+.water-ico.inline .water-fill { opacity: 0.4; }

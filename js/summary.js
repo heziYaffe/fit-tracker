@@ -105,10 +105,12 @@
   function nutritionAdherence(state, start, end) {
     const days = datesInRange(start, end);
     let hits = 0;
+    let waterHits = 0;
     days.forEach(function (iso) {
       if (E().hitsProtein(state, iso)) hits += 1;
+      if (E().hitsWater && E().hitsWater(state, iso)) waterHits += 1;
     });
-    return { hits: hits, days: days.length, rate: days.length ? hits / days.length : 0 };
+    return { hits: hits, days: days.length, rate: days.length ? hits / days.length : 0, waterHits: waterHits };
   }
 
   function avgMetric(state, start, end, field) {
@@ -272,6 +274,9 @@
       lines.push('נפח: ' + sign + Math.round(stats.volumeChange) + '% מול השבוע הקודם');
     }
     lines.push('חלבון: ' + stats.nutrition.hits + '/' + stats.nutrition.days + ' ימים');
+    if (stats.nutrition && stats.nutrition.waterHits != null) {
+      lines.push('מים: ' + stats.nutrition.waterHits + '/' + stats.nutrition.days + ' ימים ביעד');
+    }
     lines.push('XP: ' + stats.xp + ' · רצף: ' + stats.streak);
     (stats.tips || []).forEach(function (t) { lines.push('• ' + t.text); });
     lines.push('https://heziyaffe.github.io/fit-tracker/');

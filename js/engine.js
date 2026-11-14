@@ -71,8 +71,53 @@
     return Number(state.settings.dailyProteinTarget) || 150;
   }
 
+  function waterVessel(state) {
+    const set = (state && state.settings) || {};
+    const kind = set.waterVessel === 'bottle' ? 'bottle' : 'cup';
+    const fallback = kind === 'bottle' ? 500 : (C.WATER_CUP_ML || 250);
+    const ml = Math.max(50, Math.round(Number(set.waterVesselMl) || fallback));
+    return {
+      kind: kind,
+      ml: ml,
+      label: kind === 'bottle' ? 'בקבוק' : 'כוס',
+      labelPlural: kind === 'bottle' ? 'בקבוקים' : 'כוסות',
+      labelOne: kind === 'bottle' ? 'בקבוק' : 'כוס'
+    };
+  }
+
   function waterTarget(state) {
-    return Number(state.settings.dailyWaterTarget) || 8;
+    const t = Number(state && state.settings && state.settings.dailyWaterTarget);
+    if (t > 0 && t <= 30 && !(state.settings && state.settings.waterInMl)) {
+      return Math.round(t * (C.WATER_CUP_ML || 250));
+    }
+    return t > 0 ? t : (C.WATER_DEFAULT_GOAL_ML || 2000);
+  }
+
+  function formatLiters(ml) {
+    const L = (Number(ml) || 0) / 1000;
+    const rounded = Math.round(L * 100) / 100;
+    if (Math.abs(rounded - Math.round(rounded)) < 0.001) return String(Math.round(rounded));
+    const one = Math.round(L * 10) / 10;
+    return String(one);
+  }
+
+  function formatWaterProgress(current, target) {
+    return formatLiters(current) + ' / ' + formatLiters(target) + ' ל׳';
+  }
+
+  function waterUnitCount(ml, vesselMl) {
+    const v = Number(vesselMl) || (C.WATER_CUP_ML || 250);
+    return (Number(ml) || 0) / v;
+  }
+
+  function formatWaterUnits(ml, vessel) {
+    vessel = vessel || { ml: C.WATER_CUP_ML || 250, label: 'כוס', labelPlural: 'כוסות', labelOne: 'כוס' };
+    const n = waterUnitCount(ml, vessel.ml);
+    const shown = Math.round(n * 10) / 10;
+    const isOne = Math.abs(shown - 1) < 0.05;
+    const num = (Math.abs(shown - Math.round(shown)) < 0.05) ? String(Math.round(shown)) : String(shown);
+    const word = isOne ? (vessel.labelOne || vessel.label) : vessel.labelPlural;
+    return num + ' ' + word;
   }
 
   function hitsProtein(state, iso) {
@@ -915,6 +960,11 @@
     computeAchievements: computeAchievements,
     proteinTarget: proteinTarget,
     waterTarget: waterTarget,
+    waterVessel: waterVessel,
+    formatLiters: formatLiters,
+    formatWaterProgress: formatWaterProgress,
+    waterUnitCount: waterUnitCount,
+    formatWaterUnits: formatWaterUnits,
     normName: normName,
     setVolume: setVolume,
     isBodyweightName: isBodyweightName,

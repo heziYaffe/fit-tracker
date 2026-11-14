@@ -187,6 +187,31 @@
     };
   }
 
+  function migrateWater(settings, nutrition, rawSettings) {
+    const cupMl = (C.WATER_CUP_ML) || 250;
+    if (rawSettings && rawSettings.waterInMl) {
+      if (settings.waterVessel !== 'bottle') settings.waterVessel = settings.waterVessel || 'cup';
+      const fallback = settings.waterVessel === 'bottle' ? 500 : cupMl;
+      settings.waterVesselMl = Math.max(50, Number(settings.waterVesselMl) || fallback);
+      settings.waterInMl = true;
+      const t = Number(settings.dailyWaterTarget);
+      if (!(t > 0)) settings.dailyWaterTarget = C.WATER_DEFAULT_GOAL_ML || 2000;
+      return settings;
+    }
+    const t = Number(settings.dailyWaterTarget);
+    if (t > 0 && t <= 30) settings.dailyWaterTarget = Math.round(t * cupMl);
+    else if (!(t > 0)) settings.dailyWaterTarget = C.WATER_DEFAULT_GOAL_ML || 2000;
+    (nutrition || []).forEach(function (n) {
+      if (!n) return;
+      const w = Number(n.water) || 0;
+      if (w > 0 && w <= 30) n.water = Math.round(w * cupMl);
+    });
+    settings.waterInMl = true;
+    settings.waterVessel = settings.waterVessel === 'bottle' ? 'bottle' : 'cup';
+    settings.waterVesselMl = Math.max(50, Number(settings.waterVesselMl) || cupMl);
+    return settings;
+  }
+
   function normalizeSettings(set) {
     set = set || {};
     const baseN = (C.DEFAULT_NOTIFICATIONS && Object.assign({}, C.DEFAULT_NOTIFICATIONS)) || {
@@ -218,11 +243,17 @@
     const base = defaultState();
     if (!raw || typeof raw !== 'object') return base;
     const foods = Array.isArray(raw.foods) && raw.foods.length ? raw.foods : starterFoods();
+    const nutrition = Array.isArray(raw.nutrition) ? raw.nutrition : [];
+    const settings = migrateWater(
+      normalizeSettings(Object.assign({}, base.settings, raw.settings || {})),
+      nutrition,
+      raw.settings || {}
+    );
     return {
       version: 1,
-      settings: normalizeSettings(Object.assign({}, base.settings, raw.settings || {})),
+      settings: settings,
       workouts: Array.isArray(raw.workouts) ? raw.workouts : [],
-      nutrition: Array.isArray(raw.nutrition) ? raw.nutrition : [],
+      nutrition: nutrition,
       weights: Array.isArray(raw.weights) ? raw.weights : [],
       metrics: Array.isArray(raw.metrics) ? raw.metrics : [],
       foods: foods,
@@ -653,25 +684,31 @@
     const meal = (day.meals || []).find(function (m) { return m.id === mealId; });
     if (!meal) return null;
     const prev = meal.status || 'pending';
-    if (status === 'eaten' && prev !== 'eaten') {
+    function applyMealMacros(sign) {
       const tot = mealTotals(meal);
       const cur = getNutrition(date) || { protein: 0, calories: 0, carbs: 0, fat: 0 };
       const patch = {
-        protein: (Number(cur.protein) || 0) + tot.protein,
-        calories: (Number(cur.calories) || 0) + tot.calories
+        protein: Math.max(0, (Number(cur.protein) || 0) + sign * tot.protein),
+        calories: Math.max(0, (Number(cur.calories) || 0) + sign * tot.calories)
       };
-      if (tot.hasCarbs) patch.carbs = (Number(cur.carbs) || 0) + tot.carbs;
-      if (tot.hasFat) patch.fat = (Number(cur.fat) || 0) + tot.fat;
-      meal.status = 'eaten';
+      if (tot.hasCarbs) patch.carbs = Math.max(0, (Number(cur.carbs) || 0) + sign * tot.carbs);
+      if (tot.hasFat) patch.fat = Math.max(0, (Number(cur.fat) || 0) + sign * tot.fat);
       upsertNutrition(date, patch);
+    }
+    if (status === 'eaten' && prev !== 'eaten') {
+      applyMealMacros(1);
+      meal.status = 'eaten';
+      commit();
       return meal;
     }
     if (status === 'skipped') {
+      if (prev === 'eaten') applyMealMacros(-1);
       meal.status = 'skipped';
       commit();
       return meal;
     }
     if (status === 'pending') {
+      if (prev === 'eaten') applyMealMacros(-1);
       meal.status = 'pending';
       commit();
       return meal;
