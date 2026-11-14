@@ -55,6 +55,33 @@ function json(body: unknown, status = 200) {
   });
 }
 
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
+}
+
+function htmlPage(title: string, inner: string, status = 200) {
+  const page = `<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;background:#1a1228;color:#f4eefe;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center}
+    main{max-width:28rem}
+    h1{font-size:1.35rem;margin:0 0 12px}
+    p{line-height:1.55;color:#d8cce8}
+    a{color:#c4a0ff}
+  </style>
+</head>
+<body><main>${inner}</main></body>
+</html>`;
+  return new Response(page, {
+    status,
+    headers: { ...cors, "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 function admin() {
   const url = Deno.env.get("SUPABASE_URL") || "";
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -346,9 +373,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (req.method === "GET" && (route === "/" || route === "/start")) {
+    if ((req.method === "GET" || req.method === "POST") && (route === "/" || route === "/start")) {
       const user = await userFromReq(req);
-      if (!user) return json({ error: "auth_required" }, 401);
+      if (!user) return json({ error: "auth_required", message: "not signed in — sign in first" }, 401);
       if (!whoopConfigured()) return missingWhoopConfig();
       const statePayload = user.id + "." + Date.now();
       const state = statePayload + "." + await signState(statePayload);
@@ -359,31 +386,47 @@ Deno.serve(async (req) => {
         "&response_type=code" +
         "&scope=" + encodeURIComponent(SCOPES) +
         "&state=" + encodeURIComponent(state);
+      const accept = req.headers.get("Accept") || "";
+      const wantsJson = req.method === "POST" || accept.includes("application/json") || url.searchParams.get("redirect") === "0";
+      if (wantsJson) return json({ authorize_url: dest });
       return Response.redirect(dest, 302);
     }
 
-    if (req.method === "GET" && (route === "/callback" || url.searchParams.has("code"))) {
+    if (req.method === "GET" && (route === "/callback" || url.searchParams.has("code") || url.searchParams.has("error"))) {
+      const app = appReturnUrl() + "/#/settings?whoop=connected";
+      const oauthErr = url.searchParams.get("error");
+      if (oauthErr) {
+        const desc = url.searchParams.get("error_description") || oauthErr;
+        return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>${escapeHtml(desc)}</p><p>אפשר לסגור את החלון ולחזור לאפליקציה.</p>`, 400);
+      }
       if (!whoopConfigured()) return missingWhoopConfig();
       const code = url.searchParams.get("code") || "";
       const state = url.searchParams.get("state") || "";
       const [userId, ts, sig] = state.split(".");
       if (!code || !userId || sig !== await signState(userId + "." + ts)) {
-        return json({ error: "bad_state" }, 400);
+        return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>הבקשה לא תקינה או שפג תוקפה. חזרו לאפליקציה ונסו שוב.</p>`, 400);
       }
-      const token = await whoopToken({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: Deno.env.get("WHOOP_REDIRECT_URI") || "",
-      });
-      const profile = await fetch(WHOOP_API + "/v2/user/profile/basic", {
-        headers: { Authorization: "Bearer " + token.access_token },
-      }).then((r) => r.json()).catch(() => ({}));
-      const sb = admin();
-      await saveTokens(sb, userId, token, profile.user_id ? String(profile.user_id) : undefined);
-      const tok = await getValidToken(sb, userId);
-      if (tok) await pullRecent(sb, userId, tok.access_token).catch((e) => console.error(e));
-      const app = appReturnUrl() + "/#/settings?whoop=connected";
-      return Response.redirect(app, 302);
+      try {
+        const token = await whoopToken({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: Deno.env.get("WHOOP_REDIRECT_URI") || "",
+        });
+        const profile = await fetch(WHOOP_API + "/v2/user/profile/basic", {
+          headers: { Authorization: "Bearer " + token.access_token },
+        }).then((r) => r.json()).catch(() => ({}));
+        const sb = admin();
+        await saveTokens(sb, userId, token, profile.user_id ? String(profile.user_id) : undefined);
+        const tok = await getValidToken(sb, userId);
+        if (tok) await pullRecent(sb, userId, tok.access_token).catch((e) => console.error(e));
+      } catch (err) {
+        const msg = String((err as Error).message || err);
+        return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>${escapeHtml(msg)}</p><p>אפשר לסגור את החלון ולחזור לאפליקציה.</p>`, 400);
+      }
+      return htmlPage(
+        "חיבור Whoop",
+        `<h1>חובר בהצלחה, חזור לאפליקציה</h1><p>אפשר לסגור את החלון הזה ולחזור לפיט. הנתונים יימשכו אוטומטית.</p><p><a href="${escapeHtml(app)}">פתיחת האפליקציה</a></p><script>try{location.replace(${JSON.stringify(app)});}catch(e){}</script>`,
+      );
     }
 
     if (req.method === "POST" && route === "/webhook") {

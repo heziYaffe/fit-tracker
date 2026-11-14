@@ -9,6 +9,19 @@
     FitUI.init();
     if (window.FitNotify) FitNotify.start();
     if (window.FitSync) FitSync.init().then(function () { if (window.FitUI) FitUI.render(); });
+
+    var fgTimer = 0;
+    function onForeground() {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      if (!window.FitSync || !FitSync.onForeground) return;
+      clearTimeout(fgTimer);
+      fgTimer = setTimeout(function () {
+        FitSync.onForeground().then(function () { if (window.FitUI) FitUI.render(); });
+      }, 200);
+    }
+    document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('pageshow', onForeground);
+    window.addEventListener('focus', onForeground);
   });
 
   if ('serviceWorker' in navigator) {

@@ -141,22 +141,130 @@
           setSession({ access_token: saved.access_token, refresh_token: saved.refresh_token, user: user });
           return authUser;
         })
-        .catch(function () { setSession(null); return null; });
+        .catch(function () {
+          if (!saved.refresh_token) { setSession(null); return null; }
+          const c = cfg();
+          return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/token?grant_type=refresh_token', {
+            method: 'POST',
+            headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: saved.refresh_token })
+          }).then(function (res) {
+            return res.json().catch(function () { return {}; }).then(function (data) {
+              if (!res.ok || !data.access_token) { setSession(null); return null; }
+              setSession({ access_token: data.access_token, refresh_token: data.refresh_token || saved.refresh_token, user: data.user || saved.user });
+              return authUser;
+            });
+          }).catch(function () { setSession(null); return null; });
+        });
     } catch (e) { return Promise.resolve(null); }
   }
 
-  function sendMagicLink(email, redirectTo) {
-    if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+  function authErrorMessage(body, fallback) {
+    const raw = String((body && (body.msg || body.error_description || body.error || body.message)) || fallback || '');
+    const low = raw.toLowerCase();
+    const code = String((body && (body.error_code || body.code || '')) || '').toLowerCase();
+    if (code.indexOf('over_email_send_rate_limit') >= 0 || low.indexOf('rate limit') >= 0 || low.indexOf('email rate') >= 0) {
+      return 'נשלחו יותר מדי מיילים, נסה בעוד שעה או היכנס עם סיסמה';
+    }
+    if (code === 'invalid_credentials' || low.indexOf('invalid login') >= 0 || low.indexOf('invalid credentials') >= 0) {
+      return 'אימייל או סיסמה שגויים';
+    }
+    if (low.indexOf('already registered') >= 0 || low.indexOf('user already') >= 0) {
+      return 'החשבון כבר קיים. היכנסו עם סיסמה, או שלחו קוד למייל';
+    }
+    if (low.indexOf('password') >= 0 && (low.indexOf('6') >= 0 || low.indexOf('least') >= 0 || low.indexOf('short') >= 0)) {
+      return 'הסיסמה קצרה מדי (לפחות 6 תווים)';
+    }
+    if (code.indexOf('otp') >= 0 || ((low.indexOf('invalid') >= 0 || low.indexOf('expired') >= 0) && (low.indexOf('otp') >= 0 || low.indexOf('token') >= 0 || low.indexOf('code') >= 0))) {
+      return 'הקוד שגוי או שפג תוקפו';
+    }
+    if (low.indexOf('signup is disabled') >= 0) return 'הרשמה חדשה כבויה כרגע';
+    if (raw === 'not-signed-in' || fallback === 'not-signed-in') return 'קודם צריך להתחבר לחשבון';
+    if (raw === 'whoop-not-ready' || raw === 'not-ready') return 'חיבור Whoop לא מוכן עדיין';
+    return raw || fallback || 'הפעולה נכשלה';
+  }
+
+  function authFetch(path, body) {
     const c = cfg();
-    const back = redirectTo || (location.origin + location.pathname.replace(/index\.html$/, ''));
+    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + path, {
+      method: 'POST',
+      headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (b) {
+        if (!res.ok) throw new Error(authErrorMessage(b, 'הפעולה נכשלה'));
+        return b;
+      });
+    });
+  }
+
+  function applySession(data) {
+    if (!data || !data.access_token) throw new Error('ההתחברות נכשלה');
+    setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      user: data.user || {}
+    });
+    return restoreSession().then(function () { return authUser; });
+  }
+
+  function signInWithPassword(email, password) {
+    if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    if (!email || !password) return Promise.reject(new Error('יש להזין אימייל וסיסמה'));
+    return authFetch('/auth/v1/token?grant_type=password', { email: email, password: password }).then(applySession);
+  }
+
+  function signUpWithPassword(email, password) {
+    if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    if (!email || !password) return Promise.reject(new Error('יש להזין אימייל וסיסמה'));
+    if (String(password).length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
+    return authFetch('/auth/v1/signup', { email: email, password: password }).then(function (data) {
+      if (data && data.access_token) return applySession(data);
+      throw new Error('ההרשמה נקלטה. אם לא התחברתם אוטומטית, נסו כניסה עם הסיסמה');
+    });
+  }
+
+  function sendOtp(email, redirectTo) {
+    if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    if (!email) return Promise.reject(new Error('יש להזין אימייל'));
+    const c = cfg();
+    const back = redirectTo || (typeof location !== 'undefined' ? (location.origin + location.pathname.replace(/index\.html$/, '')) : '');
     return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/otp?redirect_to=' + encodeURIComponent(back), {
       method: 'POST',
       headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email, create_user: true })
     }).then(function (res) {
-      if (!res.ok) return res.json().then(function (b) { throw new Error((b && b.msg) || 'magiclink failed'); });
-      return { ok: true };
+      return res.json().catch(function () { return {}; }).then(function (b) {
+        if (!res.ok) throw new Error(authErrorMessage(b, 'שליחת הקוד נכשלה'));
+        return { ok: true };
+      });
     });
+  }
+
+  function verifyOtp(email, token) {
+    if (!isConfigured()) return Promise.reject(new Error('not-configured'));
+    if (!email || !token) return Promise.reject(new Error('יש להזין אימייל וקוד'));
+    return authFetch('/auth/v1/verify', { type: 'email', email: email, token: String(token).trim() }).then(applySession);
+  }
+
+  function updatePassword(password) {
+    if (!authUser) return Promise.reject(new Error('not-signed-in'));
+    if (!password || String(password).length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
+    const c = cfg();
+    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/user', {
+      method: 'PUT',
+      headers: headers(),
+      body: JSON.stringify({ password: password })
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (b) {
+        if (!res.ok) throw new Error(authErrorMessage(b, 'עדכון הסיסמה נכשל'));
+        return { ok: true };
+      });
+    });
+  }
+
+  function sendMagicLink(email, redirectTo) {
+    return sendOtp(email, redirectTo);
   }
 
   function handleAuthRedirect() {
@@ -220,19 +328,73 @@
     return fnUrl() + '/start?access_token=' + encodeURIComponent(authUser.access_token);
   }
 
+  function whoopAuthorizeUrl() {
+    if (!whoopReady()) return Promise.reject(new Error('חיבור Whoop לא מוכן עדיין'));
+    if (!authUser) return Promise.reject(new Error('קודם צריך להתחבר לחשבון'));
+    return fetch(fnUrl() + '/start', { headers: headers({ Accept: 'application/json' }) }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        if (res.status === 401) throw new Error('קודם צריך להתחבר לחשבון');
+        if (!res.ok) throw new Error(authErrorMessage(body, 'שגיאה בהתחברות ל-Whoop'));
+        if (!body.authorize_url) throw new Error('שגיאה בהתחברות ל-Whoop');
+        return body.authorize_url;
+      });
+    });
+  }
+
   function whoopStatus() {
-    if (!whoopReady() || !authUser) return Promise.resolve({ connected: false });
-    return fetch(fnUrl() + '/status', { headers: headers() }).then(function (r) { return r.json(); });
+    if (!whoopReady() || !authUser) {
+      status.whoop = { connected: false };
+      return Promise.resolve(status.whoop);
+    }
+    return fetch(fnUrl() + '/status', { headers: headers() }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (r.status === 401) {
+          status.whoop = { connected: false, error: 'קודם צריך להתחבר לחשבון' };
+          return status.whoop;
+        }
+        if (!r.ok) {
+          status.whoop = { connected: false, error: authErrorMessage(body, 'לא ניתן לבדוק את מצב Whoop') };
+          return status.whoop;
+        }
+        status.whoop = body;
+        return body;
+      });
+    }).catch(function (err) {
+      status.whoop = { connected: false, error: String(err.message || err) };
+      return status.whoop;
+    });
   }
 
   function whoopRefresh() {
-    if (!whoopReady() || !authUser) return Promise.reject(new Error('not-ready'));
-    return fetch(fnUrl() + '/refresh', { method: 'POST', headers: headers() }).then(function (r) { return r.json(); });
+    if (!whoopReady()) return Promise.reject(new Error('חיבור Whoop לא מוכן עדיין'));
+    if (!authUser) return Promise.reject(new Error('קודם צריך להתחבר לחשבון'));
+    return fetch(fnUrl() + '/refresh', { method: 'POST', headers: headers() }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (!r.ok) throw new Error(authErrorMessage(body, 'משיכת נתוני Whoop נכשלה'));
+        return body;
+      });
+    });
+  }
+
+  var lastWhoopSyncSeen = null;
+  function onForeground() {
+    if (!isConfigured() || !authUser || !whoopReady()) return Promise.resolve(null);
+    return whoopStatus().then(function (s) {
+      const stamp = s && s.link && (s.link.last_sync_at || s.last_sync_at);
+      if (s && s.connected && stamp && stamp !== lastWhoopSyncSeen) {
+        lastWhoopSyncSeen = stamp;
+        return syncNow().then(function () { return s; }).catch(function () { return s; });
+      }
+      return s;
+    });
   }
 
   function init() {
     status.configured = isConfigured();
-    return handleAuthRedirect();
+    return handleAuthRedirect().then(function () {
+      if (authUser && whoopReady()) return whoopStatus().then(function () { return authUser; });
+      return authUser;
+    });
   }
 
   var FitSync = {
@@ -245,12 +407,20 @@
     packCollections: packCollections,
     unpackCollections: unpackCollections,
     sendMagicLink: sendMagicLink,
+    sendOtp: sendOtp,
+    verifyOtp: verifyOtp,
+    signInWithPassword: signInWithPassword,
+    signUpWithPassword: signUpWithPassword,
+    updatePassword: updatePassword,
+    authErrorMessage: authErrorMessage,
     signOut: signOut,
     restoreSession: restoreSession,
     syncNow: syncNow,
     whoopStartUrl: whoopStartUrl,
+    whoopAuthorizeUrl: whoopAuthorizeUrl,
     whoopStatus: whoopStatus,
     whoopRefresh: whoopRefresh,
+    onForeground: onForeground,
     init: init
   };
 

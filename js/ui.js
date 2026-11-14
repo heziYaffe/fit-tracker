@@ -1519,19 +1519,36 @@
             '<button type="button" class="btn" data-action="sync-signout">התנתקות</button></div>' +
             (syncSt.lastSync ? '<p class="hp-legend">סונכרן לאחרונה: ' + esc(syncSt.lastSync) + '</p>' : '') +
             (syncSt.error ? '<p class="hp-legend">' + esc(syncSt.error) + '</p>' : ''))
-          : ('<p class="hp-legend">שלחו קישור כניסה למייל. אין סיסמה.</p>' +
+          : ('<p class="hp-legend">הכניסה המומלצת באפליקציה שעל מסך הבית היא עם אימייל וסיסמה. אפשר גם לקבל קוד למייל ולהזין אותו כאן, בלי ללחוץ על קישור.</p>' +
             '<label class="field"><span>אימייל</span><input type="email" id="sync-email" dir="ltr" inputmode="email" autocomplete="email" /></label>' +
-            '<button type="button" class="btn primary wide" data-action="sync-magic">שלחו קישור כניסה</button>')) +
+            '<label class="field"><span>סיסמה</span><input type="password" id="sync-password" dir="ltr" autocomplete="current-password" /></label>' +
+            '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
+            '<button type="button" class="btn primary" data-action="sync-signin">כניסה</button>' +
+            '<button type="button" class="btn" data-action="sync-signup">הרשמה</button></div>' +
+            '<button type="button" class="btn wide" data-action="sync-send-otp">שלחו קוד למייל</button>' +
+            '<label class="field"><span>קוד בן 8 ספרות מהמייל</span><input type="text" id="sync-otp" dir="ltr" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>' +
+            '<button type="button" class="btn wide" data-action="sync-verify-otp">אימות קוד</button>' +
+            '<button type="button" class="btn wide" data-action="sync-magic">שלחו קישור כניסה</button>')) +
+        (syncSt.signedIn
+          ? ('<label class="field" style="margin-top:12px"><span>סיסמה חדשה (לפעם הבאה)</span><input type="password" id="sync-new-password" dir="ltr" autocomplete="new-password" /></label>' +
+            '<button type="button" class="btn" data-action="sync-set-password">שמירת סיסמה</button>')
+          : '') +
         '</section>');
+    const whoopSt = syncSt.whoop || {};
+    const whoopErr = whoopSt.error || whoopSt.last_error || (whoopSt.link && whoopSt.link.last_error);
+    const whoopSyncAt = (whoopSt.link && (whoopSt.link.last_sync_at || whoopSt.last_sync_at)) || '';
     const whoopCard = !whoopOn
       ? ('<section class="card is-soon"><h2>חיבור Whoop ' + soon + '</h2>' +
         '<p class="hp-legend">אחרי הקמת השרת ומילוי מזהה הלקוח של Whoop ב-<code>js/cloud-config.js</code>, אפשר יהיה לחבר את החשבון. מדדי Recovery, Strain, שינה, HRV ואימונים ייכנסו עם מקור whoop.</p></section>')
       : ('<section class="card"><h2>חיבור Whoop</h2>' +
         (syncSt.signedIn
-          ? ('<p class="hp-legend">חיבור מאובטח דרך השרת. הנתונים מסונכרנים למדדים עם מקור whoop.</p>' +
+          ? ((whoopSt.connected
+              ? ('<p class="hp-legend">מחוברים ל-Whoop' + (whoopSyncAt ? (' · סונכרן לאחרונה: ' + esc(String(whoopSyncAt).replace('T', ' ').slice(0, 16))) : '') + '.</p>')
+              : '<p class="hp-legend">לחיצה תפתח את אתר Whoop לאישור. אחרי האישור חזרו לאפליקציה — החיבור נשמר בשרת גם אם נפתח בדפדפן.</p>') +
             '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
-            '<a class="btn primary" data-action="whoop-connect" href="#">חבר Whoop</a>' +
-            '<button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>')
+            '<button type="button" class="btn primary" data-action="whoop-connect">' + (whoopSt.connected ? 'חיבור מחדש' : 'חבר Whoop') + '</button>' +
+            '<button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>' +
+            (whoopErr ? '<p class="hp-legend">' + esc(whoopErr) + '</p>' : ''))
           : '<p class="hp-legend">קודם התחברו לחשבון, ואז אפשר לחבר את Whoop.</p>') +
         '</section>');
 
@@ -2714,28 +2731,64 @@
       return;
     }
     if (action === 'share-summary') { shareSummary(); return; }
-    if (action === 'sync-magic') {
-      const emailEl = document.getElementById('sync-email');
-      const email = emailEl && emailEl.value.trim();
+    if (action === 'sync-signin' || action === 'sync-signup') {
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
+      const password = (document.getElementById('sync-password') || {}).value || '';
+      if (!email || !password) { toast('יש להזין אימייל וסיסמה'); return; }
+      const fn = action === 'sync-signup' ? FitSync.signUpWithPassword : FitSync.signInWithPassword;
+      toast(action === 'sync-signup' ? 'נרשמים…' : 'מתחברים…');
+      fn(email, password).then(function () {
+        toast('התחברתם');
+        return FitSync.onForeground ? FitSync.onForeground() : null;
+      }).then(function () { render(); }).catch(function (e) { toast(e.message || 'ההתחברות נכשלה'); });
+      return;
+    }
+    if (action === 'sync-send-otp') {
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
       if (!email) { toast('יש להזין אימייל'); return; }
-      FitSync.sendMagicLink(email).then(function () { toast('נשלח קישור למייל'); }).catch(function (e) { toast('שליחה נכשלה'); });
+      FitSync.sendOtp(email).then(function () { toast('נשלח קוד למייל. הזינו אותו כאן, בלי ללחוץ על קישור'); }).catch(function (e) { toast(e.message || 'שליחת הקוד נכשלה'); });
+      return;
+    }
+    if (action === 'sync-verify-otp') {
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
+      const token = ((document.getElementById('sync-otp') || {}).value || '').trim();
+      if (!email || !token) { toast('יש להזין אימייל וקוד'); return; }
+      FitSync.verifyOtp(email, token).then(function () {
+        toast('התחברתם');
+        return FitSync.onForeground ? FitSync.onForeground() : null;
+      }).then(function () { render(); }).catch(function (e) { toast(e.message || 'אימות הקוד נכשל'); });
+      return;
+    }
+    if (action === 'sync-magic') {
+      const email = ((document.getElementById('sync-email') || {}).value || '').trim();
+      if (!email) { toast('יש להזין אימייל'); return; }
+      FitSync.sendMagicLink(email).then(function () { toast('נשלח קישור למייל. עדיף להזין את הקוד בתוך האפליקציה'); }).catch(function (e) { toast(e.message || 'שליחה נכשלה'); });
+      return;
+    }
+    if (action === 'sync-set-password') {
+      const password = (document.getElementById('sync-new-password') || {}).value || '';
+      if (!password) { toast('יש להזין סיסמה חדשה'); return; }
+      FitSync.updatePassword(password).then(function () { toast('הסיסמה נשמרה'); render(); }).catch(function (e) { toast(e.message || 'שמירת הסיסמה נכשלה'); });
       return;
     }
     if (action === 'sync-now') {
       toast('מסנכרן…');
-      FitSync.syncNow().then(function () { toast('הסנכרון הושלם'); render(); }).catch(function () { toast('הסנכרון נכשל'); render(); });
+      FitSync.syncNow().then(function () { toast('הסנכרון הושלם'); render(); }).catch(function (e) { toast((e && e.message) || 'הסנכרון נכשל'); render(); });
       return;
     }
     if (action === 'sync-signout') { FitSync.signOut(); toast('התנתקתם'); render(); return; }
     if (action === 'whoop-connect') {
       ev.preventDefault();
-      const url = FitSync.whoopStartUrl();
-      if (url) location.href = url;
-      else toast('חיבור Whoop לא מוכן');
+      if (!FitSync.status().signedIn) { toast('קודם צריך להתחבר לחשבון'); return; }
+      FitSync.whoopAuthorizeUrl().then(function (url) {
+        const opened = window.open(url, '_blank', 'noopener');
+        if (!opened) location.href = url;
+        toast('אשר ב-Whoop וחזור לאפליקציה');
+      }).catch(function (e) { toast(e.message || 'שגיאה בהתחברות ל-Whoop'); });
       return;
     }
     if (action === 'whoop-refresh') {
-      FitSync.whoopRefresh().then(function () { return FitSync.syncNow(); }).then(function () { toast('נתוני Whoop עודכנו'); render(); }).catch(function () { toast('המשיכה נכשלה'); });
+      FitSync.whoopRefresh().then(function () { return FitSync.syncNow(); }).then(function () { toast('נתוני Whoop עודכנו'); render(); }).catch(function (e) { toast((e && e.message) || 'המשיכה נכשלה'); render(); });
       return;
     }
 
