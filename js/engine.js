@@ -334,16 +334,31 @@
   function expandSets(ex) {
     if (ex && Array.isArray(ex.setLogs) && ex.setLogs.length) {
       return ex.setLogs.map(function (s) {
-        return { weight: Number(s.weight) || 0, reps: Number(s.reps) || 0 };
+        return { weight: Number(s.weight) || 0, reps: Number(s.reps) || 0, secs: Number(s.secs) || 0 };
       });
     }
     const sets = Math.max(1, Number(ex && ex.sets) || 0);
     const reps = Number(ex && ex.reps) || 0;
     const w = Number(ex && ex.weight) || 0;
-    if (!reps && !w) return [];
+    const secs = Number(ex && ex.secs) || 0;
+    if (!reps && !w && !secs) return [];
     const out = [];
-    for (let i = 0; i < sets; i++) out.push({ weight: w, reps: reps });
+    for (let i = 0; i < sets; i++) out.push({ weight: w, reps: reps, secs: secs });
     return out;
+  }
+
+  function isStaticName(name) {
+    return !!(C.isStaticName && C.isStaticName(name));
+  }
+
+  function isStaticEx(ex, name) {
+    if (ex && ex.static === true) return true;
+    if (ex && ex.static === false) return false;
+    if (ex && (Number(ex.secs) > 0 || Number(ex.secsMax) > 0 || Number(ex.secsMin) > 0)) {
+      const logs = ex.setLogs;
+      if (logs && logs.length && logs.every(function (s) { return (Number(s.secs) || 0) > 0 && !(Number(s.reps) > 0); })) return true;
+    }
+    return isStaticName(name || (ex && ex.name));
   }
 
   function isBodyweightName(name) {
@@ -376,6 +391,7 @@
   }
 
   function setVolume(ex, state, date) {
+    if (isStaticEx(ex)) return 0;
     const logs = expandSets(ex);
     const bwMode = isBodyweightEx(ex);
     const bodyKg = bwMode && state ? bodyWeightOn(state, date) : 0;
@@ -418,9 +434,12 @@
       let topRepsAtTop = 0;
       let maxReps = 0;
       let totalReps = 0;
+      let maxHold = 0;
+      let totalSecs = 0;
       let best1RM = 0;
       let bestRow = null;
       const bwMode = rows.some(function (e) { return isBodyweightEx(e, name); });
+      const staticMode = rows.some(function (e) { return isStaticEx(e, name); });
       const bodyKg = bwMode ? bodyWeightOn(state, w.date) : 0;
       rows.forEach(function (e) {
         volume += setVolume(e, state, w.date);
@@ -428,8 +447,11 @@
         if (!logs.length) {
           const wgt = Number(e.weight) || 0;
           const reps = Number(e.reps) || 0;
+          const hold = Number(e.secs) || 0;
           totalReps += reps * (Math.max(1, Number(e.sets) || 1));
+          totalSecs += hold * (Math.max(1, Number(e.sets) || 1));
           if (reps > maxReps) maxReps = reps;
+          if (hold > maxHold) maxHold = hold;
           const est = epley1RM(wgt + bodyKg, reps);
           if (wgt > topWeight || (wgt === topWeight && reps > topRepsAtTop)) {
             topWeight = wgt;
@@ -443,7 +465,9 @@
         }
         logs.forEach(function (s) {
           totalReps += Number(s.reps) || 0;
+          totalSecs += Number(s.secs) || 0;
           if (s.reps > maxReps) maxReps = s.reps;
+          if ((Number(s.secs) || 0) > maxHold) maxHold = Number(s.secs) || 0;
           const est = epley1RM((Number(s.weight) || 0) + bodyKg, s.reps);
           if (s.weight > topWeight || (s.weight === topWeight && s.reps > topRepsAtTop)) {
             topWeight = s.weight;
@@ -466,10 +490,13 @@
         topReps: topRepsAtTop,
         maxReps: maxReps,
         totalReps: totalReps,
+        maxHold: maxHold,
+        totalSecs: totalSecs,
         e1rm: best1RM,
         bestRow: bestRow,
         bodyweight: bwMode,
-        bodyWeightUsed: bodyKg
+        bodyWeightUsed: bodyKg,
+        static: staticMode
       });
     });
     sessions.sort(function (a, b) {
@@ -483,6 +510,7 @@
     let maxE1 = 0;
     let maxVol = 0;
     let maxR = 0;
+    let maxH = 0;
     const bestRepsAt = {};
     sessions.forEach(function (s, idx) {
       const types = [];
@@ -501,6 +529,10 @@
       if (s.maxReps > maxR && s.maxReps > 0) {
         if (idx > 0) types.push('reps');
         maxR = s.maxReps;
+      }
+      if (s.maxHold > maxH && s.maxHold > 0) {
+        if (idx > 0) types.push('time');
+        maxH = s.maxHold;
       }
       (s.rows || []).forEach(function (e) {
         const logs = expandSets(e);
@@ -584,8 +616,10 @@
       currentMaxE1rm: list.reduce(function (m, s) { return Math.max(m, s.e1rm); }, 0),
       currentMaxVolume: list.reduce(function (m, s) { return Math.max(m, s.volume); }, 0),
       currentMaxReps: list.reduce(function (m, s) { return Math.max(m, s.maxReps || 0); }, 0),
+      currentMaxHold: list.reduce(function (m, s) { return Math.max(m, s.maxHold || 0); }, 0),
       bestReps: bestRepsTable(list),
-      bodyweight: list.some(function (s) { return s.bodyweight; })
+      bodyweight: list.some(function (s) { return s.bodyweight; }),
+      static: list.some(function (s) { return s.static; })
     };
   }
 
@@ -677,7 +711,15 @@
     const stepDefault = 2.5;
     if (!lastSets || !lastSets.length) {
       const bw = isBodyweightName(name);
-      return { weight: bw ? 0 : 20, reps: 8, step: stepDefault, reason: 'אין היסטוריה — ברירת מחדל', allHit: false };
+      const st = isStaticName(name);
+      return { weight: (bw || st) ? 0 : 20, reps: st ? 0 : 8, secs: st ? 45 : 0, step: stepDefault, reason: 'אין היסטוריה — ברירת מחדל', allHit: false };
+    }
+    const hasHold = lastSets.some(function (s) { return (Number(s.secs) || 0) > 0; });
+    const noReps = lastSets.every(function (s) { return !(Number(s.reps) > 0); });
+    if (hasHold && (noReps || isStaticName(name))) {
+      const maxS = lastSets.reduce(function (m, s) { return Math.max(m, Number(s.secs) || 0); }, 0);
+      const lastW = lastSets[lastSets.length - 1] ? (Number(lastSets[lastSets.length - 1].weight) || 0) : 0;
+      return { weight: lastW, reps: 0, secs: maxS, step: stepDefault, reason: 'לפי ההחזקה הקודמת', allHit: false, lastWeight: lastW, lastSecs: maxS };
     }
     const maxW = lastSets.reduce(function (m, s) { return Math.max(m, Number(s.weight) || 0); }, 0);
     const work = lastSets.filter(function (s) { return (Number(s.weight) || 0) >= maxW * 0.95; });
@@ -719,9 +761,10 @@
     };
   }
 
-  function setIsPR(state, name, weight, reps, exceptWorkoutId) {
+  function setIsPR(state, name, weight, reps, exceptWorkoutId, secs) {
     const w = Number(weight) || 0;
     const r = Number(reps) || 0;
+    const hold = Number(secs) || 0;
     const est = epley1RM(w, r);
     const sessions = attachPRs(sessionsForExercise(state, name).filter(function (s) {
       return !exceptWorkoutId || s.workoutId !== exceptWorkoutId;
@@ -745,7 +788,15 @@
     const bw = isBodyweightName(name) || sessions.some(function (s) { return s.bodyweight; });
     const bodyKg = bw ? bodyWeightOn(state, todayISO()) : 0;
     const estEff = epley1RM(w + bodyKg, r);
+    let bestHold = 0;
+    sessions.forEach(function (s) {
+      if ((s.maxHold || 0) > bestHold) bestHold = s.maxHold;
+    });
     const types = [];
+    if (hold > 0 || isStaticName(name) || sessions.some(function (s) { return s.static; })) {
+      if (hold > 0 && hold > bestHold && bestHold > 0) types.push('time');
+      return { isPR: types.length > 0, types: types, e1rm: 0, prevMaxWeight: maxW, prevMaxE1rm: maxE1, prevMaxHold: bestHold };
+    }
     if (w > 0 && w > maxW) types.push('weight');
     if ((bw ? estEff : est) > 0 && (bw ? estEff : est) > maxE1) types.push('e1rm');
     if (bw) {
@@ -753,7 +804,7 @@
     } else if (w > 0 && r > 0 && r > bestReps && bestReps > 0) {
       types.push('reps');
     }
-    return { isPR: types.length > 0, types: types, e1rm: bw ? estEff : est, prevMaxWeight: maxW, prevMaxE1rm: maxE1 };
+    return { isPR: types.length > 0, types: types, e1rm: bw ? estEff : est, prevMaxWeight: maxW, prevMaxE1rm: maxE1, prevMaxHold: bestHold };
   }
 
   function lookupMuscles(name) {
@@ -765,6 +816,9 @@
       { re: /שכיבות סמיכה/, map: { primary: ['chest'], secondary: ['shoulders', 'triceps'] } },
       { re: /מקבילים/, map: { primary: ['triceps'], secondary: ['chest', 'shoulders'] } },
       { re: /כפיפות בטן|הרמות רגליים/, map: { primary: ['abs'], secondary: [] } },
+      { re: /^פלאנק|^הולו|^hollow|^L-sit|^אל-?סיט/i, map: { primary: ['abs'], secondary: ['shoulders'] } },
+      { re: /^וול סיט|^wall\s*sit/i, map: { primary: ['quads'], secondary: ['glutes'] } },
+      { re: /^תלייה|^dead\s*hang/i, map: { primary: ['forearms'], secondary: ['lats'] } },
       { re: /מכרעים|סקוואט משקל גוף/, map: { primary: ['quads'], secondary: ['glutes'] } },
       { re: /כתפיים|כתף/, map: { primary: ['shoulders'], secondary: ['triceps'] } },
       { re: /פשיטת מרפק|טרייס/, map: { primary: ['triceps'], secondary: [] } },
@@ -830,6 +884,14 @@
     return best;
   }
 
+  function bestHoldForExercise(state, name) {
+    let best = 0;
+    sessionsForExercise(state, name).forEach(function (s) {
+      if ((s.maxHold || 0) > best) best = s.maxHold;
+    });
+    return best;
+  }
+
   const FitEngine = {
     todayISO: todayISO,
     parseISO: parseISO,
@@ -860,6 +922,9 @@
     isMaxReps: isMaxReps,
     bodyWeightOn: bodyWeightOn,
     bestRepsForExercise: bestRepsForExercise,
+    bestHoldForExercise: bestHoldForExercise,
+    isStaticName: isStaticName,
+    isStaticEx: isStaticEx,
     epley1RM: epley1RM,
     sessionsForExercise: sessionsForExercise,
     attachPRs: attachPRs,

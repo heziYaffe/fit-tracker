@@ -1527,7 +1527,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
   letter-spacing: 0.06em;
   font-weight: 800;
 }
-.bw-badge, .max-badge {
+.bw-badge, .static-badge {
+  background: color-mix(in srgb, var(--ok, #3ee0a0) 16%, transparent);
+  color: var(--ok, #3ee0a0);
+  border: 1px solid color-mix(in srgb, var(--ok, #3ee0a0) 35%, transparent);
+}
+.max-badge {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
@@ -1560,8 +1565,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
   margin: 0 0 10px;
 }
 .max-hint strong { color: var(--accent); font-weight: 800; }
-.live-ex h1 .bw-badge, .live-ex h1 .max-badge,
-.page-head h1 .bw-badge, .page-head h1 .max-badge {
+.live-ex h1 .bw-badge, .live-ex h1 .max-badge, .live-ex h1 .static-badge,
+.page-head h1 .bw-badge, .page-head h1 .max-badge, .page-head h1 .static-badge {
   position: relative;
   top: -2px;
 }
@@ -1587,3 +1592,14 @@ button.linkish.add-rest {
 }
 .rest-field { margin-top: 10px; }
 .reps-editor input[type="text"] { flex: 1; min-width: 0; text-align: center; }
+
+.hold-banner { margin-top: 8px; }
+.hold-banner .hold-count {
+  font-size: 3.1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.hold-banner.ready { background: color-mix(in srgb, var(--accent-2) 14%, transparent); }
+.hold-banner.overtime .hold-count,
+.hold-banner.overtime .rest-label { color: var(--accent-2); }
+.live-hold-start { margin-top: 8px; font-size: 1.2rem; padding: 18px; }

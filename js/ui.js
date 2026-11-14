@@ -170,7 +170,7 @@
   }
 
   function prTags(types) {
-    const map = { weight: 'שיא משקל', e1rm: 'שיא 1RM', volume: 'שיא נפח', reps: 'שיא חזרות' };
+    const map = { weight: 'שיא משקל', e1rm: 'שיא 1RM', volume: 'שיא נפח', reps: 'שיא חזרות', time: 'שיא החזקה', hold: 'שיא החזקה' };
     return (types || []).map(function (tp) {
       return '<span class="pr-tag">' + (map[tp] || tp) + '</span>';
     }).join('');
@@ -182,13 +182,35 @@
   function isBwEx(ex, name) {
     return E.isBodyweightEx ? E.isBodyweightEx(ex, name) : !!(ex && ex.bodyweight);
   }
+  function isStaticEx(ex, name) {
+    return E.isStaticEx ? E.isStaticEx(ex, name) : !!(ex && ex.static);
+  }
+  function formatSecs(sec) {
+    if (P.formatDurationHe) return P.formatDurationHe(sec);
+    const n = Math.max(0, Math.round(Number(sec) || 0));
+    if (n < 60) return n + ' שנ׳';
+    const m = Math.floor(n / 60);
+    const s = n % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
   function bwBadge(ex, name) {
     return isBwEx(ex, name) ? '<span class="bw-badge">משקל גוף</span>' : '';
   }
   function maxBadge(ex) {
     return isMaxReps(ex) ? '<span class="max-badge">MAX</span>' : '';
   }
+  function staticBadge(ex, name) {
+    return isStaticEx(ex, name) ? '<span class="static-badge">סטטי</span>' : '';
+  }
   function repsTargetLabel(ex) {
+    if (isStaticEx(ex)) {
+      if (isMaxReps(ex)) return 'MAX · עד כשל';
+      const a = Number(ex.secsMin || ex.targetSecs || 0);
+      const b = Number(ex.secsMax || ex.targetSecs || a);
+      if (!a && !b) return '—';
+      if (!b || a === b) return formatSecs(a || b);
+      return formatSecs(a) + '–' + formatSecs(b);
+    }
     if (isMaxReps(ex)) return 'MAX · עד כשל';
     const a = ex.repsMin;
     const b = ex.repsMax;
@@ -202,8 +224,14 @@
     return w + ' ק״ג';
   }
   function setShort(s, ex) {
+    const st = isStaticEx(ex, ex && ex.name) || (Number(s.secs) || 0) > 0;
     const bw = isBwEx(ex, ex && ex.name);
     const w = Number(s.weight) || 0;
+    if (st) {
+      const hold = formatSecs(s.secs || 0);
+      if (bw) return w > 0 ? ('+' + w + ' · ' + hold) : hold;
+      return w > 0 ? (w + ' ק״ג · ' + hold) : hold;
+    }
     if (bw) return w > 0 ? ('+' + w + '×' + s.reps) : (s.reps + ' חזרות');
     return w + '×' + s.reps;
   }
@@ -1237,12 +1265,14 @@
       const last = it.last || {};
       const bits = [];
       const bw = isBwEx(last, it.name);
-      if (last.sets || last.reps) bits.push((last.sets || '?') + '×' + (last.reps || '?'));
+      const st = isStaticEx(last, it.name);
+      if (st && (last.sets || last.secs)) bits.push((last.sets || '?') + '×' + formatSecs(last.secs || last.secsMax || 0));
+      else if (last.sets || last.reps) bits.push((last.sets || '?') + '×' + (last.reps || '?'));
       if (bw) bits.push(loadLabel(last.weight, true));
       else if (last.weight) bits.push(last.weight + ' ק״ג');
       return '<button type="button" class="list-item" data-action="open-exercise" data-name="' + esc(it.name) + '">' +
         '<div class="meta">' + esc(E.formatDay(it.lastDate)) + ' · ' + it.sessions + ' אימונים</div>' +
-        '<div class="title">' + esc(it.name) + ' ' + bwBadge(last, it.name) + '</div>' +
+        '<div class="title">' + esc(it.name) + ' ' + staticBadge(last, it.name) + ' ' + bwBadge(last, it.name) + '</div>' +
         (bits.length ? '<div class="sub">אחרון: ' + esc(bits.join(' · ')) + '</div>' : '') +
         '</button>';
     }).join('');
@@ -1276,22 +1306,31 @@
     const rateTxt = (Math.round(stats.prPerWeek * 10) / 10).toString();
     const pctTxt = Math.round(stats.prSessionPct * 100);
 
+    const st = !!(stats.static || (E.isStaticName && E.isStaticName(name)));
     const bw = !!(stats.bodyweight || (E.isBodyweightName && E.isBodyweightName(name)));
     const hasBodyKg = list.some(function (sess) { return sess.bodyWeightUsed > 0; });
     const hasAdded = list.some(function (sess) { return (sess.topWeight || 0) > 0; });
-    const table = stats.bestReps.length
+    const table = st
+      ? '<p class="kicker">השיא הנוכחי: ' + formatSecs(stats.currentMaxHold || 0) + '.</p>'
+      : (stats.bestReps.length
       ? '<div class="reps-table">' + stats.bestReps.map(function (row) {
           return '<div class="reps-row"><span>' + esc(loadLabel(row.weight, row.bodyweight || bw)) + '</span><strong>' + row.reps + ' חזרות</strong><span class="muted">' + esc(E.formatDay(row.date)) + '</span></div>';
         }).join('') + '</div>'
-      : '<p class="kicker">אין עדיין נתוני חזרות.</p>';
+      : '<p class="kicker">אין עדיין נתוני חזרות.</p>');
 
     const history = list.slice().reverse().map(function (sess) {
       const rowBits = (sess.rows || []).map(function (e) {
+        if (st || isStaticEx(e, name)) {
+          const hold = e.secs || sess.maxHold || 0;
+          return (e.sets || '?') + '×' + formatSecs(hold) + (e.weight ? ' · ' + loadLabel(e.weight, bw || isBwEx(e, name)) : '');
+        }
         return (e.sets || '?') + '×' + (e.reps || '?') + ' · ' + loadLabel(e.weight, bw || isBwEx(e, name));
       }).join(' · ');
-      const sub = bw
+      const sub = st
+        ? ('שיא ' + formatSecs(sess.maxHold || 0) + ' · סה״כ ' + formatSecs(sess.totalSecs || 0))
+        : (bw
         ? ('שיא ' + (sess.maxReps || 0) + ' חזרות · סה״כ ' + (sess.totalReps || 0) + (hasBodyKg ? ' · נפח ' + ltr(String(Math.round(sess.volume))) : ''))
-        : ('נפח ' + ltr(String(Math.round(sess.volume))) + ' · 1RM משוער ' + ltr((Math.round(sess.e1rm * 10) / 10) + ' ק״ג'));
+        : ('נפח ' + ltr(String(Math.round(sess.volume))) + ' · 1RM משוער ' + ltr((Math.round(sess.e1rm * 10) / 10) + ' ק״ג')));
       return '<div class="list-item">' +
         '<div class="meta">' + esc(E.formatDayLong(sess.date)) + (sess.isPR ? ' ' + prTags(sess.prTypes) : (sess.isBaseline ? ' <span class="pr-tag dim">בסיס</span>' : '')) + '</div>' +
         '<div class="title">' + esc(rowBits) + '</div>' +
@@ -1299,7 +1338,17 @@
         '</div>';
     }).join('');
 
-    const charts = bw
+    const charts = st
+      ? ('<section class="card"><h2>שיא החזקה</h2>' +
+        Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.maxHold || 0; }), marks: marks, color: '#d36bff', tighten: true, aria: 'שיא החזקה' }) +
+        '<p class="hp-legend">השיא הנוכחי: ' + formatSecs(stats.currentMaxHold || 0) + '. נקודה צהובה = שיא.</p></section>' +
+        '<section class="card"><h2>סה״כ זמן לאימון</h2>' +
+        Charts.barChart({ labels: labels, values: list.map(function (sess) { return sess.totalSecs || 0; }), marks: marks, color: '#8ab4ff', aria: 'סה״כ זמן', height: 170 }) +
+        '</section>' +
+        (hasAdded ? ('<section class="card"><h2>תוספת משקל</h2>' +
+          Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.topWeight || 0; }), marks: marks, color: '#ffb14a', tighten: true, aria: 'תוספת משקל' }) +
+          '</section>') : ''))
+      : (bw
       ? ('<section class="card"><h2>שיא חזרות בסט</h2>' +
         Charts.lineChart({ labels: labels, values: list.map(function (sess) { return sess.maxReps || 0; }), marks: marks, color: '#d36bff', tighten: true, aria: 'שיא חזרות בסט' }) +
         '<p class="hp-legend">השיא הנוכחי: ' + (stats.currentMaxReps || 0) + ' חזרות. נקודה צהובה = שיא.</p></section>' +
@@ -1320,21 +1369,22 @@
         '</section>' +
         '<section class="card"><h2>1RM משוער (Epley)</h2>' +
         Charts.lineChart({ labels: labels, values: list.map(function (sess) { return Math.round(sess.e1rm * 10) / 10; }), marks: marks, color: '#ffb14a', tighten: true, aria: '1RM משוער' }) +
-        '<p class="hp-legend">נוסחת Epley: משקל × (1 + חזרות/30). השיא הנוכחי: ' + ltr((Math.round(stats.currentMaxE1rm * 10) / 10) + ' ק״ג') + '.</p></section>');
+        '<p class="hp-legend">נוסחת Epley: משקל × (1 + חזרות/30). השיא הנוכחי: ' + ltr((Math.round(stats.currentMaxE1rm * 10) / 10) + ' ק״ג') + '.</p></section>'));
 
     return '<header class="page-head">' +
       '<button type="button" class="btn" data-action="close-exercise">חזרה</button>' +
-      '<h1>' + esc(name) + ' ' + (bw ? '<span class="bw-badge">משקל גוף</span>' : '') + '</h1></header>' +
+      '<h1>' + esc(name) + ' ' + staticBadge({ static: st }, name) + ' ' + (bw ? '<span class="bw-badge">משקל גוף</span>' : '') + '</h1></header>' +
+
       '<div class="stats-grid">' +
       '<div class="metric-pill"><div class="label">שיאים סה״כ</div><div class="value">' + stats.totalPRs + '</div></div>' +
       '<div class="metric-pill"><div class="label">שיאים ב־30 יום</div><div class="value">' + stats.prLast30 + '</div></div>' +
       '<div class="metric-pill"><div class="label">שיאים לשבוע</div><div class="value">' + ltr(rateTxt) + '</div></div>' +
       '<div class="metric-pill"><div class="label">% אימונים עם שיא</div><div class="value">' + pctTxt + '<span class="unit">%</span></div></div>' +
       '<div class="metric-pill"><div class="label">ימים מאז שיא</div><div class="value">' + esc(sinceText) + '</div></div>' +
-      '<div class="metric-pill"><div class="label">' + (bw ? 'שיא חזרות' : 'אימונים') + '</div><div class="value">' + (bw ? (stats.currentMaxReps || 0) : stats.totalSessions) + '</div></div>' +
+      '<div class="metric-pill"><div class="label">' + (st ? 'שיא החזקה' : (bw ? 'שיא חזרות' : 'אימונים')) + '</div><div class="value">' + (st ? esc(formatSecs(stats.currentMaxHold || 0)) : (bw ? (stats.currentMaxReps || 0) : stats.totalSessions)) + '</div></div>' +
       '</div>' +
       charts +
-      '<section class="card"><h2>' + (bw ? 'שיא חזרות לפי עומס' : 'שיא חזרות לפי משקל') + '</h2>' + table + '</section>' +
+      (st ? '' : '<section class="card"><h2>' + (bw ? 'שיא חזרות לפי עומס' : 'שיא חזרות לפי משקל') + '</h2>' + table + '</section>') +
       '<div class="section-title"><h2>היסטוריית אימונים</h2></div>' +
       '<div class="list">' + history + '</div>';
   }
@@ -1509,18 +1559,23 @@
         '</div></div>' +
         '<div class="builder-flags">' +
         '<button type="button" class="chip' + (isBwEx(ex, ex.name) ? ' active' : '') + '" data-action="toggle-tex-bw" data-index="' + i + '">משקל גוף</button>' +
+        '<button type="button" class="chip' + (isStaticEx(ex, ex.name) ? ' active' : '') + '" data-action="toggle-tex-static" data-index="' + i + '">סטטי</button>' +
         '</div>' +
         '<label class="field quick-field"><span>הזנה מהירה</span>' +
-        '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="quick" value="' + esc(P.formatQuick(ex)) + '" placeholder="3×8-12×50" /></label>' +
+        '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="quick" value="' + esc(P.formatQuick(ex)) + '" placeholder="' + (isStaticEx(ex, ex.name) ? '3×45s' : '3×8-12×50') + '" /></label>' +
         '<p class="quick-hint' + (ex._quickError ? ' err' : '') + '" data-quick-hint="' + i + '">' +
-        (ex._quickError ? 'לא הצלחתי לקרוא. נסו 3*8-12*50 או 3x8-12x50' : 'סטים × טווח חזרות × משקל, למשל 3*8-12*50 או 3x8-12') +
+        (ex._quickError
+          ? (isStaticEx(ex, ex.name) ? 'לא הצלחתי לקרוא. נסו 3x45s, 3*45 או 3x1:00' : 'לא הצלחתי לקרוא. נסו 3*8-12*50 או 3x8-12x50')
+          : (isStaticEx(ex, ex.name) ? 'סטים × זמן × תוספת, למשל 3x45s, 3*45 או 3x1:00x10' : 'סטים × טווח חזרות × משקל, למשל 3*8-12*50 או 3x8-12')) +
         '</p>' +
         '<div class="builder-grid">' +
         '<label class="field"><span>סטים</span><input type="number" min="1" data-tex="' + i + '" data-texk="sets" value="' + esc(ex.sets || '') + '" /></label>' +
         '<label class="field"><span>' + (isBwEx(ex, ex.name) ? 'תוספת (ק״ג)' : 'משקל') + '</span>' +
         '<input type="number" min="0" step="0.5" data-tex="' + i + '" data-texk="weight" value="' + esc(ex.weight === 0 ? 0 : (ex.weight || '')) + '" placeholder="' + (isBwEx(ex, ex.name) ? '+ ק״ג' : 'ק״ג, אופציונלי') + '" /></label>' +
-        '<label class="field span-2"><span>טווח חזרות</span><div class="reps-editor">' +
-        '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="repsRange" value="' + esc(P.formatRepsRange(ex)) + '" placeholder="8-12" />' +
+        '<label class="field span-2"><span>' + (isStaticEx(ex, ex.name) ? 'זמן יעד' : 'טווח חזרות') + '</span><div class="reps-editor">' +
+        (isStaticEx(ex, ex.name)
+          ? '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="secsRange" value="' + esc(P.formatDurationRange ? P.formatDurationRange(ex) : '') + '" placeholder="45s" />'
+          : '<input type="text" dir="ltr" inputmode="text" autocomplete="off" data-tex="' + i + '" data-texk="repsRange" value="' + esc(P.formatRepsRange(ex)) + '" placeholder="8-12" />') +
         '<button type="button" class="chip max-chip' + (isMaxReps(ex) ? ' active' : '') + '" data-action="toggle-tex-max" data-index="' + i + '">MAX</button>' +
         '</div></label>' +
         '</div>' +
@@ -1538,7 +1593,7 @@
     const groups = exercisesByMuscle().map(function (g) {
       return '<div class="lib-group"><h3>' + esc(g.label) + '</h3><div class="chips">' +
         g.items.map(function (n) {
-          return '<button type="button" class="chip" data-action="add-tex-name" data-name="' + esc(n) + '">' + esc(n) + (E.isBodyweightName && E.isBodyweightName(n) ? ' <span class="bw-dot">גוף</span>' : '') + '</button>';
+          return '<button type="button" class="chip" data-action="add-tex-name" data-name="' + esc(n) + '">' + esc(n) + (E.isStaticName && E.isStaticName(n) ? ' <span class="bw-dot">סטטי</span>' : '') + (E.isBodyweightName && E.isBodyweightName(n) ? ' <span class="bw-dot">גוף</span>' : '') + '</button>';
         }).join('') + '</div></div>';
     }).join('');
 
@@ -1772,12 +1827,14 @@
         '<div class="ex-row">' +
         '<input type="text" data-ex="' + i + '" data-exk="name" placeholder="תרגיל" autocomplete="off" value="' + esc(ex.name || '') + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="sets" min="0" placeholder="סטים" value="' + esc(ex.sets || '') + '" />' +
-        '<input type="number" data-ex="' + i + '" data-exk="reps" min="0" placeholder="חזרות" value="' + esc(ex.reps || '') + '" />' +
+        '<input type="number" data-ex="' + i + '" data-exk="' + (isStaticEx(ex, ex.name) ? 'secs' : 'reps') + '" min="0" placeholder="' + (isStaticEx(ex, ex.name) ? 'שניות' : 'חזרות') + '" value="' + esc((isStaticEx(ex, ex.name) ? (ex.secs || '') : (ex.reps || ''))) + '" />' +
         '<input type="number" data-ex="' + i + '" data-exk="weight" min="0" step="0.5" placeholder="' + (bw ? '+ ק״ג' : 'ק״ג') + '" value="' + esc(ex.weight || '') + '" />' +
         '<button type="button" class="icon-btn" data-action="remove-ex" data-index="' + i + '" aria-label="מחיקה">×</button>' +
         '</div>' +
         '<div class="builder-flags tight">' +
         '<button type="button" class="chip' + (bw ? ' active' : '') + '" data-action="toggle-sheet-bw" data-index="' + i + '">משקל גוף</button>' +
+        '<button type="button" class="chip' + (isStaticEx(ex, ex.name) ? ' active' : '') + '" data-action="toggle-sheet-static" data-index="' + i + '">סטטי</button>' +
+        (isStaticEx(ex, ex.name) ? staticBadge(ex, ex.name) : '') +
         (bw ? bwBadge(ex, ex.name) : '') +
         '</div>' +
         '<div class="ex-suggest" data-ex-suggest="' + i + '" hidden></div>' +
@@ -1990,18 +2047,31 @@
         return 'סט ' + (si + 1) + ' ' + setShort(s, item) + (s.pr ? ' ⭐' : '');
       }).join(' · ') || 'אין סטים עדיין';
       return '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
-        '<div class="title">' + (i + 1) + '. ' + esc(item.name) + ' ' + maxBadge(item) + ' ' + bwBadge(item, item.name) + (target ? ' · ' + done + '/' + target : '') + '</div>' +
+        '<div class="title">' + (i + 1) + '. ' + esc(item.name) + ' ' + staticBadge(item, item.name) + ' ' + maxBadge(item) + ' ' + bwBadge(item, item.name) + (target ? ' · ' + done + '/' + target : '') + '</div>' +
         '<div class="sub">' + esc(sets) + '</div></button>';
     }).join('');
     const suggest = ex ? (ex.suggestReason || '') : '';
+    const isSt = ex && isStaticEx(ex, ex.name);
+    const hold = L.holdState ? L.holdState() : null;
     const planned = ex && ex.targetSets
       ? '<p class="planned">מתוכנן: ' + ex.targetSets + ' סטים × ' + repsTargetLabel(ex) +
         ' · ' + loadLabel(ex.targetWeight, isBwEx(ex, ex.name)) + '</p>'
       : '';
-    const maxHint = ex && isMaxReps(ex)
+    const maxHint = ex && isSt
+      ? '<p class="max-hint">' + (isMaxReps(ex) ? 'הפעילו את הטיימר והחזיקו עד כשל' : 'הפעילו את הטיימר או הזינו שניות ידנית') +
+        (ex.bestHold ? ' · שיא קודם: <strong>' + formatSecs(ex.bestHold) + '</strong>' : '') +
+        '</p>'
+      : (ex && isMaxReps(ex)
       ? '<p class="max-hint">הזינו כמה חזרות יצאו בפועל' +
         (ex.bestMaxReps ? ' · שיא MAX קודם: <strong>' + ex.bestMaxReps + '</strong> חזרות' : '') +
         '</p>'
+      : '');
+    const holdBanner = (ex && isSt && hold)
+      ? '<div class="rest-banner hold-banner' + (hold.overtime ? ' overtime' : '') + (hold.phase === 'ready' ? ' ready' : '') + '" id="hold-banner">' +
+        '<div class="rest-label">' + (hold.phase === 'ready' ? 'התכוננו' : (hold.overtime ? 'מעבר ליעד' : (hold.isMax ? 'החזקה' : 'נשארו'))) + '</div>' +
+        '<div class="rest-ring-wrap"><div class="rest-count hold-count" id="hold-count">' + esc(hold.display) + '</div></div>' +
+        '<div class="kicker" id="hold-sub">' + (hold.phase === 'ready' ? 'מתחילים בעוד רגע' : (hold.isMax ? 'ספירה קדימה עד שתעצרו' : (hold.overtime ? 'המשיכו או עצרו כדי לרשום' : 'יעד ' + formatSecs(hold.target)))) + '</div>' +
+        '<button type="button" class="btn primary wide" data-action="live-hold-stop">' + (hold.phase === 'ready' ? 'ביטול' : 'עצור ושמור') + '</button></div>'
       : '';
     const setList = ex ? '<ul class="set-list">' +
       (ex.sets.map(function (s, i) {
@@ -2025,7 +2095,7 @@
       '<details class="live-type"' + (sess.templateId ? '' : ' open') + '><summary>סוג אימון</summary><div class="chips">' + chips + '</div></details>' +
       restBar +
       (ex
-        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' + planned + maxHint +
+        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' + planned + maxHint + holdBanner +
           lastHtml +
           (ex.notes ? '<p class="hp-legend">' + esc(ex.notes) + '</p>' : '') +
           (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
@@ -2040,13 +2110,22 @@
           '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="1.25">+1.25</button>' +
           '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="2.5">+2.5</button>' +
           '</div>' + (isBwEx(ex, ex.name) ? '<p class="hp-legend" style="text-align:center;margin-top:6px">0 = בלי תוספת, רק משקל גוף</p>' : '') + '</div>' +
-          '<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'חזרות שהושלמו' : 'חזרות') + '</div>' +
-          '<div class="big-stepper">' +
-          '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="-1">−</button>' +
-          '<div class="step-val" id="live-reps">' + sess.draft.reps + '</div>' +
-          '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="1">+</button>' +
-          '</div></div></div>' +
-          '<button type="button" class="btn primary wide live-log" data-action="live-log">רשום סט ' + (ex.sets.length + 1) + '</button>' +
+          (isSt
+            ? ('<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'שניות שהוחזקו' : 'זמן (שנ׳)') + '</div>' +
+              '<div class="big-stepper">' +
+              '<button type="button" class="step-btn" data-action="live-step" data-field="secs" data-delta="-5">−5</button>' +
+              '<div class="step-val" id="live-secs">' + (sess.draft.secs || 0) + '</div>' +
+              '<button type="button" class="step-btn" data-action="live-step" data-field="secs" data-delta="5">+5</button>' +
+              '</div></div>')
+            : ('<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'חזרות שהושלמו' : 'חזרות') + '</div>' +
+              '<div class="big-stepper">' +
+              '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="-1">−</button>' +
+              '<div class="step-val" id="live-reps">' + sess.draft.reps + '</div>' +
+              '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="1">+</button>' +
+              '</div></div>')) +
+          '</div>' +
+          (isSt && !hold ? '<button type="button" class="btn primary wide live-log live-hold-start" data-action="live-hold-start">התחל טיימר</button>' : '') +
+          (hold ? '' : '<button type="button" class="btn' + (isSt ? '' : ' primary') + ' wide live-log" data-action="live-log">' + (isSt ? 'רשום בלי טיימר · סט ' : 'רשום סט ') + (ex.sets.length + 1) + '</button>') +
           '<div class="live-actions">' +
           (ex.sets.length ? '<button type="button" class="btn" data-action="live-undo">בטל סט</button>' : '') +
           (nxt ? '<button type="button" class="btn" data-action="live-skip">דלג לתרגיל הבא</button>' : '') +
@@ -2068,7 +2147,7 @@
     const sum = ui.liveSummary;
     if (!sum) return '';
     const prs = (sum.prs || []).map(function (p) {
-      return '<li>' + esc(p.name) + ' · ' + p.weight + '×' + p.reps + ' ' + prTags(p.types) + '</li>';
+      return '<li>' + esc(p.name) + ' · ' + (p.secs ? formatSecs(p.secs) : (p.weight + '×' + p.reps)) + ' ' + prTags(p.types) + '</li>';
     }).join('');
     return '<header class="page-head"><h1>אימון הושלם 💪</h1></header>' +
       '<section class="card">' +
@@ -2273,7 +2352,7 @@
     const d = workoutDraft();
     if (!d || !d.date) { toast('יש לבחור תאריך'); return; }
     const exercises = (d.exercises || []).filter(function (e) {
-      return e && (e.name || e.sets || e.reps || e.weight);
+      return e && (e.name || e.sets || e.reps || e.weight || e.secs);
     });
     const payload = {
       date: d.date,
@@ -2394,7 +2473,7 @@
     const ex = ui.editingTemplate.exercises[i];
     if (!ex) return;
     const k = el.dataset.texk;
-    if (k === 'quick' || k === 'repsRange') return;
+    if (k === 'quick' || k === 'repsRange' || k === 'secsRange') return;
     const num = ['sets', 'weight', 'restSec'].indexOf(k) >= 0;
     ex[k] = num ? (el.value === '' ? '' : Number(el.value)) : el.value;
   }
@@ -2403,9 +2482,11 @@
     const hint = document.querySelector('[data-quick-hint="' + i + '"]');
     if (!hint) return;
     hint.classList.toggle('err', !!error);
+    const ex = ui.editingTemplate && ui.editingTemplate.exercises[i];
+    const st = ex && isStaticEx(ex, ex.name);
     hint.textContent = error
-      ? 'לא הצלחתי לקרוא. נסו 3*8-12*50 או 3x8-12x50'
-      : 'סטים × טווח חזרות × משקל, למשל 3*8-12*50 או 3x8-12';
+      ? (st ? 'לא הצלחתי לקרוא. נסו 3x45s, 3*45 או 3x1:00' : 'לא הצלחתי לקרוא. נסו 3*8-12*50 או 3x8-12x50')
+      : (st ? 'סטים × זמן × תוספת, למשל 3x45s, 3*45 או 3x1:00x10' : 'סטים × טווח חזרות × משקל, למשל 3*8-12*50 או 3x8-12');
   }
 
   function refreshTexFields(i, except) {
@@ -2414,11 +2495,13 @@
     if (!ex || !card) return;
     const sets = card.querySelector('[data-texk="sets"]');
     const reps = card.querySelector('[data-texk="repsRange"]');
+    const secs = card.querySelector('[data-texk="secsRange"]');
     const weight = card.querySelector('[data-texk="weight"]');
     const quick = card.querySelector('[data-texk="quick"]');
     const maxChip = card.querySelector('[data-action="toggle-tex-max"]');
     if (sets && except !== 'sets') sets.value = ex.sets == null || ex.sets === '' ? '' : ex.sets;
     if (reps && except !== 'repsRange') reps.value = P.formatRepsRange(ex);
+    if (secs && except !== 'secsRange') secs.value = P.formatDurationRange ? P.formatDurationRange(ex) : '';
     if (weight && except !== 'weight') weight.value = ex.weight === 0 ? 0 : (ex.weight || '');
     if (quick && except !== 'quick') quick.value = P.formatQuick(ex);
     if (maxChip) maxChip.classList.toggle('active', isMaxReps(ex));
@@ -2433,7 +2516,7 @@
     if (!ex) return;
     const k = el.dataset.texk;
     if (k === 'quick') {
-      const parsed = P.parseQuick(el.value);
+      const parsed = P.parseQuick(el.value, { static: isStaticEx(ex, ex.name) });
       if (parsed.empty) {
         ex._quickError = false;
         setQuickHint(i, false);
@@ -2446,6 +2529,13 @@
       }
       ex._quickError = false;
       P.applyParsed(ex, parsed);
+      if (parsed.static) ex.static = true;
+      if (parsed.static === false) { /* keep existing unless user typped a reps shorthand */ if (parsed.repsMin) ex.static = false; }
+      if (parsed.static) {
+        /* field layout changes when becoming static — full re-render is clearer */
+        render();
+        return;
+      }
       refreshTexFields(i, 'quick');
       return;
     }
@@ -2457,7 +2547,29 @@
       refreshTexFields(i, 'repsRange');
       return;
     }
+    if (k === 'secsRange') {
+      const parsed = P.parseDuration(el.value, true);
+      if (parsed.empty) return;
+      if (!parsed.ok) return;
+      if (parsed.max) ex.repsMode = 'max';
+      else {
+        if (ex.repsMode === 'max') ex.repsMode = 'range';
+        ex.secsMin = parsed.secsMin;
+        ex.secsMax = parsed.secsMax;
+        ex.secs = parsed.secs;
+      }
+      refreshTexFields(i, 'secsRange');
+      return;
+    }
     syncTex(el);
+    if (k === 'name' && E.isStaticName && E.isStaticName(ex.name) && !ex.static) {
+      ex.static = true;
+      ex.bodyweight = true;
+      if (!ex.secsMin) ex.secsMin = 45;
+      if (!ex.secsMax) ex.secsMax = ex.secsMin || 45;
+      render();
+      return;
+    }
     if (k === 'sets' || k === 'weight') refreshTexFields(i, k);
   }
 
@@ -2702,13 +2814,17 @@
       const sug = root.FitLive && root.FitLive.planSuggestion ? root.FitLive.planSuggestion(name, '', 8, 12) : { weight: '', reps: 8 };
       const n = String(name).trim();
       const bw = !!(E.isBodyweightName && E.isBodyweightName(n));
+      const st = !!(E.isStaticName && E.isStaticName(n));
       ui.editingTemplate.exercises.push({
         id: 'tex_' + Date.now(), name: n, sets: 3,
         repsMode: 'range',
-        repsMin: sug.reps || 8, repsMax: sug.reps || 12,
-        weight: bw ? (sug.weight || '') : (sug.weight || ''),
+        repsMin: st ? 0 : (sug.reps || 8), repsMax: st ? 0 : (sug.reps || 12),
+        secsMin: st ? (sug.secs || 45) : '',
+        secsMax: st ? (sug.secs || 45) : '',
+        weight: bw || st ? (sug.weight || '') : (sug.weight || ''),
         restSec: '', notes: '', supersetId: '',
-        bodyweight: bw
+        bodyweight: bw || st,
+        static: st
       });
       render();
       return;
@@ -2727,6 +2843,22 @@
       if (!ex) return;
       ex.bodyweight = !isBwEx(ex, ex.name);
       if (ex.bodyweight && (ex.weight === 20 || ex.weight === 20.0)) ex.weight = '';
+      render();
+      return;
+    }
+    if (action === 'toggle-tex-static') {
+      collectTemplateDraft();
+      const ex = ui.editingTemplate.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.static = !isStaticEx(ex, ex.name);
+      if (ex.static) {
+        if (!ex.secsMin) ex.secsMin = 45;
+        if (!ex.secsMax) ex.secsMax = ex.secsMin || 45;
+        if (ex.bodyweight == null || (E.isStaticName && E.isStaticName(ex.name))) ex.bodyweight = true;
+      } else if (!ex.repsMin) {
+        ex.repsMin = 8;
+        ex.repsMax = ex.repsMax || 12;
+      }
       render();
       return;
     }
@@ -2755,6 +2887,18 @@
       const ex = draft.exercises[Number(btn.dataset.index)];
       if (!ex) return;
       ex.bodyweight = !isBwEx(ex, ex.name);
+      renderOverlay();
+      fillLastHints();
+      return;
+    }
+    if (action === 'toggle-sheet-static') {
+      const draft = workoutDraft();
+      if (!draft) return;
+      collectWorkoutDraftFromDom();
+      const ex = draft.exercises[Number(btn.dataset.index)];
+      if (!ex) return;
+      ex.static = !isStaticEx(ex, ex.name);
+      if (ex.static && ex.reps && !ex.secs) { ex.secs = ex.reps; ex.reps = 0; }
       renderOverlay();
       fillLastHints();
       return;
@@ -2988,9 +3132,21 @@
       render();
       return;
     }
+    if (action === 'live-hold-start') {
+      if (!root.FitLive.startHold) return;
+      root.FitLive.startHold();
+      render();
+      return;
+    }
+    if (action === 'live-hold-stop') {
+      const row = root.FitLive.stopHold && root.FitLive.stopHold();
+      if (row && row.pr) toast('שיא חדש! ⭐');
+      render();
+      return;
+    }
     if (action === 'live-log') {
       const row = root.FitLive.logSet();
-      if (!row) { toast('יש להזין משקל או חזרות'); return; }
+      if (!row) { toast('יש להזין משקל, חזרות או זמן'); return; }
       if (row.pr) toast('שיא חדש! ⭐');
       render();
       return;
@@ -3432,6 +3588,24 @@
         } else if (ev.type === 'rest-done') {
           toast('המנוחה נגמרה');
           render();
+        } else if (ev.type === 'hold' || ev.type === 'hold-phase') {
+          const el = document.getElementById('hold-count');
+          if (ev.type === 'hold-phase' || !el) {
+            render();
+            return;
+          }
+          if (el && ev.state) el.textContent = ev.state.display;
+          const banner = document.getElementById('hold-banner');
+          if (banner && ev.state) {
+            banner.classList.toggle('overtime', !!ev.state.overtime);
+            banner.classList.toggle('ready', ev.state.phase === 'ready');
+          }
+          const sub = document.getElementById('hold-sub');
+          if (sub && ev.state) {
+            sub.textContent = ev.state.phase === 'ready' ? 'מתחילים בעוד רגע'
+              : (ev.state.isMax ? 'ספירה קדימה עד שתעצרו'
+              : (ev.state.overtime ? 'המשיכו או עצרו כדי לרשום' : ('יעד ' + formatSecs(ev.state.target))));
+          }
         }
       });
       document.addEventListener('visibilitychange', function () {

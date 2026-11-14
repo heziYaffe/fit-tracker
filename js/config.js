@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '12';
+  const APP_VERSION = '13';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -154,14 +154,40 @@
     'הרמות רגליים בתלייה': { primary: ['abs'], secondary: [] },
     'כפיפות בטן': { primary: ['abs'], secondary: [] },
     'סקוואט משקל גוף': { primary: ['quads'], secondary: ['glutes'] },
-    'מכרעים': { primary: ['quads'], secondary: ['glutes', 'hamstrings'] }
+    'מכרעים': { primary: ['quads'], secondary: ['glutes', 'hamstrings'] },
+    'פלאנק': { primary: ['abs'], secondary: ['shoulders'] },
+    'פלאנק צד': { primary: ['abs'], secondary: ['shoulders'] },
+    'תלייה': { primary: ['forearms'], secondary: ['lats', 'shoulders'] },
+    'וול סיט': { primary: ['quads'], secondary: ['glutes'] },
+    'L-sit': { primary: ['abs'], secondary: ['quads', 'shoulders'] },
+    'אל-סיט': { primary: ['abs'], secondary: ['quads', 'shoulders'] },
+    'הולו הולד': { primary: ['abs'], secondary: [] },
+    'הולוו הולד': { primary: ['abs'], secondary: [] }
   };
 
   const BODYWEIGHT_EXERCISES = [
     'מתח', 'מתח צר', 'מתח אוסטרלי', 'מקבילים', 'שכיבות סמיכה',
     'שכיבות סמיכה יהלום', 'שכיבות סמיכה בעמידת ידיים',
-    'הרמות רגליים בתלייה', 'כפיפות בטן', 'סקוואט משקל גוף', 'מכרעים'
+    'הרמות רגליים בתלייה', 'כפיפות בטן', 'סקוואט משקל גוף', 'מכרעים',
+    'פלאנק', 'פלאנק צד', 'תלייה', 'וול סיט', 'L-sit', 'אל-סיט', 'הולו הולד', 'הולוו הולד'
   ];
+
+  const STATIC_EXERCISES = [
+    'פלאנק', 'פלאנק צד', 'תלייה', 'וול סיט', 'L-sit', 'אל-סיט', 'הולו הולד', 'הולוו הולד'
+  ];
+
+  function isStaticName(name) {
+    const n = String(name || '').trim();
+    if (!n) return false;
+    if (STATIC_EXERCISES.indexOf(n) >= 0) return true;
+    if (/^פלאנק/.test(n)) return true;
+    if (/^וול סיט|^wall\s*sit/i.test(n)) return true;
+    if (/^(l-sit|אל-סיט|אל סיט)/i.test(n)) return true;
+    if (/^הולוו?\s*הולד|^hollow/i.test(n)) return true;
+    if (/^תלייה/.test(n)) return true;
+    if (/dead\s*hang/i.test(n)) return true;
+    return false;
+  }
 
   const BODYWEIGHT_NAME_RE = /מתח|מקבילים|שכיבות סמיכה|כפיפות בטן|מכרעים|הרמות רגליים|סקוואט משקל גוף/;
 
@@ -231,6 +257,8 @@
     EXERCISE_MUSCLES,
     BODYWEIGHT_EXERCISES,
     isBodyweightName,
+    STATIC_EXERCISES,
+    isStaticName,
     STARTER_FOODS,
     DAY_NAMES,
     MEAL_SLOTS

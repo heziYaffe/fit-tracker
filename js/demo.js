@@ -101,6 +101,11 @@
         [3, 15, 40], [3, 15, 40], [3, 15, 45], [3, 15, 45],
         [3, 15, 50], [3, 15, 50], [3, 15, 55], [3, 15, 55],
         [3, 15, 60], [3, 15, 60], [3, 15, 60], [3, 15, 65]
+      ],
+      'פלאנק': [
+        [3, 30, 0], [3, 35, 0], [3, 40, 0], [3, 40, 0],
+        [3, 45, 0], [3, 45, 0], [3, 50, 0], [3, 50, 0],
+        [3, 55, 0], [3, 60, 0], [3, 60, 0], [3, 70, 0]
       ]
     };
     const plan = plans[name];
@@ -123,7 +128,12 @@
       if (!counters[name]) counters[name] = 0;
       const rec = pickPlan(name, counters[name]);
       counters[name] += 1;
-      const bw = !!(root.FitConfig && root.FitConfig.isBodyweightName && root.FitConfig.isBodyweightName(name));
+      const Cfg = root.FitConfig;
+      const bw = !!(Cfg && Cfg.isBodyweightName && Cfg.isBodyweightName(name));
+      const st = !!(Cfg && Cfg.isStaticName && Cfg.isStaticName(name));
+      if (st) {
+        return { name: name, sets: rec.sets, reps: 0, weight: rec.weight, secs: rec.reps, static: true, bodyweight: true };
+      }
       return { name: name, sets: rec.sets, reps: rec.reps, weight: rec.weight, bodyweight: bw };
     }
 
@@ -164,7 +174,7 @@
       } else {
         type = 'legs';
         duration = 70;
-        exercises = [addEx('סקוואט'), addEx('לחיצת רגליים'), addEx('מתנייחים'), addEx('כפיפת רגליים'), addEx('עליות שוקיים')];
+        exercises = [addEx('סקוואט'), addEx('לחיצת רגליים'), addEx('מתנייחים'), addEx('כפיפת רגליים'), addEx('עליות שוקיים'), addEx('פלאנק')];
         if (counters['סקוואט'] === 12) notes = 'סקוואט 120 ק״ג, 5×5';
       }
       wIndex += 1;
@@ -251,7 +261,10 @@
         restSec: rest,
         notes: '',
         supersetId: ss || '',
-        bodyweight: bw
+        bodyweight: bw,
+        static: !!opts.static,
+        secsMin: opts.secsMin != null ? opts.secsMin : (opts.static ? rmin : ''),
+        secsMax: opts.secsMax != null ? opts.secsMax : (opts.static ? rmax : '')
       };
     }
 
@@ -293,7 +306,8 @@
           tex('l2', 'לחיצת רגליים', 3, 10, 12, 180, 120),
           tex('l3', 'מתנייחים', 3, 8, 8, 87.5, 90),
           tex('l4', 'כפיפת רגליים', 3, 10, 12, 45, 75),
-          tex('l5', 'עליות שוקיים', 3, 12, 15, 65, 60)
+          tex('l5', 'עליות שוקיים', 3, 12, 15, 65, 60),
+          tex('l6', 'פלאנק', 3, 45, 45, '', 60, '', { static: true, bodyweight: true, secsMin: 45, secsMax: 45 })
         ]
       }
     ];

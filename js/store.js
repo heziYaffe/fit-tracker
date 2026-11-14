@@ -58,18 +58,27 @@
     const rawWeight = (ex.weight != null && ex.weight !== '') ? ex.weight
       : ((ex.targetWeight != null && ex.targetWeight !== '') ? ex.targetWeight : '');
     const rest = (ex.restSec === '' || ex.restSec == null) ? '' : Number(ex.restSec);
+    const isStatic = ex.static == null
+      ? !!(C.isStaticName && C.isStaticName(name))
+      : !!ex.static;
+    const secsDefault = 45;
+    const secsMinRaw = ex.secsMin != null && ex.secsMin !== '' ? ex.secsMin : ex.secs;
+    const secsMaxRaw = ex.secsMax != null && ex.secsMax !== '' ? ex.secsMax : secsMinRaw;
     return {
       id: ex.id || uid(),
       name: name,
       sets: Number(ex.sets) || 3,
       repsMode: parseRepsMode(ex),
-      repsMin: numReps(ex.repsMin, 8),
-      repsMax: numReps(ex.repsMax, 12),
+      repsMin: isStatic ? numReps(ex.repsMin, 0) : numReps(ex.repsMin, 8),
+      repsMax: isStatic ? numReps(ex.repsMax, 0) : numReps(ex.repsMax, 12),
+      secsMin: isStatic ? numReps(secsMinRaw, secsDefault) : (secsMinRaw === '' || secsMinRaw == null ? '' : numReps(secsMinRaw, '')),
+      secsMax: isStatic ? numReps(secsMaxRaw, secsDefault) : (secsMaxRaw === '' || secsMaxRaw == null ? '' : numReps(secsMaxRaw, '')),
       weight: rawWeight === '' ? '' : (Number.isFinite(Number(rawWeight)) ? Number(rawWeight) : ''),
       restSec: rest === '' || !Number.isFinite(rest) ? '' : rest,
       notes: ex.notes || '',
       supersetId: ex.supersetId || '',
-      bodyweight: bodyweight
+      bodyweight: bodyweight,
+      static: isStatic
     };
   }
 
