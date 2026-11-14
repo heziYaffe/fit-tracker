@@ -13,6 +13,8 @@
     modal: null,
     toastTimer: 0,
     exerciseName: null,
+    view: null,
+    summaryStart: null,
     exerciseBack: 'progress',
     exerciseSort: 'recent',
     editingTemplate: null,
@@ -511,6 +513,7 @@
       '<button type="button" class="btn" data-action="open-metrics">+ מדדים</button>' +
       '</div>' +
 
+      renderWeeklyCard(s) +
       renderMiniBodyMap(s) +
       renderRecentPRs(s) +
       renderFoodsStrip(E.todayISO()) +
@@ -776,6 +779,7 @@
     const badges = E.computeAchievements(s, xp);
 
     return pageHead('<h1>התקדמות</h1>') +
+      '<button type="button" class="card weekly-card" data-action="open-summary"><p class="kicker">סיכום שבועי</p><h2>שיאים, נפח והמלצות</h2><p class="linkish">פתחו את הסיכום לשיתוף</p></button>' +
       renderBodyMapCard(s, false) +
       '<section class="card"><h2>אימונים לפי שבוע</h2>' +
       Charts.barChart({
@@ -807,6 +811,244 @@
       '</div></section>' +
       '<section class="card"><h2>הישגים</h2><div class="badges">' + badges.map(renderBadge).join('') + '</div></section>' +
       renderExerciseLibrary(s);
+  }
+
+
+  function summaryStats(s, now) {
+    if (!root.FitSummary) return null;
+    now = now || new Date();
+    let range;
+    if (ui.summaryStart && E.parseISO) {
+      const start = ui.summaryStart;
+      const end = E.addDays(start, 6);
+      const today = E.todayISO(now);
+      range = { start: start, end: end > today ? today : end, kind: end > today ? 'partial' : 'complete' };
+    }
+    return root.FitSummary.compute(s, now, range);
+  }
+
+  function changeLabel(change) {
+    if (change == null) return 'אין בסיס להשוואה';
+    const rnd = Math.round(change);
+    const sign = rnd > 0 ? '+' : '';
+    return sign + rnd + '% מול השבוע הקודם';
+  }
+
+  function changeShort(change) {
+    if (change == null) return '—';
+    const rnd = Math.round(change);
+    return (rnd > 0 ? '+' : '') + rnd + '%';
+  }
+
+  function renderWeeklyCard(s) {
+    if (!root.FitSummary || !root.FitSummary.isSunday(new Date())) return '';
+    const stats = root.FitSummary.compute(s, new Date(), root.FitSummary.lastCompleteWeek(new Date()));
+    const prN = (stats.prs || []).length;
+    return '<button type="button" class="card weekly-card" data-action="open-summary" data-start="' + esc(stats.start) + '">' +
+      '<p class="kicker">סיכום שבועי</p>' +
+      '<h2>השבוע שעבר</h2>' +
+      '<p class="hp-legend">' + esc(root.FitSummary.formatRange(stats)) + '</p>' +
+      '<div class="weekly-mini">' +
+      '<span>' + stats.workouts + ' אימונים</span>' +
+      '<span>' + prN + ' שיאים</span>' +
+      '<span>נפח ' + esc(changeShort(stats.volumeChange)) + '</span>' +
+      '</div>' +
+      '<p class="linkish">לצפייה ולשיתוף</p>' +
+      '</button>';
+  }
+
+  function renderSummary() {
+    const s = state();
+    const stats = summaryStats(s);
+    if (!stats) {
+      return pageHead('<h1>סיכום שבועי</h1>', '<button type="button" class="btn" data-action="tab" data-tab="progress">חזרה</button>', { noGear: true }) +
+        '<div class="empty card"><p>אין עדיין מספיק נתונים לסיכום.</p></div>';
+    }
+    const prevStart = E.addDays(stats.start, -7);
+    const nextStart = E.addDays(stats.start, 7);
+    const today = E.todayISO();
+    const canNext = nextStart <= today;
+    const prList = (stats.prs || []).slice(0, 8).map(function (p) {
+      return '<li>' + esc(p.name) + ' · ' + esc(E.formatDay(p.date)) + '</li>';
+    }).join('') || '<li class="muted">אין שיאים חדשים השבוע</li>';
+    const stalled = (stats.stalled || []).slice(0, 5).map(function (p) {
+      return '<li>' + esc(p.name) + ' · ' + p.days + ' ימים</li>';
+    }).join('') || '<li class="muted">אין תרגילים שנתקעו</li>';
+    const neglected = (stats.neglected || []).slice(0, 6).map(function (m) {
+      return '<li>' + esc(m.label) + '</li>';
+    }).join('') || '<li class="muted">כיסוי טוב לשרירים</li>';
+    const nutr = stats.nutrition || { hits: 0, days: 0, rate: 0 };
+    const tips = (stats.tips || []).map(function (tip) {
+      return '<li class="tip-item">' + esc(tip.text) + '</li>';
+    }).join('');
+    const title = stats.kind === 'partial' ? 'השבוע עד כה' : 'סיכום שבועי';
+    return pageHead('<div><p class="kicker">' + esc(root.FitSummary.formatRange(stats)) + '</p><h1>' + title + '</h1></div>',
+      '<button type="button" class="btn" data-action="tab" data-tab="progress">חזרה</button>', { noGear: true }) +
+      '<div class="date-nav">' +
+      '<button type="button" class="icon-btn" data-action="summary-week" data-start="' + esc(prevStart) + '" aria-label="שבוע קודם">→</button>' +
+      '<div>' + esc(root.FitSummary.formatRange(stats)) + '</div>' +
+      '<button type="button" class="icon-btn"' + (canNext ? ' data-action="summary-week" data-start="' + esc(nextStart) + '"' : ' disabled') + ' aria-label="שבוע הבא">←</button>' +
+      '</div>' +
+      '<div class="summary-grid">' +
+      '<div class="card stat-tile"><div class="kicker">אימונים</div><div class="big">' + stats.workouts + '</div></div>' +
+      '<div class="card stat-tile"><div class="kicker">שיאים</div><div class="big">' + (stats.prs || []).length + '</div></div>' +
+      '<div class="card stat-tile"><div class="kicker">נפח מול שבוע קודם</div><div class="big">' + esc(changeShort(stats.volumeChange)) + '</div></div>' +
+      '<div class="card stat-tile"><div class="kicker">XP</div><div class="big">' + ltr(String(stats.xp || 0)) + '</div></div>' +
+      '</div>' +
+      '<section class="card"><h2>תזונה ושינה</h2>' +
+      '<p>חלבון: ' + nutr.hits + ' מתוך ' + nutr.days + ' ימים (' + Math.round((nutr.rate || 0) * 100) + '%)</p>' +
+      '<p>שינה ממוצעת: ' + (stats.sleepAvg != null ? stats.sleepAvg.toFixed(1) + ' שעות' : 'אין נתונים') + '</p>' +
+      '<p>התאוששות ממוצעת: ' + (stats.recoveryAvg != null ? Math.round(stats.recoveryAvg) + '%' : 'אין נתונים') + '</p>' +
+      '<p>רצף בסוף השבוע: ' + stats.streak + ' ימים</p>' +
+      '</section>' +
+      '<section class="card"><h2>שיאים שנשברו</h2><ul class="summary-list">' + prList + '</ul></section>' +
+      '<section class="card"><h2>תרגילים שנתקעו</h2><ul class="summary-list">' + stalled + '</ul></section>' +
+      '<section class="card"><h2>שרירים שהוזנחו</h2><ul class="summary-list">' + neglected + '</ul></section>' +
+      '<section class="card"><h2>המלצות לשבוע הבא</h2><ul class="tips">' + tips + '</ul></section>' +
+      '<button type="button" class="btn primary wide" data-action="share-summary">שיתוף הסיכום</button>' +
+      '<div class="share-preview-wrap card"><p class="kicker">תצוגה לשיתוף</p><canvas id="summary-canvas" width="1080" height="1920"></canvas></div>';
+  }
+
+  function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = String(text || '').split(' ');
+    let line = '';
+    const lines = [];
+    words.forEach(function (word) {
+      const test = line ? line + ' ' + word : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else line = test;
+    });
+    if (line) lines.push(line);
+    lines.forEach(function (ln, i) { ctx.fillText(ln, x, y + i * lineHeight); });
+    return lines.length * lineHeight;
+  }
+
+  function paintSummaryCanvas(canvas, stats) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    const bg = ctx.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#1b1028');
+    bg.addColorStop(1, '#0c0714');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(211,107,255,0.18)';
+    ctx.beginPath(); ctx.arc(900, -40, 420, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,61,206,0.10)';
+    ctx.beginPath(); ctx.arc(120, 1800, 380, 0, Math.PI * 2); ctx.fill();
+    ctx.direction = 'rtl';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#b49cc8';
+    ctx.font = '600 36px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    ctx.fillText('פיט', w - 80, 110);
+    ctx.fillStyle = '#f3eaff';
+    ctx.font = '800 86px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    ctx.fillText(stats.kind === 'partial' ? 'השבוע עד כה' : 'סיכום שבועי', w - 80, 210);
+    ctx.fillStyle = '#d36bff';
+    ctx.font = '600 36px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    ctx.fillText(root.FitSummary.formatRange(stats), w - 80, 270);
+    function tile(x, y, label, value) {
+      ctx.fillStyle = '#1b1028';
+      roundRect(ctx, x, y, 440, 200, 32);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(200,120,255,0.28)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = '#b49cc8';
+      ctx.font = '600 30px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(label, x + 400, y + 60);
+      ctx.fillStyle = '#f3eaff';
+      ctx.font = '800 56px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+      ctx.fillText(String(value), x + 400, y + 140);
+    }
+    tile(80, 340, 'אימונים', stats.workouts);
+    tile(560, 340, 'שיאים', (stats.prs || []).length);
+    tile(80, 570, 'נפח מול שבוע קודם', changeShort(stats.volumeChange));
+    tile(560, 570, 'XP', stats.xp || 0);
+    // nutrition + streak
+    ctx.fillStyle = '#1b1028';
+    roundRect(ctx, 80, 810, 920, 260, 32); ctx.fill();
+    ctx.strokeStyle = 'rgba(200,120,255,0.28)'; ctx.stroke();
+    ctx.fillStyle = '#f3eaff';
+    ctx.font = '700 40px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    const nutr = stats.nutrition || { hits: 0, days: 0 };
+    ctx.fillText('חלבון ' + nutr.hits + '/' + nutr.days + '  ·  רצף ' + stats.streak, w - 120, 890);
+    ctx.fillStyle = '#b49cc8';
+    ctx.font = '600 32px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    const sleep = stats.sleepAvg != null ? ('שינה ' + stats.sleepAvg.toFixed(1) + ' שע׳') : 'אין שינה מתועדת';
+    const rec = stats.recoveryAvg != null ? ('התאוששות ' + Math.round(stats.recoveryAvg) + '%') : 'אין התאוששות';
+    ctx.fillText(sleep + '  ·  ' + rec, w - 120, 970);
+    // tips
+    ctx.fillStyle = '#f3eaff';
+    ctx.font = '800 44px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    ctx.fillText('המלצות', w - 80, 1160);
+    let y = 1220;
+    ctx.font = '600 34px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    (stats.tips || []).forEach(function (tip) {
+      ctx.fillStyle = '#d36bff';
+      ctx.fillText('●', w - 80, y);
+      ctx.fillStyle = '#f3eaff';
+      const used = wrapCanvasText(ctx, tip.text, w - 130, y, 860, 48);
+      y += Math.max(used, 48) + 28;
+    });
+    ctx.fillStyle = '#806894';
+    ctx.font = '600 28px "Noto Sans Hebrew","Arial Hebrew",sans-serif';
+    ctx.fillText('heziyaffe.github.io/fit-tracker', w - 80, h - 80);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function paintSummaryPreview() {
+    const canvas = document.getElementById('summary-canvas');
+    if (!canvas || !root.FitSummary) return;
+    const stats = summaryStats(state());
+    if (stats) paintSummaryCanvas(canvas, stats);
+  }
+
+  function shareSummary() {
+    const stats = summaryStats(state());
+    if (!stats) { toast('אין סיכום לשיתוף'); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1920;
+    paintSummaryCanvas(canvas, stats);
+    const text = root.FitSummary.shareText(stats);
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      const file = new File([blob], 'fit-weekly.png', { type: 'image/png' });
+      const tryShare = function () {
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          return navigator.share({ files: [file], title: 'סיכום שבועי', text: text });
+        }
+        if (navigator.share) return navigator.share({ title: 'סיכום שבועי', text: text });
+        return Promise.reject();
+      };
+      Promise.resolve()
+        .then(tryShare)
+        .catch(function (err) {
+          if (err && err.name === 'AbortError') return;
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'fit-weekly.png';
+          a.click();
+          toast('התמונה ירדה. אפשר לשתף אותה מהגלריה.');
+        });
+    }, 'image/png');
   }
 
   function renderExerciseLibrary(s) {
@@ -1604,6 +1846,7 @@
     else if (liveOn) html += renderLive();
     else if (ui.editingTemplate) html += renderTemplateEditor();
     else if (ui.editingMenu) html += renderMenuEditor();
+    else if (ui.view === 'summary') html += renderSummary();
     else if (ui.exerciseName) html += renderExerciseDetail();
     else if (ui.tab === 'home') html += renderHome();
     else if (ui.tab === 'workouts') html += renderWorkouts();
@@ -1614,6 +1857,7 @@
     document.body.classList.toggle('is-demo', Store.isDemoMode());
     document.body.classList.toggle('is-live', liveOn);
     document.body.classList.toggle('is-builder', !!(ui.editingTemplate || ui.editingMenu));
+    paintSummaryPreview();
 
     document.querySelectorAll('.tab').forEach(function (btn) {
       const activeTab = liveOn ? 'workouts' : (ui.exerciseName ? 'progress' : ui.tab);
@@ -1890,6 +2134,22 @@
     if (action === 'tab') { setTab(btn.dataset.tab); return; }
     if (action === 'close') { closeModal(); return; }
     if (action === 'set-theme') { applyTheme(btn.dataset.theme); render(); haptic(8); return; }
+    if (action === 'open-summary') {
+      ui.view = 'summary';
+      ui.summaryStart = btn.dataset.start || null;
+      try { location.hash = '#/summary' + (ui.summaryStart ? '/' + ui.summaryStart : ''); } catch (e) {}
+      render();
+      return;
+    }
+    if (action === 'summary-week') {
+      ui.view = 'summary';
+      ui.summaryStart = btn.dataset.start || null;
+      try { location.hash = '#/summary' + (ui.summaryStart ? '/' + ui.summaryStart : ''); } catch (e) {}
+      render();
+      return;
+    }
+    if (action === 'share-summary') { shareSummary(); return; }
+
     if (action === 'notify-request') {
       if (!window.FitNotify) return;
       FitNotify.requestPermission().then(function (perm) {
@@ -2559,6 +2819,14 @@
       return;
     }
     ui.exerciseName = null;
+    ui.view = null;
+    if (tab === 'summary') {
+      ui.tab = 'progress';
+      ui.view = 'summary';
+      ui.summaryStart = parts[1] || null;
+      return;
+    }
+    ui.summaryStart = null;
     if (tab === 'live') {
       ui.tab = 'live';
       return;
