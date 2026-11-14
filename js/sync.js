@@ -148,10 +148,11 @@
   function sendMagicLink(email, redirectTo) {
     if (!isConfigured()) return Promise.reject(new Error('not-configured'));
     const c = cfg();
-    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/magiclink', {
+    const back = redirectTo || (location.origin + location.pathname.replace(/index\.html$/, ''));
+    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/otp?redirect_to=' + encodeURIComponent(back), {
       method: 'POST',
       headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email, options: { emailRedirectTo: redirectTo || (location.origin + location.pathname) } })
+      body: JSON.stringify({ email: email, create_user: true })
     }).then(function (res) {
       if (!res.ok) return res.json().then(function (b) { throw new Error((b && b.msg) || 'magiclink failed'); });
       return { ok: true };
