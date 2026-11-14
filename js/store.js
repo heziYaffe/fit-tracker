@@ -125,10 +125,28 @@
       foods: starterFoods(),
       templates: [],
       menus: [],
-      dayMenus: []
+      dayMenus: [],
+      measures: []
     };
   }
 
+
+
+  function normalizeMeasureRow(m) {
+    m = m || {};
+    const P = root.FitPhotos;
+    if (P && P.normalizeMeasure) return P.normalizeMeasure(m);
+    return {
+      id: m.id || uid(),
+      date: m.date || '',
+      waist: m.waist === '' || m.waist == null ? '' : Number(m.waist),
+      chest: m.chest === '' || m.chest == null ? '' : Number(m.chest),
+      arm: m.arm === '' || m.arm == null ? '' : Number(m.arm),
+      thigh: m.thigh === '' || m.thigh == null ? '' : Number(m.thigh),
+      hips: m.hips === '' || m.hips == null ? '' : Number(m.hips),
+      notes: m.notes || ''
+    };
+  }
 
   function normalizeSettings(set) {
     set = set || {};
@@ -171,7 +189,8 @@
       foods: foods,
       templates: Array.isArray(raw.templates) ? raw.templates.map(normalizeTemplate) : [],
       menus: Array.isArray(raw.menus) ? raw.menus.map(normalizeMenu) : [],
-      dayMenus: Array.isArray(raw.dayMenus) ? raw.dayMenus : []
+      dayMenus: Array.isArray(raw.dayMenus) ? raw.dayMenus : [],
+      measures: Array.isArray(raw.measures) ? raw.measures.map(normalizeMeasureRow) : []
     };
   }
 
@@ -657,6 +676,25 @@
     return applyMenuToDate(menu.id, date);
   }
 
+
+  function listMeasures() {
+    return (state.measures || []).slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  }
+
+  function upsertMeasure(row) {
+    row = normalizeMeasureRow(Object.assign({ id: uid(), date: root.FitEngine.todayISO() }, row || {}));
+    const i = state.measures.findIndex(function (m) { return m.id === row.id || (m.date === row.date && !row._forceNew); });
+    if (i >= 0) state.measures[i] = Object.assign({}, state.measures[i], row, { id: state.measures[i].id });
+    else state.measures.push(row);
+    commit();
+    return row;
+  }
+
+  function deleteMeasure(id) {
+    state.measures = (state.measures || []).filter(function (m) { return m.id !== id; });
+    commit();
+  }
+
   function exportJSON() {
     return {
       app: 'fit-tracker',
@@ -671,7 +709,8 @@
         foods: state.foods,
         templates: state.templates,
         menus: state.menus,
-        dayMenus: state.dayMenus
+        dayMenus: state.dayMenus,
+        measures: state.measures
       }
     };
   }
@@ -679,7 +718,7 @@
   function importJSON(payload) {
     const raw = payload && payload.data ? payload.data : payload;
     if (!raw || typeof raw !== 'object') throw new Error('invalid');
-    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus;
+    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus || raw.measures;
     if (!hasAny) throw new Error('invalid');
     state = normalize(raw);
     commit();
@@ -743,6 +782,9 @@
     autoApplyMenu: autoApplyMenu,
     mealTotals: mealTotals,
     menuTotals: menuTotals,
+    listMeasures: listMeasures,
+    upsertMeasure: upsertMeasure,
+    deleteMeasure: deleteMeasure,
     normalizeTemplate: normalizeTemplate,
     normalizeMenu: normalizeMenu
   };

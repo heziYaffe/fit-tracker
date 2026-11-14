@@ -15,6 +15,13 @@
     exerciseName: null,
     view: null,
     summaryStart: null,
+    photoList: null,
+    photoUrls: {},
+    measureKey: 'waist',
+    compareMode: 'side',
+    compareA: null,
+    compareB: null,
+    comparePos: 50,
     exerciseBack: 'progress',
     exerciseSort: 'recent',
     editingTemplate: null,
@@ -780,6 +787,7 @@
 
     return pageHead('<h1>התקדמות</h1>') +
       '<button type="button" class="card weekly-card" data-action="open-summary"><p class="kicker">סיכום שבועי</p><h2>שיאים, נפח והמלצות</h2><p class="linkish">פתחו את הסיכום לשיתוף</p></button>' +
+      '<button type="button" class="card weekly-card" data-action="open-body"><p class="kicker">גוף</p><h2>תמונות ומדידות היקפים</h2><p class="linkish">לפני/אחרי, שכבת רפאים ומעקב היקפים</p></button>' +
       renderBodyMapCard(s, false) +
       '<section class="card"><h2>אימונים לפי שבוע</h2>' +
       Charts.barChart({
@@ -838,6 +846,139 @@
     if (change == null) return '—';
     const rnd = Math.round(change);
     return (rnd > 0 ? '+' : '') + rnd + '%';
+  }
+
+
+  function revokePhotoUrls() {
+    Object.keys(ui.photoUrls || {}).forEach(function (id) {
+      try { URL.revokeObjectURL(ui.photoUrls[id]); } catch (e) {}
+    });
+    ui.photoUrls = {};
+  }
+
+  function photoSrc(row) {
+    if (!row) return '';
+    if (ui.photoUrls[row.id]) return ui.photoUrls[row.id];
+    if (!row.blob) return '';
+    const url = URL.createObjectURL(row.blob);
+    ui.photoUrls[row.id] = url;
+    return url;
+  }
+
+  function loadPhotos(force) {
+    if (!window.FitPhotos) { ui.photoList = []; return Promise.resolve([]); }
+    if (ui.photoList && !force) return Promise.resolve(ui.photoList);
+    return FitPhotos.listPhotos().then(function (rows) {
+      revokePhotoUrls();
+      ui.photoList = rows || [];
+      render();
+      return ui.photoList;
+    }).catch(function () { ui.photoList = []; return []; });
+  }
+
+  function saveMeasureForm() {
+    const dateEl = document.getElementById('measure-date');
+    const row = { date: dateEl ? dateEl.value : E.todayISO() };
+    const fields = window.FitPhotos ? FitPhotos.measureFields() : [];
+    fields.forEach(function (f) {
+      const el = document.getElementById('measure-' + f.key);
+      row[f.key] = el && el.value !== '' ? Number(el.value) : '';
+    });
+    const has = fields.some(function (f) { return row[f.key] !== ''; });
+    if (!has) { toast('יש להזין לפחות היקף אחד'); return; }
+    Store.upsertMeasure(row);
+    toast('המדידה נשמרה');
+    render();
+  }
+
+  function poseLabel(pose) {
+    return pose === 'side' ? 'צד' : (pose === 'back' ? 'אחורי' : 'קדמי');
+  }
+
+  function renderBody() {
+    const fields = window.FitPhotos ? FitPhotos.measureFields() : [];
+    const measures = Store.listMeasures ? Store.listMeasures() : [];
+    const key = ui.measureKey || 'waist';
+    const field = fields.find(function (f) { return f.key === key; }) || fields[0] || { key: 'waist', label: 'מותן' };
+    const labels = measures.slice().reverse().map(function (m) { return E.formatDay(m.date); });
+    const values = measures.slice().reverse().map(function (m) { return m[field.key]; });
+    const chart = labels.length
+      ? Charts.lineChart({ labels: labels, values: values, color: 'var(--accent)', tighten: true })
+      : '<p class="hp-legend">עדיין אין מדידות לגרף.</p>';
+    const hist = measures.map(function (m) {
+      const bits = fields.map(function (f) {
+        return m[f.key] !== '' && m[f.key] != null ? (f.label + ' ' + m[f.key]) : '';
+      }).filter(Boolean).join(' · ');
+      return '<div class="measure-row"><div><div class="meta">' + esc(E.formatDay(m.date)) + '</div><div>' + esc(bits || '—') + '</div></div>' +
+        '<button type="button" class="linkish" data-action="del-measure" data-id="' + esc(m.id) + '">מחיקה</button></div>';
+    }).join('') || '<p class="hp-legend">טרם נשמרו היקפים.</p>';
+    const form = fields.map(function (f) {
+      return '<label class="field"><span>' + esc(f.label) + ' (ס״מ)</span>' +
+        '<input type="number" min="20" max="200" step="0.5" inputmode="decimal" id="measure-' + f.key + '" /></label>';
+    }).join('');
+    const chips = fields.map(function (f) {
+      return '<button type="button" class="chip' + (f.key === field.key ? ' active' : '') + '" data-action="measure-chart" data-key="' + f.key + '">' + esc(f.label) + '</button>';
+    }).join('');
+    const photos = ui.photoList || [];
+    const thumbs = photos.map(function (ph) {
+      const onA = ui.compareA === ph.id ? ' on' : '';
+      const onB = ui.compareB === ph.id ? ' on' : '';
+      return '<div class="photo-card">' +
+        '<img alt="" src="' + photoSrc(ph) + '" />' +
+        '<div class="meta">' + esc(E.formatDay(ph.date)) + ' · ' + poseLabel(ph.pose) + '</div>' +
+        '<div class="photo-actions">' +
+        '<button type="button" class="chip' + onA + '" data-action="compare-pick" data-slot="a" data-id="' + esc(ph.id) + '">לפני</button>' +
+        '<button type="button" class="chip' + onB + '" data-action="compare-pick" data-slot="b" data-id="' + esc(ph.id) + '">אחרי</button>' +
+        '<button type="button" class="linkish" data-action="del-photo" data-id="' + esc(ph.id) + '">מחיקה</button>' +
+        '</div></div>';
+    }).join('') || '<p class="hp-legend">אין עדיין תמונות. הוסיפו תמונה שבועית, רצוי באותה תאורה וזווית.</p>';
+    const photoA = photos.find(function (p) { return p.id === ui.compareA; }) || photos[photos.length - 1] || null;
+    const photoB = photos.find(function (p) { return p.id === ui.compareB; }) || photos[0] || null;
+    if (photoA && !ui.compareA) ui.compareA = photoA.id;
+    if (photoB && !ui.compareB && photoB !== photoA) ui.compareB = photoB.id;
+    let compare = '<p class="hp-legend">בחרו שתי תמונות להשוואה.</p>';
+    if (photoA && photoB && photoA.id !== photoB.id) {
+      const srcA = photoSrc(photoA);
+      const srcB = photoSrc(photoB);
+      const modes = ['side', 'slider', 'ghost'].map(function (m) {
+        const label = m === 'side' ? 'זה לצד זה' : (m === 'slider' ? 'סליידר' : 'שכבת רפאים');
+        return '<button type="button" class="chip' + (ui.compareMode === m ? ' active' : '') + '" data-action="compare-mode" data-mode="' + m + '">' + label + '</button>';
+      }).join('');
+      let stage = '';
+      if (ui.compareMode === 'slider') {
+        const pos = Number(ui.comparePos) || 50;
+        stage = '<div class="compare-slider" dir="ltr" id="compare-slider" style="--pos:' + pos + '%">' +
+          '<img class="cmp-after" alt="אחרי" src="' + srcB + '" />' +
+          '<img class="cmp-before" alt="לפני" src="' + srcA + '" />' +
+          '<input type="range" min="0" max="100" value="' + pos + '" data-action="compare-slider" aria-label="סליידר השוואה" />' +
+          '</div>';
+      } else if (ui.compareMode === 'ghost') {
+        stage = '<div class="ghost-wrap"><img class="ghost-base" alt="אחרי" src="' + srcB + '" /><img class="ghost-prev" alt="שכבת רפאים" src="' + srcA + '" /></div>' +
+          '<p class="hp-legend">התמונה הקודמת מונחת בשקיפות מעל הנוכחית, כדי ליישר את הפוזה.</p>';
+      } else {
+        stage = '<div class="compare-side"><figure><img alt="לפני" src="' + srcA + '" /><figcaption>לפני · ' + esc(E.formatDay(photoA.date)) + '</figcaption></figure>' +
+          '<figure><img alt="אחרי" src="' + srcB + '" /><figcaption>אחרי · ' + esc(E.formatDay(photoB.date)) + '</figcaption></figure></div>';
+      }
+      compare = '<div class="chips">' + modes + '</div>' + stage;
+    }
+    return pageHead('<div><p class="kicker">התקדמות</p><h1>תמונות ומדידות</h1></div>',
+      '<button type="button" class="btn" data-action="tab" data-tab="progress">חזרה</button>', { noGear: true }) +
+      '<section class="card"><h2>מדידות היקפים</h2>' +
+      '<label class="field"><span>תאריך</span><input type="date" id="measure-date" value="' + esc(E.todayISO()) + '" /></label>' +
+      '<div class="builder-grid">' + form + '</div>' +
+      '<button type="button" class="btn primary wide" data-action="save-measure">שמירת מדידה</button></section>' +
+      '<section class="card"><h2>גרף היקפים</h2><div class="chips">' + chips + '</div>' + chart + '</section>' +
+      '<section class="card"><h2>היסטוריה</h2>' + hist + '</section>' +
+      '<section class="card"><h2>תמונות התקדמות</h2>' +
+      '<p class="hp-legend">התמונות נשמרות במכשיר (IndexedDB), אחרי כיווץ. מומלץ צילום שבועי באותה תאורה.</p>' +
+      '<div class="photo-add">' +
+      '<select id="photo-pose" aria-label="זווית"><option value="front">קדמי</option><option value="side">צד</option><option value="back">אחורי</option></select>' +
+      '<input type="date" id="photo-date" value="' + esc(E.todayISO()) + '" />' +
+      '<input type="file" id="photo-file" accept="image/*" capture="environment" hidden />' +
+      '<button type="button" class="btn primary" data-action="add-photo">הוספת תמונה</button>' +
+      '</div>' +
+      '<div class="photo-grid">' + thumbs + '</div></section>' +
+      '<section class="card"><h2>השוואה לפני ואחרי</h2>' + compare + '</section>';
   }
 
   function renderWeeklyCard(s) {
@@ -1211,7 +1352,7 @@
       '</section>' +
 
       '<section class="card"><h2>גיבוי</h2>' +
-      '<p class="hp-legend" style="margin-bottom:12px">הנתונים נשמרים במכשיר הזה בלבד. ייצוא יוצר קובץ JSON שאפשר לייבא בגיבוי או במכשיר אחר.</p>' +
+      '<p class="hp-legend" style="margin-bottom:12px">הנתונים נשמרים במכשיר הזה בלבד. ייצוא יוצר קובץ JSON שאפשר לייבא בגיבוי או במכשיר אחר. תמונות התקדמות אופציונליות בגיבוי, כי הן כבדות.</p>' +
       '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
       '<button type="button" class="btn primary" data-action="export">ייצוא JSON</button>' +
       '<button type="button" class="btn" data-action="import">ייבוא JSON</button>' +
@@ -1600,7 +1741,7 @@
       '<h2>' + esc(p.title || 'אישור') + '</h2>' +
       '<p>' + esc(p.message || '') + '</p>' +
       '<div class="btn-row">' +
-      '<button type="button" class="btn" data-action="close-modal">ביטול</button>' +
+      '<button type="button" class="btn" data-action="confirm-cancel">' + esc(p.cancelLabel || 'ביטול') + '</button>' +
       '<button type="button" class="btn ' + (p.danger ? 'danger' : 'primary') + '" data-action="confirm-ok">' + esc(p.okLabel || 'אישור') + '</button>' +
       '</div></div>';
   }
@@ -1847,6 +1988,7 @@
     else if (ui.editingTemplate) html += renderTemplateEditor();
     else if (ui.editingMenu) html += renderMenuEditor();
     else if (ui.view === 'summary') html += renderSummary();
+    else if (ui.view === 'body') html += renderBody();
     else if (ui.exerciseName) html += renderExerciseDetail();
     else if (ui.tab === 'home') html += renderHome();
     else if (ui.tab === 'workouts') html += renderWorkouts();
@@ -2063,12 +2205,11 @@
     Store.upsertNutrition(date, patch);
   }
 
-  function exportData() {
-    const payload = Store.exportJSON();
+  function downloadPayload(payload, suffix) {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = (Store.isDemoMode() ? 'fit-tracker-demo-' : 'fit-tracker-backup-') + E.todayISO() + '.json';
+    a.download = (Store.isDemoMode() ? 'fit-tracker-demo-' : 'fit-tracker-backup-') + E.todayISO() + (suffix || '') + '.json';
     document.body.appendChild(a);
     a.click();
     setTimeout(function () {
@@ -2078,14 +2219,49 @@
     toast('הקובץ ירד');
   }
 
+  function exportData() {
+    const payload = Store.exportJSON();
+    if (!window.FitPhotos) { downloadPayload(payload); return; }
+    FitPhotos.listPhotos().then(function (rows) {
+      if (!rows || !rows.length) { downloadPayload(payload); return; }
+      openModal('confirm', {
+        title: 'ייצוא גיבוי',
+        message: 'כלול גם תמונות התקדמות? הקובץ יהיה גדול יותר. אפשר גם לייצא בלי תמונות.',
+        okLabel: 'כולל תמונות',
+        cancelLabel: 'בלי תמונות',
+        onOk: function () {
+          toast('מכין גיבוי עם תמונות…');
+          FitPhotos.exportPhotos().then(function (photos) {
+            payload.photos = photos;
+            closeModal();
+            downloadPayload(payload, '-photos');
+          }).catch(function () { closeModal(); toast('ייצוא התמונות נכשל'); });
+        },
+        onCancel: function () { closeModal(); downloadPayload(payload); }
+      });
+    }).catch(function () { downloadPayload(payload); });
+  }
+
   function importFile(file) {
     const reader = new FileReader();
     reader.onload = function () {
       try {
         const payload = JSON.parse(String(reader.result));
         Store.importJSON(payload);
-        closeModal();
-        toast('הנתונים יובאו');
+        const photos = payload.photos;
+        const finish = function (extra) {
+          closeModal();
+          if (window.FitPhotos) FitPhotos.close();
+          loadPhotos(true);
+          toast(extra || 'הנתונים יובאו');
+        };
+        if (photos && photos.length && window.FitPhotos) {
+          FitPhotos.importPhotos(photos).then(function (n) {
+            finish(n ? ('הנתונים יובאו, כולל ' + n + ' תמונות') : 'הנתונים יובאו');
+          }).catch(function () { finish('הנתונים יובאו, אבל ייבוא התמונות נכשל'); });
+        } else {
+          finish();
+        }
       } catch (err) {
         toast('קובץ לא תקין');
       }
@@ -2149,6 +2325,39 @@
       return;
     }
     if (action === 'share-summary') { shareSummary(); return; }
+    if (action === 'open-body') {
+      ui.view = 'body';
+      try { location.hash = '#/body'; } catch (e) {}
+      loadPhotos();
+      render();
+      return;
+    }
+    if (action === 'measure-chart') { ui.measureKey = btn.dataset.key || 'waist'; render(); return; }
+    if (action === 'save-measure') { saveMeasureForm(); return; }
+    if (action === 'del-measure') {
+      openModal('confirm', { title: 'מחיקת מדידה', message: 'למחוק את המדידה הזו?', danger: true, okLabel: 'מחיקה', onOk: function () { Store.deleteMeasure(btn.dataset.id); closeModal(); render(); toast('המדידה נמחקה'); } });
+      return;
+    }
+    if (action === 'add-photo') {
+      const input = document.getElementById('photo-file');
+      if (input) input.click();
+      return;
+    }
+    if (action === 'del-photo') {
+      openModal('confirm', { title: 'מחיקת תמונה', message: 'התמונה תימחק מהמכשיר.', danger: true, okLabel: 'מחיקה', onOk: function () {
+        if (!window.FitPhotos) return;
+        FitPhotos.deletePhoto(btn.dataset.id).then(function () { closeModal(); loadPhotos(true); toast('התמונה נמחקה'); });
+      } });
+      return;
+    }
+    if (action === 'compare-mode') { ui.compareMode = btn.dataset.mode || 'side'; render(); return; }
+    if (action === 'compare-pick') {
+      if (btn.dataset.slot === 'a') ui.compareA = btn.dataset.id;
+      else ui.compareB = btn.dataset.id;
+      render();
+      return;
+    }
+
 
     if (action === 'notify-request') {
       if (!window.FitNotify) return;
@@ -2559,6 +2768,9 @@
       snapshotXP();
       ui.suppressCeleb = false;
       ui.exerciseName = null;
+      if (window.FitPhotos) FitPhotos.close();
+      revokePhotoUrls();
+      ui.photoList = null;
       toast('נטענו נתוני דמו');
       setTab('home');
       return;
@@ -2569,6 +2781,9 @@
       snapshotXP();
       ui.suppressCeleb = false;
       ui.exerciseName = null;
+      if (window.FitPhotos) FitPhotos.close();
+      revokePhotoUrls();
+      ui.photoList = null;
       toast('חזרתם לנתונים האמיתיים');
       setTab('home');
       return;
@@ -2727,10 +2942,20 @@
         okLabel: 'מחיקה',
         onOk: function () {
           Store.clearAll();
+          if (window.FitPhotos) FitPhotos.clearAll();
+          revokePhotoUrls();
+          ui.photoList = [];
           closeModal();
           toast('הנתונים נמחקו');
         }
       });
+      return;
+    }
+
+    if (action === 'confirm-cancel') {
+      const fn = ui.modal && ui.modal.props && ui.modal.props.onCancel;
+      if (fn) fn();
+      else closeModal();
       return;
     }
     if (action === 'confirm-ok') {
@@ -2768,6 +2993,24 @@
         okLabel: 'ייבוא',
         onOk: function () { importFile(file); }
       });
+      return;
+    }
+    if (el.id === 'photo-file' && el.files && el.files[0]) {
+      const file = el.files[0];
+      el.value = '';
+      if (!window.FitPhotos) return;
+      const poseEl = document.getElementById('photo-pose');
+      const dateEl = document.getElementById('photo-date');
+      toast('מכווץ ושומר…');
+      FitPhotos.addPhoto({ pose: poseEl ? poseEl.value : 'front', date: dateEl ? dateEl.value : E.todayISO() }, file)
+        .then(function () { toast('התמונה נשמרה'); loadPhotos(true); })
+        .catch(function () { toast('שמירת התמונה נכשלה'); });
+      return;
+    }
+    if (el.dataset.action === 'compare-slider') {
+      ui.comparePos = Number(el.value) || 0;
+      const wrap = document.getElementById('compare-slider');
+      if (wrap) wrap.style.setProperty('--pos', ui.comparePos + '%');
       return;
     }
     if (el.dataset.action === 'notify-setting') {
@@ -2824,6 +3067,12 @@
       ui.tab = 'progress';
       ui.view = 'summary';
       ui.summaryStart = parts[1] || null;
+      return;
+    }
+    if (tab === 'body') {
+      ui.tab = 'progress';
+      ui.view = 'body';
+      loadPhotos();
       return;
     }
     ui.summaryStart = null;
