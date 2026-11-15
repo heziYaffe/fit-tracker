@@ -47,15 +47,29 @@
     return Object.assign(h, extra || {});
   }
 
+  function parseJsonRes(res) {
+    return res.json().catch(function () { return {}; }).then(function (body) {
+      if (!res.ok) throw new Error((body && (body.message || body.msg)) || ('http ' + res.status));
+      return body;
+    });
+  }
+
+  function authedFetch(url, opts) {
+    opts = opts || {};
+    return ensureFreshAccess().then(function () {
+      return fetch(url, Object.assign({}, opts, { headers: headers(opts.headers) }));
+    }).then(function (res) {
+      if (res.status !== 401) return res;
+      return refreshSession().then(function (sess) {
+        if (!sess) return res;
+        return fetch(url, Object.assign({}, opts, { headers: headers(opts.headers) }));
+      });
+    });
+  }
+
   function rest(path, opts) {
     const c = cfg();
-    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + path, Object.assign({ headers: headers() }, opts || {}))
-      .then(function (res) {
-        return res.json().catch(function () { return {}; }).then(function (body) {
-          if (!res.ok) throw new Error((body && body.message) || ('http ' + res.status));
-          return body;
-        });
-      });
+    return authedFetch(c.SUPABASE_URL.replace(/\/+$/, '') + path, opts || {}).then(parseJsonRes);
   }
 
   function mergeRecords(localArr, remoteArr) {
@@ -131,43 +145,193 @@
     return state;
   }
 
-  function setSession(sess) {
-    authUser = sess;
-    status.user = sess && sess.user ? { id: sess.user.id, email: sess.user.email } : null;
+  var AUTH_KEY = 'hazi-fit-auth';
+  var refreshInFlight = null;
+  var ACCESS_SKEW_MS = 60 * 1000;
+
+  function decodeJwtExpMs(access) {
+    if (!access) return 0;
     try {
-      if (sess) localStorage.setItem('hazi-fit-auth', JSON.stringify({ access_token: sess.access_token, refresh_token: sess.refresh_token, user: status.user }));
-      else localStorage.removeItem('hazi-fit-auth');
+      var part = String(access).split('.')[1];
+      if (!part) return 0;
+      var b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      var json = JSON.parse(typeof atob === 'function'
+        ? atob(b64)
+        : Buffer.from(b64, 'base64').toString('utf8'));
+      return (Number(json.exp) || 0) * 1000;
+    } catch (e) { return 0; }
+  }
+
+  function publicUser(user) {
+    if (!user || !user.id) return null;
+    return { id: user.id, email: user.email };
+  }
+
+  function readStoredAuth() {
+    try {
+      var raw = localStorage.getItem(AUTH_KEY);
+      if (!raw) return null;
+      var saved = JSON.parse(raw);
+      if (!saved || (!saved.access_token && !saved.refresh_token)) return null;
+      return saved;
+    } catch (e) { return null; }
+  }
+
+  function writeStoredAuth(sess) {
+    try {
+      if (!sess) localStorage.removeItem(AUTH_KEY);
+      else localStorage.setItem(AUTH_KEY, JSON.stringify({
+        access_token: sess.access_token || '',
+        refresh_token: sess.refresh_token || '',
+        user: publicUser(sess.user) || sess.user || null,
+        expires_at: sess.expires_at || decodeJwtExpMs(sess.access_token)
+      }));
     } catch (e) {}
+  }
+
+  function accessValid(sess, skew) {
+    if (!sess || !sess.access_token) return false;
+    var exp = Number(sess.expires_at) || decodeJwtExpMs(sess.access_token);
+    if (!exp) return false;
+    return exp - (skew == null ? ACCESS_SKEW_MS : skew) > Date.now();
+  }
+
+  function setSession(sess) {
+    if (!sess) {
+      authUser = null;
+      status.user = null;
+      writeStoredAuth(null);
+      return;
+    }
+    var prev = readStoredAuth() || authUser || {};
+    var next = {
+      access_token: sess.access_token || prev.access_token || '',
+      refresh_token: sess.refresh_token || prev.refresh_token || '',
+      user: (sess.user && sess.user.id) ? sess.user : (prev.user || {}),
+      expires_at: sess.expires_at || decodeJwtExpMs(sess.access_token || prev.access_token)
+    };
+    authUser = next;
+    status.user = publicUser(next.user);
+    writeStoredAuth(next);
+  }
+
+  function isDefinitiveInvalidRefresh(res, data) {
+    var err = String((data && (data.error || data.error_description || data.error_code || data.msg || data.message)) || '').toLowerCase();
+    var code = String((data && (data.error_code || data.code || data.error)) || '').toLowerCase();
+    if (code === 'invalid_grant' || err === 'invalid_grant') return true;
+    if (err.indexOf('refresh_token_not_found') >= 0 || code.indexOf('refresh_token_not_found') >= 0) return true;
+    if (err.indexOf('invalid refresh') >= 0 || err.indexOf('invalid_refresh_token') >= 0) return true;
+    if ((res && (res.status === 400 || res.status === 401)) && err.indexOf('refresh') >= 0 &&
+        (err.indexOf('invalid') >= 0 || err.indexOf('expired') >= 0 || err.indexOf('not found') >= 0)) {
+      return true;
+    }
+    return false;
+  }
+
+  function postRefresh(token) {
+    var c = cfg();
+    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: token })
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        return { res: res, data: data };
+      });
+    });
+  }
+
+  function doRefresh(preferredToken) {
+    var stored = readStoredAuth() || {};
+    var token = preferredToken || (authUser && authUser.refresh_token) || stored.refresh_token;
+    if (!token) return Promise.resolve(authUser || null);
+    var usedToken = token;
+    return postRefresh(token).then(function (out) {
+      var res = out.res;
+      var data = out.data || {};
+      if (res.ok && data.access_token) {
+        var expiresAt = data.expires_in
+          ? (Date.now() + Number(data.expires_in) * 1000)
+          : decodeJwtExpMs(data.access_token);
+        setSession({
+          access_token: data.access_token,
+          refresh_token: data.refresh_token || usedToken,
+          user: data.user || stored.user || (authUser && authUser.user),
+          expires_at: expiresAt
+        });
+        return authUser;
+      }
+      if (isDefinitiveInvalidRefresh(res, data)) {
+        var now = readStoredAuth();
+        if (now && now.refresh_token && now.refresh_token !== usedToken) {
+          return doRefresh(now.refresh_token);
+        }
+        setSession(null);
+        return null;
+      }
+      if (!authUser && (stored.refresh_token || stored.access_token)) setSession(stored);
+      return authUser || null;
+    }).catch(function () {
+      if (!authUser && (stored.refresh_token || stored.access_token)) setSession(stored);
+      return authUser || null;
+    });
+  }
+
+  function refreshSession() {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = doRefresh(null).then(function (v) {
+      refreshInFlight = null;
+      return v;
+    }, function (err) {
+      refreshInFlight = null;
+      throw err;
+    });
+    return refreshInFlight;
+  }
+
+  function ensureFreshAccess() {
+    var sess = authUser || readStoredAuth();
+    if (sess && !authUser) setSession(sess);
+    if (accessValid(authUser, ACCESS_SKEW_MS)) return Promise.resolve(authUser);
+    if (authUser && authUser.refresh_token) return refreshSession();
+    var stored = readStoredAuth();
+    if (stored && stored.refresh_token) {
+      if (!authUser) setSession(stored);
+      return refreshSession();
+    }
+    return Promise.resolve(authUser);
   }
 
   function restoreSession() {
     if (!isConfigured()) return Promise.resolve(null);
-    try {
-      const raw = localStorage.getItem('hazi-fit-auth');
-      if (!raw) return Promise.resolve(null);
-      const saved = JSON.parse(raw);
-      if (!saved || !saved.access_token) return Promise.resolve(null);
-      return rest('/auth/v1/user', { headers: headers({ Authorization: 'Bearer ' + saved.access_token }) })
-        .then(function (user) {
-          setSession({ access_token: saved.access_token, refresh_token: saved.refresh_token, user: user });
+    var saved = readStoredAuth();
+    if (!saved) return Promise.resolve(null);
+    setSession(saved);
+    if (!saved.access_token || !accessValid(saved, 0)) return refreshSession();
+    var c = cfg();
+    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/user', {
+      headers: { apikey: c.SUPABASE_ANON_KEY, Authorization: 'Bearer ' + saved.access_token }
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (user) {
+        if (res.ok && user && user.id) {
+          setSession({
+            access_token: saved.access_token,
+            refresh_token: saved.refresh_token,
+            user: user,
+            expires_at: saved.expires_at || decodeJwtExpMs(saved.access_token)
+          });
           return authUser;
-        })
-        .catch(function () {
-          if (!saved.refresh_token) { setSession(null); return null; }
-          const c = cfg();
-          return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/token?grant_type=refresh_token', {
-            method: 'POST',
-            headers: { apikey: c.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: saved.refresh_token })
-          }).then(function (res) {
-            return res.json().catch(function () { return {}; }).then(function (data) {
-              if (!res.ok || !data.access_token) { setSession(null); return null; }
-              setSession({ access_token: data.access_token, refresh_token: data.refresh_token || saved.refresh_token, user: data.user || saved.user });
-              return authUser;
-            });
-          }).catch(function () { setSession(null); return null; });
-        });
-    } catch (e) { return Promise.resolve(null); }
+        }
+        if (res.status === 401 || res.status === 403) return refreshSession();
+        return authUser;
+      });
+    }).catch(function () { return authUser; });
+  }
+
+  function hydrateSession() {
+    var saved = readStoredAuth();
+    if (saved) setSession(saved);
   }
 
   function authErrorMessage(body, fallback) {
@@ -281,9 +445,8 @@
     password = normalizePassword(password);
     if (!password || password.length < 6) return Promise.reject(new Error('הסיסמה קצרה מדי (לפחות 6 תווים)'));
     const c = cfg();
-    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/user', {
+    return authedFetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/auth/v1/user', {
       method: 'PUT',
-      headers: headers(),
       body: JSON.stringify({ password: password })
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (b) {
@@ -326,9 +489,9 @@
     });
     if (!rows.length) return Promise.resolve({ pushed: 0 });
     const c = cfg();
-    return fetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/fit_records', {
+    return authedFetch(c.SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/fit_records', {
       method: 'POST',
-      headers: headers({ Prefer: 'resolution=merge-duplicates' }),
+      headers: { Prefer: 'resolution=merge-duplicates' },
       body: JSON.stringify(rows)
     }).then(function (res) {
       if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'push failed'); });
@@ -361,7 +524,7 @@
   function whoopAuthorizeUrl() {
     if (!whoopReady()) return Promise.reject(new Error('חיבור Whoop לא מוכן עדיין'));
     if (!authUser) return Promise.reject(new Error('קודם צריך להתחבר לחשבון'));
-    return fetch(fnUrl() + '/start', { headers: headers({ Accept: 'application/json' }) }).then(function (res) {
+    return authedFetch(fnUrl() + '/start', { headers: { Accept: 'application/json' } }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (body) {
         if (res.status === 401) throw new Error('קודם צריך להתחבר לחשבון');
         if (!res.ok) throw new Error(authErrorMessage(body, 'שגיאה בהתחברות ל-Whoop'));
@@ -372,11 +535,11 @@
   }
 
   function whoopStatus() {
-    if (!whoopReady() || !authUser) {
+    if (!whoopReady() || !(authUser || readStoredAuth())) {
       status.whoop = { connected: false };
       return Promise.resolve(status.whoop);
     }
-    return fetch(fnUrl() + '/status', { headers: headers() }).then(function (r) {
+    return authedFetch(fnUrl() + '/status').then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (r.status === 401) {
           status.whoop = { connected: false, error: 'קודם צריך להתחבר לחשבון' };
@@ -406,7 +569,7 @@
   function whoopRefresh() {
     if (!whoopReady()) return Promise.reject(new Error('חיבור Whoop לא מוכן עדיין'));
     if (!authUser) return Promise.reject(new Error('קודם צריך להתחבר לחשבון'));
-    return fetch(fnUrl() + '/refresh', { method: 'POST', headers: headers() }).then(function (r) {
+    return authedFetch(fnUrl() + '/refresh', { method: 'POST' }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (!r.ok) throw new Error(authErrorMessage(body, 'משיכת נתוני Whoop נכשלה'));
         markWhoopPulled();
@@ -473,9 +636,12 @@
     whoopStatus: whoopStatus,
     whoopRefresh: whoopRefresh,
     onForeground: onForeground,
-    init: init
+    init: init,
+    refreshSession: refreshSession,
+    ensureFreshAccess: ensureFreshAccess
   };
 
+  hydrateSession();
   root.FitSync = FitSync;
   if (typeof module !== 'undefined' && module.exports) module.exports = FitSync;
 })(typeof window !== 'undefined' ? window : globalThis);

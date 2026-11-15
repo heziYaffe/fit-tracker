@@ -42,18 +42,23 @@
     if (window.FitUI && FitUI.toast) FitUI.toast(msg);
   }
 
+  var resolveSessionReady;
+  var sessionReady = new Promise(function (res) { resolveSessionReady = res; });
+  function whenSessionReady(fn) {
+    sessionReady.then(fn, fn);
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     FitStore.load();
     FitUI.init();
     if (window.FitNotify) FitNotify.start();
-    if (window.FitSync) {
-      FitSync.init().then(function () {
-        if (window.FitUI) FitUI.render();
-        handleWhoopReturn();
-      });
-    } else {
-      handleWhoopReturn();
-    }
+    var started = window.FitSync
+      ? FitSync.init().then(function () {
+          if (window.FitUI) FitUI.render();
+          handleWhoopReturn();
+        })
+      : Promise.resolve();
+    started.then(function () { resolveSessionReady(); }, function () { resolveSessionReady(); });
 
     var fgTimer = 0;
     function onForeground() {
@@ -69,22 +74,29 @@
     window.addEventListener('focus', onForeground);
   });
 
+  /* Update path may only drop the service worker and Cache Storage.
+     Never clear or rewrite localStorage / IndexedDB — that is where the
+     auth session and user data live. */
   function forceFreshReload(remoteVersion) {
     var key = 'fit-reloaded-for-v' + remoteVersion;
     try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, '1'); } catch (e) {}
-    var swGone = ('serviceWorker' in navigator)
-      ? navigator.serviceWorker.getRegistrations().then(function (regs) {
-          return Promise.all(regs.map(function (r) { return r.unregister(); }));
-        })
-      : Promise.resolve();
-    var cachesGone = (typeof caches !== 'undefined')
-      ? caches.keys().then(function (keys) {
-          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-        })
-      : Promise.resolve();
-    Promise.all([swGone, cachesGone]).then(function () {
-      window.location.reload();
-    }).catch(function () { window.location.reload(); });
+    whenSessionReady(function () {
+      var swGone = ('serviceWorker' in navigator)
+        ? navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (r) { return r.unregister(); }));
+          })
+        : Promise.resolve();
+      var cachesGone = (typeof caches !== 'undefined')
+        ? caches.keys().then(function (keys) {
+            return Promise.all(keys.filter(function (k) {
+              return String(k).indexOf('fit-tracker') === 0;
+            }).map(function (k) { return caches.delete(k); }));
+          })
+        : Promise.resolve();
+      Promise.all([swGone, cachesGone]).then(function () {
+        window.location.reload();
+      }).catch(function () { window.location.reload(); });
+    });
   }
 
   function checkAppVersion() {
@@ -112,12 +124,15 @@
       var reloaded = false;
       navigator.serviceWorker.addEventListener('controllerchange', function () {
         if (!hadController || reloaded) return;
-        reloaded = true;
-        window.location.reload();
+        whenSessionReady(function () {
+          if (reloaded) return;
+          reloaded = true;
+          window.location.reload();
+        });
       });
-      checkAppVersion();
+      whenSessionReady(checkAppVersion);
     });
   } else {
-    window.addEventListener('load', checkAppVersion);
+    window.addEventListener('load', function () { whenSessionReady(checkAppVersion); });
   }
 })();
