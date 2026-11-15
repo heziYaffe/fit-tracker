@@ -236,6 +236,10 @@
         lowHpDate: last.lowHpDate || ''
       }
     };
+    const restT = Number(set.restTargetSec);
+    set.restTargetSec = restT > 0
+      ? Math.max(15, Math.min(600, Math.round(restT)))
+      : ((C.REST_DEFAULT_SEC) || 90);
     return set;
   }
 

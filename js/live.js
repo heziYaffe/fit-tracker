@@ -104,6 +104,15 @@
     return (ex.sets || []).length < t;
   }
 
+  function defaultRestTarget() {
+    try {
+      const st = Store() && Store().getState && Store().getState();
+      const n = st && st.settings ? Number(st.settings.restTargetSec) : 0;
+      if (n > 0) return Math.max(15, Math.min(600, Math.round(n)));
+    } catch (err) { /* ignore */ }
+    return (C() && C().REST_DEFAULT_SEC) || 90;
+  }
+
   function plannedRestForRound(exIndex) {
     const group = supersetGroup(exIndex);
     const idxs = group.length ? group : [exIndex];
@@ -111,7 +120,7 @@
       const n = plannedRestSec(session.exercises[idxs[k]]);
       if (n > 0) return n;
     }
-    return 0;
+    return defaultRestTarget();
   }
 
   function applySuggestion(name) {
@@ -244,6 +253,7 @@
   }
 
   function logSet() {
+    unlockAudio();
     const ex = currentExercise();
     if (!ex || !session) return null;
     const isSt = E().isStaticEx ? E().isStaticEx(ex, ex.name) : !!ex.static;
@@ -335,6 +345,7 @@
 
   function startHold() {
     if (!session) return null;
+    unlockAudio();
     commitRest();
     const ex = currentExercise();
     if (!ex) return null;
@@ -463,6 +474,7 @@
     if (!session) return;
     const ex = currentExercise();
     if (!ex || !ex.sets.length) return;
+    unlockAudio();
     session.restStartedAt = nowMs();
     session.restTargetSec = plannedRestForRound(session.currentEx);
     session.restTargetNotified = false;
@@ -522,11 +534,20 @@
     persist();
   }
 
+  function isPageHidden() {
+    try {
+      return typeof document !== 'undefined' && document && document.visibilityState === 'hidden';
+    } catch (err) {
+      return false;
+    }
+  }
+
   function pulseRest() {
     if (!session || !session.restStartedAt) return false;
     const target = restTargetSec();
     if (!(target > 0) || session.restTargetNotified) return false;
     if (restElapsedSec() < target) return false;
+    if (isPageHidden()) return false;
     session.restTargetNotified = true;
     persist();
     beep();
@@ -550,29 +571,63 @@
     return Math.max(0, nowMs() - session.startedAt);
   }
 
-  function beep(freq) {
+  let audioCtx = null;
+
+  function getAudioContext() {
+    const AC = (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext))
+      || (typeof AudioContext !== 'undefined' ? AudioContext : null);
+    if (!AC) return null;
+    if (!audioCtx || audioCtx.state === 'closed') {
+      try { audioCtx = new AC(); } catch (err) { return null; }
+    }
+    return audioCtx;
+  }
+
+  function unlockAudio() {
+    const ctx = getAudioContext();
+    if (!ctx) return;
     try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
+      if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+    } catch (err) { /* ignore */ }
+    try {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq || 880;
-      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+      gain.gain.setValueAtTime(0.00001, ctx.currentTime);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      osc.stop(ctx.currentTime + 0.5);
-      setTimeout(function () { ctx.close(); }, 800);
+      osc.stop(ctx.currentTime + 0.03);
+    } catch (err) { /* ignore */ }
+  }
+
+  function beep(freq) {
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      const play = function () {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq || 880;
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      };
+      if (ctx.state === 'suspended' && ctx.resume) {
+        Promise.resolve(ctx.resume()).then(play).catch(function () { try { play(); } catch (err) { /* ignore */ } });
+      } else {
+        play();
+      }
     } catch (err) { /* ignore */ }
   }
 
   function vibrate() {
     try {
-      if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
+      if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate([200, 80, 200]);
     } catch (err) { /* ignore */ }
   }
 
@@ -968,6 +1023,8 @@
     isRestRunning: isRestRunning,
     setSetRest: setSetRest,
     pulseRest: pulseRest,
+    unlockAudio: unlockAudio,
+    defaultRestTarget: defaultRestTarget,
     setClock: setClock,
     elapsedMs: elapsedMs,
     onTick: onTick,

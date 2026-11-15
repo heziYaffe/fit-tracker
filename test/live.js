@@ -168,7 +168,7 @@ try {
   now += 40 * 1000;
   Live.setClock(now);
   assert(Live.isRestRunning(), 'rest running after last-exercise set');
-  assert(Live.restTargetSec() === 0, 'no target when rest was not planned');
+  assert(Live.restTargetSec() === 90, 'default rest target is 90s when none was planned, got ' + Live.restTargetSec());
   const summary = Live.finish();
   assert(summary && summary.workout, 'workout saved');
   const logs = summary.exercises[0].setLogs;
@@ -236,6 +236,90 @@ try {
   assert(sess.currentEx === 2, 'after the last round, move to the next exercise, got ' + sess.currentEx);
   assert(Number(sess.draft.weight) === 20, 'next exercise keeps its own plan, got ' + sess.draft.weight);
 } finally {
+  if (Live.setClock) Live.setClock(null);
+  if (Live.getSession()) Live.discard();
+}
+
+
+// Default rest target, flag reset on each rest, and deferred beep while hidden.
+try {
+  let now = 3_000_000;
+  Live.setClock(now);
+  if (ctx.FitStore && ctx.FitStore.updateSettings) {
+    ctx.FitStore.updateSettings({ restTargetSec: 90 });
+  }
+  Live.startFromTemplate({
+    id: 'beep1',
+    name: 'Push',
+    type: 'push',
+    exercises: [
+      { name: 'לחיצת חזה', sets: 3, repsMin: 8, repsMax: 8, weight: 50 },
+      { name: 'חתירה', sets: 3, repsMin: 8, repsMax: 8, weight: 40, restSec: 60 }
+    ]
+  }, { date: '2026-11-15' });
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  assert(Live.restTargetSec() === 90, 'unplanned exercise uses default 90s, got ' + Live.restTargetSec());
+  assert(Live.getSession().restTargetNotified === false, 'flag starts clear');
+
+  now += 90 * 1000;
+  Live.setClock(now);
+  assert(Live.pulseRest(), 'first rest beeps at the default target');
+  assert(Live.getSession().restTargetNotified === true, 'flag set after first cue');
+  assert(!Live.pulseRest(), 'first rest does not beep twice');
+
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  assert(Live.getSession().restTargetNotified === false, 'flag resets when a new rest starts');
+  assert(Live.restTargetSec() === 90, 'second rest of the same exercise still uses 90, got ' + Live.restTargetSec());
+  now += 90 * 1000;
+  Live.setClock(now);
+  assert(Live.pulseRest(), 'second rest beeps too');
+  assert(!Live.pulseRest(), 'second rest beeps only once');
+
+  // Planned rest on the next exercise overrides the default.
+  Live.skipExercise();
+  Live.setDraft({ weight: 40, reps: 8 });
+  Live.logSet();
+  assert(Live.restTargetSec() === 60, 'explicit planned rest wins over default, got ' + Live.restTargetSec());
+
+  // If the target is reached while hidden, beep once when the app is visible again.
+  if (Live.getSession()) Live.discard();
+  now += 1000;
+  Live.setClock(now);
+  Live.startFromTemplate({
+    id: 'beep2',
+    name: 'Push',
+    type: 'push',
+    exercises: [{ name: 'לחיצת חזה', sets: 3, repsMin: 8, repsMax: 8, weight: 50 }]
+  }, { date: '2026-11-15' });
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  ctx.document.visibilityState = 'hidden';
+  now += 90 * 1000;
+  Live.setClock(now);
+  assert(!Live.pulseRest(), 'no beep while the app is in the background');
+  assert(Live.getSession().restTargetNotified === false, 'flag stays clear until the beep can play');
+  ctx.document.visibilityState = 'visible';
+  assert(Live.pulseRest(), 'beeps once when returning past the target');
+  assert(!Live.pulseRest(), 'does not beep again after becoming visible');
+
+  // Settings can change the default.
+  if (Live.getSession()) Live.discard();
+  ctx.FitStore.updateSettings({ restTargetSec: 45 });
+  assert(Live.defaultRestTarget() === 45, 'settings default, got ' + Live.defaultRestTarget());
+  Live.startFromTemplate({
+    id: 'beep3',
+    name: 'Push',
+    type: 'push',
+    exercises: [{ name: 'לחיצת חזה', sets: 2, repsMin: 8, repsMax: 8, weight: 50 }]
+  }, { date: '2026-11-15' });
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  assert(Live.restTargetSec() === 45, 'session uses the settings default, got ' + Live.restTargetSec());
+  ctx.FitStore.updateSettings({ restTargetSec: 90 });
+} finally {
+  ctx.document.visibilityState = 'visible';
   if (Live.setClock) Live.setClock(null);
   if (Live.getSession()) Live.discard();
 }

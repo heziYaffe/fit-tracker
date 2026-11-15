@@ -1881,6 +1881,8 @@
       '<input type="number" min="1" step="5" inputmode="numeric" data-action="setting" data-key="dailyProteinTarget" value="' + (Number(set.dailyProteinTarget) || 150) + '" style="width:90px" /></div>' +
       '<div class="setting"><div class="grow"><div>יעד קלוריות יומי</div><div class="desc">אופציונלי — השאירו ריק כדי להסתיר</div></div>' +
       '<input type="number" min="0" step="50" inputmode="numeric" data-action="setting" data-key="dailyCalorieTarget" value="' + esc(set.dailyCalorieTarget == null ? '' : set.dailyCalorieTarget) + '" placeholder="אין" style="width:90px" /></div>' +
+      '<div class="setting"><div class="grow"><div>יעד מנוחה</div><div class="desc">צפצוף אחרי זמן זה אם לא הוגדרה מנוחה לתרגיל. הטיימר ממשיך לרוץ.</div></div>' +
+      '<input type="number" min="15" step="15" inputmode="numeric" data-action="setting" data-key="restTargetSec" value="' + (Number(set.restTargetSec) || (C.REST_DEFAULT_SEC || 90)) + '" style="width:90px" /></div>' +
       '</section>' +
       renderWaterSettings(s) +
       '<section class="card">' +
@@ -3709,6 +3711,7 @@
     }
     if (action === 'live-hold-start') {
       if (!root.FitLive.startHold) return;
+      if (root.FitLive.unlockAudio) root.FitLive.unlockAudio();
       root.FitLive.startHold();
       render();
       return;
@@ -3720,6 +3723,7 @@
       return;
     }
     if (action === 'live-log') {
+      if (root.FitLive.unlockAudio) root.FitLive.unlockAudio();
       const row = root.FitLive.logSet();
       if (!row) { toast('יש להזין משקל, חזרות או זמן'); return; }
       if (row.pr) toast('שיא חדש! ⭐');
@@ -4107,7 +4111,7 @@
       const num = Number(val);
       if (!Number.isFinite(num) || num < 0) return;
       const patch = {};
-      patch[key] = num;
+      patch[key] = key === 'restTargetSec' ? Math.max(15, Math.min(600, Math.round(num))) : num;
       Store.updateSettings(patch);
       return;
     }
@@ -4243,6 +4247,7 @@
       document.addEventListener('visibilitychange', function () {
         if (document.visibilityState === 'visible' && root.FitLive.getSession()) {
           root.FitLive.requestWakeLock();
+          if (root.FitLive.unlockAudio) root.FitLive.unlockAudio();
           if (root.FitLive.pulseRest) root.FitLive.pulseRest();
           render();
         }
