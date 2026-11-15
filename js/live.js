@@ -97,8 +97,12 @@
     return out;
   }
 
+  function isParked(ex) {
+    return !!(ex && (ex.skipped || ex.finishedEarly));
+  }
+
   function needsMoreSets(ex) {
-    if (!ex) return false;
+    if (!ex || isParked(ex)) return false;
     const t = Number(ex.targetSets) || 0;
     if (!t) return false;
     return (ex.sets || []).length < t;
@@ -170,8 +174,12 @@
     if (!session) return;
     if (index !== session.currentEx) commitRest();
     cancelHold();
+    const ex = session.exercises[index];
+    if (ex && (ex.skipped || ex.finishedEarly)) {
+      ex.skipped = false;
+      ex.finishedEarly = false;
+    }
     session.currentEx = index;
-    const ex = currentExercise();
     if (ex) {
       applyDraftForExercise(ex);
     }
@@ -272,6 +280,8 @@
     const row = { weight: weight, reps: reps, secs: secs, at: nowMs(), pr: pr.isPR, prTypes: pr.types };
     commitRest();
     ex.sets.push(row);
+    ex.skipped = false;
+    ex.finishedEarly = false;
     prefillDraftFromLastSet(ex);
     const loggedIndex = session.currentEx;
     let advanced = false;
@@ -282,7 +292,9 @@
       let nextIdx = null;
       for (let step = 1; step < group.length; step++) {
         const idx = group[(pos + step) % group.length];
-        if (session.exercises[idx].sets.length < justLogged) {
+        const partner = session.exercises[idx];
+        if (isParked(partner)) continue;
+        if (partner.sets.length < justLogged) {
           nextIdx = idx;
           break;
         }
@@ -676,13 +688,13 @@
     if (!session) return null;
     const exercises = [];
     session.exercises.forEach(function (ex) {
-      if (!ex.sets.length) return;
-      const top = ex.sets.reduce(function (m, s) { return s.weight > m.weight ? s : m; }, ex.sets[0]);
+      if (!ex.sets.length && !ex.skipped) return;
+      const top = ex.sets.length ? ex.sets.reduce(function (m, s) { return s.weight > m.weight ? s : m; }, ex.sets[0]) : { weight: 0, reps: 0, secs: 0 };
       exercises.push({
         name: ex.name,
         sets: ex.sets.length,
-        reps: top.reps,
-        weight: top.weight,
+        reps: top.reps || 0,
+        weight: top.weight || 0,
         setLogs: ex.sets.map(function (s) {
           const log = { weight: s.weight, reps: s.reps, secs: s.secs || 0 };
           if (s.restAfter != null && s.restAfter !== '') log.restAfter = Number(s.restAfter) || 0;
@@ -692,10 +704,14 @@
         static: !!ex.static,
         secs: ex.sets.reduce(function (m, s) { return Math.max(m, Number(s.secs) || 0); }, 0),
         insteadOf: ex.insteadOf || '',
+        skipped: !!ex.skipped,
+        finishedEarly: !!ex.finishedEarly,
         notes: (function () {
           const bits = [];
           if (ex.notes) bits.push(ex.notes);
           if (ex.insteadOf) bits.push('במקום ' + ex.insteadOf);
+          if (ex.skipped) bits.push('דולג');
+          else if (ex.finishedEarly) bits.push('סיום מוקדם');
           return bits.join(' · ');
         }())
       });
@@ -895,10 +911,65 @@
     return sess;
   }
 
-  function skipExercise() {
-    if (!session) return;
-    const next = session.currentEx + 1;
-    if (next < session.exercises.length) selectExercise(next);
+  function nextIndexAfterSkip(fromIdx) {
+    if (!session) return null;
+    const group = supersetGroup(fromIdx);
+    if (group.length >= 2) {
+      const pos = group.indexOf(fromIdx);
+      for (let step = 1; step < group.length; step++) {
+        const idx = group[(pos + step) % group.length];
+        if (needsMoreSets(session.exercises[idx])) return idx;
+      }
+    }
+    for (let i = fromIdx + 1; i < session.exercises.length; i++) {
+      const ex = session.exercises[i];
+      if (isParked(ex)) continue;
+      if (needsMoreSets(ex) || !(Number(ex.targetSets) > 0)) return i;
+    }
+    for (let i = 0; i < session.exercises.length; i++) {
+      if (i === fromIdx) continue;
+      if (needsMoreSets(session.exercises[i])) return i;
+    }
+    for (let i = fromIdx + 1; i < session.exercises.length; i++) {
+      if (!isParked(session.exercises[i])) return i;
+    }
+    return null;
+  }
+
+  function skipExercise(index) {
+    if (!session) return null;
+    const idx = index == null ? session.currentEx : Number(index);
+    const ex = session.exercises[idx];
+    if (!ex) return null;
+    cancelHold();
+    stopRest();
+    if (ex.sets && ex.sets.length) {
+      ex.finishedEarly = true;
+      ex.skipped = false;
+    } else {
+      ex.skipped = true;
+      ex.finishedEarly = false;
+    }
+    const nextIdx = nextIndexAfterSkip(idx);
+    if (nextIdx != null) {
+      session.currentEx = nextIdx;
+      applyDraftForExercise(session.exercises[nextIdx]);
+    }
+    persist();
+    return ex;
+  }
+
+  function unskipExercise(index) {
+    if (!session) return null;
+    const idx = index == null ? session.currentEx : Number(index);
+    const ex = session.exercises[idx];
+    if (!ex) return null;
+    ex.skipped = false;
+    ex.finishedEarly = false;
+    session.currentEx = idx;
+    applyDraftForExercise(ex);
+    persist();
+    return ex;
   }
 
   function moveExercise(index, dir) {
@@ -923,12 +994,18 @@
       for (let step = 1; step < group.length; step++) {
         const idx = group[(pos + step) % group.length];
         const partner = session.exercises[idx];
-        const t = Number(partner.targetSets) || 0;
-        if (!t || partner.sets.length < t) return partner;
+        if (needsMoreSets(partner)) return partner;
       }
-      return session.exercises[group[group.length - 1] + 1] || null;
+      const after = group[group.length - 1] + 1;
+      for (let k = after; k < session.exercises.length; k++) {
+        if (!isParked(session.exercises[k])) return session.exercises[k];
+      }
+      return null;
     }
-    return session.exercises[i + 1] || null;
+    for (let k = i + 1; k < session.exercises.length; k++) {
+      if (!isParked(session.exercises[k])) return session.exercises[k];
+    }
+    return null;
   }
 
   function progress() {
@@ -953,7 +1030,10 @@
       if ((Number(a.sets) || 0) !== planSets) return true;
     }
     return session.exercises.some(function (ex) { return !ex.fromTemplate && ex.sets.length; })
-      || session.exercises.some(function (ex) { return ex.fromTemplate && ex.sets.length !== (Number(ex.targetSets) || 0); });
+      || session.exercises.some(function (ex) {
+        if (!ex.fromTemplate || ex.skipped || ex.finishedEarly) return false;
+        return ex.sets.length !== (Number(ex.targetSets) || 0);
+      });
   }
 
   function templatePayloadFromSession() {
@@ -1171,6 +1251,8 @@
     persist: persist,
     startFromTemplate: startFromTemplate,
     skipExercise: skipExercise,
+    unskipExercise: unskipExercise,
+    isParked: isParked,
     moveExercise: moveExercise,
     nextExercise: nextExercise,
     progress: progress,

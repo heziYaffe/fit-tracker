@@ -590,6 +590,13 @@
     return best || cleaned;
   }
 
+  function isUnworkedSkip(ex) {
+    if (!ex || !ex.skipped) return false;
+    if (ex.setLogs && ex.setLogs.length) return false;
+    if ((Number(ex.sets) || 0) > 0 && (Number(ex.weight) || Number(ex.reps) || Number(ex.secs))) return false;
+    return true;
+  }
+
   function expandSets(ex) {
     if (ex && Array.isArray(ex.setLogs) && ex.setLogs.length) {
       return ex.setLogs.map(function (s) {
@@ -598,6 +605,7 @@
         return row;
       });
     }
+    if (isUnworkedSkip(ex) || (ex && ex.skipped && !(Number(ex.sets) > 0))) return [];
     const sets = Math.max(1, Number(ex && ex.sets) || 0);
     const reps = Number(ex && ex.reps) || 0;
     const w = Number(ex && ex.weight) || 0;
@@ -652,6 +660,7 @@
   }
 
   function setVolume(ex, state, date) {
+    if (isUnworkedSkip(ex)) return 0;
     if (isStaticEx(ex)) return 0;
     const logs = expandSets(ex);
     const bwMode = isBodyweightEx(ex);
@@ -687,7 +696,7 @@
     const sessions = [];
     (state.workouts || []).forEach(function (w) {
       const rows = (w.exercises || []).filter(function (e) {
-        return normName(e.name) === target;
+        return normName(e.name) === target && !isUnworkedSkip(e);
       });
       if (!rows.length) return;
       let volume = 0;
@@ -746,6 +755,7 @@
         type: w.type,
         customType: w.customType,
         rows: rows,
+        finishedEarly: rows.some(function (e) { return !!e.finishedEarly; }),
         volume: volume,
         topWeight: topWeight,
         topReps: topRepsAtTop,
@@ -1209,7 +1219,9 @@
     const target = normName(name);
     if (!target) return null;
     const sessions = sessionsForExercise(state, target).filter(function (s) {
-      return !opts.exceptWorkoutId || s.workoutId !== opts.exceptWorkoutId;
+      if (opts.exceptWorkoutId && s.workoutId === opts.exceptWorkoutId) return false;
+      if (s.finishedEarly) return false;
+      return true;
     });
     if (!sessions.length) return null;
     const last = sessions[sessions.length - 1];
@@ -1606,6 +1618,7 @@
     levenshtein: levenshtein,
     exerciseCatalog: exerciseCatalog,
     canonicalName: canonicalName,
+    isUnworkedSkip: isUnworkedSkip,
     setVolume: setVolume,
     isBodyweightName: isBodyweightName,
     isBodyweightEx: isBodyweightEx,

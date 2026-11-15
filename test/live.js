@@ -145,8 +145,9 @@ try {
   now += 30 * 1000;
   Live.setClock(now);
   Live.skipExercise();
-  assert(first.sets[1].restAfter === 30, 'skip/next records elapsed rest, got ' + first.sets[1].restAfter);
+  assert(first.sets[1].restAfter == null || first.sets[1].restAfter === undefined, 'skip does not record rest, got ' + first.sets[1].restAfter);
   assert(!Live.isRestRunning(), 'rest stops after skip');
+  assert(first.finishedEarly, 'partial skip keeps logged sets and finishes early');
 
   const second = Live.currentExercise();
   Live.setDraft({ weight: 40, reps: 8 });

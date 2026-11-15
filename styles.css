@@ -936,6 +936,7 @@ input[type="date"], input[type="time"] { color-scheme: inherit; }
   margin: 18px 2px 10px;
 }
 .section-title h2 { font-size: 1.05rem; }
+.section-title h3 { font-size: 0.92rem; color: var(--text-muted); font-weight: 600; }
 
 .protein-mini {
   height: 6px;
@@ -1271,6 +1272,8 @@ details.live-type .chips { margin-top: 8px; }
 .live-add { display: flex; gap: 8px; }
 .live-add input { flex: 1; }
 .list-item.on { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-dim); }
+.list-item.skipped { opacity: 0.72; }
+.list-item .badge-skip { font-weight: 600; color: var(--text-dim); }
 .live-actions { display: flex; gap: 8px; margin-top: 8px; }
 .live-actions .btn { flex: 1; }
 .live-ex-head {

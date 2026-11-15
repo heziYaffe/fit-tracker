@@ -2527,24 +2527,45 @@
     const chips = C.WORKOUT_TYPES.map(function (tp) {
       return '<button type="button" class="chip' + (sess.type === tp.id ? ' active' : '') + '" data-action="live-type" data-type="' + tp.id + '">' + esc(tp.label) + '</button>';
     }).join('');
-    let exList = '';
+    function renderLiveExItems(indices) {
+      let html = '';
+      indices.forEach(function (i, pos) {
+        const item = sess.exercises[i];
+        const done = item.sets.length;
+        const target = Number(item.targetSets) || 0;
+        const parked = !!(item.skipped || item.finishedEarly);
+        const sets = parked
+          ? (item.skipped ? 'דולג' : ('סיום מוקדם' + (done ? ' · ' + done + ' סטים נשמרו' : '')))
+          : (item.sets.map(function (s, si) {
+            return 'סט ' + (si + 1) + ' ' + setShort(s, item) + (s.pr ? ' ⭐' : '');
+          }).join(' · ') || 'אין סטים עדיין');
+        const prevI = pos > 0 ? indices[pos - 1] : -1;
+        const nextI = pos + 1 < indices.length ? indices[pos + 1] : -1;
+        const sid = item.supersetId;
+        const ssPrev = !!(sid && prevI >= 0 && sess.exercises[prevI].supersetId === sid);
+        const ssNext = !!(sid && nextI >= 0 && sess.exercises[nextI].supersetId === sid);
+        const ssHead = !!(sid && !ssPrev && ssNext);
+        if (ssHead) html += '<div class="ss-group"><div class="ss-label">סופרסט</div>';
+        html += '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + (parked ? ' skipped' : '') + (ssHead || ssPrev ? ' ss' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
+          '<div class="title">' + (i + 1) + '. ' + esc(item.name) + ' ' + staticBadge(item, item.name) + ' ' + maxBadge(item) + ' ' + bwBadge(item, item.name) +
+          (parked ? ' · <span class="badge-skip">' + (item.skipped ? 'דולג' : 'סיום מוקדם') + '</span>' : (target ? ' · ' + done + '/' + target : '')) + '</div>' +
+          '<div class="sub">' + esc(sets) + '</div></button>';
+        if ((ssHead || ssPrev) && !ssNext) html += '</div>';
+      });
+      return html;
+    }
+    const activeIdx = [];
+    const parkedIdx = [];
     sess.exercises.forEach(function (item, i) {
-      const done = item.sets.length;
-      const target = Number(item.targetSets) || 0;
-      const sets = item.sets.map(function (s, si) {
-        return 'סט ' + (si + 1) + ' ' + setShort(s, item) + (s.pr ? ' ⭐' : '');
-      }).join(' · ') || 'אין סטים עדיין';
-      const sid = item.supersetId;
-      const ssPrev = !!(sid && i > 0 && sess.exercises[i - 1].supersetId === sid);
-      const ssNext = !!(sid && i + 1 < sess.exercises.length && sess.exercises[i + 1].supersetId === sid);
-      const ssHead = !!(sid && !ssPrev && ssNext);
-      if (ssHead) exList += '<div class="ss-group"><div class="ss-label">סופרסט</div>';
-      exList += '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + (ssHead || ssPrev ? ' ss' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
-        '<div class="title">' + (i + 1) + '. ' + esc(item.name) + ' ' + staticBadge(item, item.name) + ' ' + maxBadge(item) + ' ' + bwBadge(item, item.name) + (target ? ' · ' + done + '/' + target : '') + '</div>' +
-        '<div class="sub">' + esc(sets) + '</div></button>';
-      if ((ssHead || ssPrev) && !ssNext) exList += '</div>';
+      if (item.skipped || item.finishedEarly) parkedIdx.push(i);
+      else activeIdx.push(i);
     });
+    let exList = renderLiveExItems(activeIdx);
+    if (parkedIdx.length) {
+      exList += '<div class="section-title"><h3>דולגו · אפשר לחזור</h3></div>' + renderLiveExItems(parkedIdx);
+    }
     const suggest = ex ? (ex.suggestReason || '') : '';
+    const parkedNow = !!(ex && (ex.skipped || ex.finishedEarly));
     const isSt = ex && isStaticEx(ex, ex.name);
     const hold = L.holdState ? L.holdState() : null;
     const planned = ex && ex.targetSets
@@ -2599,10 +2620,15 @@
       restBar +
       (ex
         ? ('<section class="card live-ex"><div class="live-ex-head"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' +
-          '<button type="button" class="linkish" data-action="live-swap">החלף</button>' +
-          (ex.insteadOf && !(ex.sets && ex.sets.length) ? '<button type="button" class="linkish" data-action="live-unswap">בטל החלפה</button>' : '') +
+          ((ex.skipped || ex.finishedEarly)
+            ? '<button type="button" class="linkish" data-action="live-unskip">חזור לתרגיל</button>'
+            : '<button type="button" class="linkish" data-action="live-skip">דלג</button>') +
+          (ex.skipped || ex.finishedEarly ? '' : '<button type="button" class="linkish" data-action="live-swap">החלף</button>') +
+          (ex.insteadOf && !(ex.sets && ex.sets.length) && !ex.skipped ? '<button type="button" class="linkish" data-action="live-unswap">בטל החלפה</button>' : '') +
           '</div>' +
           (ex.insteadOf ? '<p class="hp-legend">במקום ' + esc(ex.insteadOf) + '</p>' : '') +
+          (ex.skipped && !(ex.sets && ex.sets.length) ? '<p class="hp-legend">דולג. אפשר לחזור אליו אחר כך מהרשימה למטה.</p>' : '') +
+          (ex.finishedEarly ? '<p class="hp-legend">סיום מוקדם · הסטים שנרשמו נשמרו.</p>' : '') +
           (function () {
             const group = L.supersetGroup ? L.supersetGroup(sess.currentEx) : [];
             if (group.length < 2) return '';
@@ -2610,7 +2636,7 @@
             return '<p class="ss-now">סופרסט · ' + names + '</p>';
           }()) + planned +
           (function () {
-            if (!ex) return '';
+            if (!ex || parkedNow) return '';
             const rangeVal = (ex.repsMin && ex.repsMax && Number(ex.repsMax) !== Number(ex.repsMin))
               ? (ex.repsMin + '-' + ex.repsMax)
               : String(ex.repsMin || ex.targetReps || '');
@@ -2626,7 +2652,7 @@
           (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
           (pr.isPR ? '<div class="live-pr">⭐ שיא חדש בסט הזה! ' + prTags(pr.types) + '</div>' : '') +
           setList +
-          '<div class="step-grid">' +
+          (parkedNow ? '' : (          '<div class="step-grid">' +
           '<div class="step-col"><div class="label">' + (isBwEx(ex, ex.name) ? 'תוספת (ק״ג)' : 'משקל (ק״ג)') + '</div>' +
           '<div class="big-stepper">' +
           '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="-2.5">−2.5</button>' +
@@ -2652,9 +2678,9 @@
           (isSt && !hold ? '<button type="button" class="btn primary wide live-log live-hold-start" data-action="live-hold-start">התחל טיימר</button>' : '') +
           (hold ? '' : '<button type="button" class="btn' + (isSt ? '' : ' primary') + ' wide live-log" data-action="live-log">' + (isSt ? 'רשום בלי טיימר · סט ' : 'רשום סט ') + (ex.sets.length + 1) + '</button>') +
           '<div class="live-actions">' +
-          (ex.sets.length ? '<button type="button" class="btn" data-action="live-undo">בטל סט</button>' : '') +
-          (nxt ? '<button type="button" class="btn" data-action="live-skip">דלג לתרגיל הבא</button>' : '') +
-          '</div></section>')
+          (ex.sets.length && !ex.skipped && !ex.finishedEarly ? '<button type="button" class="btn" data-action="live-undo">בטל סט</button>' : '') +
+          '</div>')) +
+          '</section>')
         : '<section class="card"><p>הוסיפו תרגיל כדי להתחיל לתעד סטים.</p></section>') +
       '<section class="card"><h2>הוסף תרגיל</h2>' +
       '<div class="live-add"><input type="text" id="live-ex-name" placeholder="שם התרגיל" autocomplete="off" />' +
@@ -3418,6 +3444,7 @@
       return;
     }
     if (action === 'live-skip') { root.FitLive.skipExercise(); render(); return; }
+    if (action === 'live-unskip') { root.FitLive.unskipExercise(); render(); return; }
     if (action === 'update-template-from-live') {
       const sum = ui.liveSummary;
       if (sum && sum.templateId && sum.templatePayload) {
