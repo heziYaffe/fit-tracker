@@ -233,6 +233,24 @@ async function whoopGet(access: string, path: string) {
   return await res.json();
 }
 
+async function whoopGetAll(access: string, path: string) {
+  const records: Record<string, unknown>[] = [];
+  let next = "";
+  const [base, qs] = path.split("?");
+  const params = new URLSearchParams(qs || "");
+  for (let page = 0; page < 20; page++) {
+    if (next) params.set("nextToken", next);
+    const url = base + (params.toString() ? "?" + params.toString() : "");
+    const data = await whoopGet(access, url);
+    const rows = (data && data.records) || [];
+    for (const row of rows) records.push(row);
+    next = data && data.next_token ? String(data.next_token) : "";
+    if (!next) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return { records };
+}
+
 function localDateJerusalem(iso: string, offset?: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -457,11 +475,11 @@ function mergeRecordsById(groups: Array<{ records?: Record<string, unknown>[] }>
   return Object.values(map);
 }
 
-async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: string) {
+async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: string, days = 90) {
   const end = new Date();
-  const start = new Date(end.getTime() - 14 * 86400000);
+  const start = new Date(end.getTime() - Math.max(14, days) * 86400000);
   const q = "?start=" + start.toISOString() + "&end=" + end.toISOString() + "&limit=25";
-  const rangedCycles = await whoopGet(access, "/v2/cycle" + q).catch((e) => {
+  const rangedCycles = await whoopGetAll(access, "/v2/cycle" + q).catch((e) => {
     console.error("cycle range", e);
     return { records: [] as Record<string, unknown>[] };
   });
@@ -475,7 +493,7 @@ async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: 
   for (const c of cycleList) {
     if (c.id != null) cycleById[String(c.id)] = c;
   }
-  const sleeps = await whoopGet(access, "/v2/activity/sleep" + q).catch((e) => {
+  const sleeps = await whoopGetAll(access, "/v2/activity/sleep" + q).catch((e) => {
     console.error("sleep", e);
     return { records: [] as Record<string, unknown>[] };
   });
@@ -496,7 +514,7 @@ async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: 
     if (fromSleep) mapped.date = fromSleep;
     await upsertMetric(sb, userId, mapped);
   }
-  const recs = await whoopGet(access, "/v2/recovery" + q).catch((e) => {
+  const recs = await whoopGetAll(access, "/v2/recovery" + q).catch((e) => {
     console.error("recovery", e);
     return { records: [] as Record<string, unknown>[] };
   });
@@ -520,7 +538,7 @@ async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: 
       console.error("cycle recovery " + id, err);
     }
   }
-  const workouts = await whoopGet(access, "/v2/activity/workout" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
+  const workouts = await whoopGetAll(access, "/v2/activity/workout" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
   for (const w of workouts.records || []) {
     await upsertWorkout(sb, userId, mapWorkout(w));
   }
@@ -599,7 +617,7 @@ Deno.serve(async (req) => {
         if (access) {
           waitUntil(withTimeout(
             pullRecent(sb, userId, access),
-            45_000,
+            90_000,
             "whoop initial sync",
           ));
         }

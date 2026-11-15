@@ -489,12 +489,73 @@
   }
 
 
+  function recOptsFromExercise(ex, extra) {
+    extra = extra || {};
+    if (!ex) return extra;
+    return Object.assign({
+      sets: Number(ex.targetSets) || Number(ex.sets) || 3,
+      repsMin: ex.repsMin,
+      repsMax: ex.repsMax,
+      repsMode: ex.repsMode,
+      bodyweight: !!ex.bodyweight,
+      static: !!ex.static,
+      increment: ex.weightStep || extra.increment
+    }, extra);
+  }
+
+  function loadRecommendation(name, opts) {
+    if (!E().recommendNextLoad) return null;
+    return E().recommendNextLoad(Store().getState(), name, opts || {}) || null;
+  }
+
+  function applyLoadRecommendation(index) {
+    if (!session) return null;
+    const idx = index == null ? session.currentEx : Number(index);
+    const ex = session.exercises[idx];
+    if (!ex) return null;
+    const rec = loadRecommendation(ex.name, recOptsFromExercise(ex));
+    if (!rec) return null;
+    ex.targetSets = rec.sets;
+    ex.targetWeight = rec.weight;
+    if (rec.kind !== 'max') ex.targetReps = rec.reps;
+    if (rec.secs) ex.targetSecs = rec.secs;
+    ex.suggestReason = rec.reason;
+    ex.loadRec = rec;
+    if (idx === session.currentEx) {
+      session.draft.weight = rec.weight;
+      session.draft.reps = rec.reps || 0;
+      if (rec.secs) session.draft.secs = rec.secs;
+    }
+    persist();
+    return rec;
+  }
+
   function planSuggestion(name, plannedWeight, repsMin, repsMax, opts) {
     opts = opts || {};
     const isMax = opts.repsMode === 'max' || E().isMaxReps(opts);
     const isBw = opts.bodyweight || E().isBodyweightName(name);
+    const rec = loadRecommendation(name, Object.assign({}, opts, {
+      sets: opts.sets,
+      repsMin: repsMin,
+      repsMax: repsMax,
+      bodyweight: opts.bodyweight,
+      static: opts.static,
+      repsMode: opts.repsMode
+    }));
     const sug = E().suggestNextSet(Store().getState(), name, [], null);
-    const hasHist = !!(sug && sug.reason && sug.reason.indexOf('אין היסטוריה') === -1);
+    const hasHist = !!(rec || (sug && sug.reason && sug.reason.indexOf('אין היסטוריה') === -1));
+    if (rec) {
+      return {
+        weight: rec.weight,
+        reps: rec.reps,
+        secs: rec.secs || 0,
+        reason: rec.reason,
+        label: rec.label,
+        rec: rec,
+        bestHold: rec.kind === 'static' ? rec.secs : 0,
+        bestMaxReps: rec.kind === 'max' ? rec.reps : (E().bestRepsForExercise(Store().getState(), name) || 0)
+      };
+    }
     const best = E().bestRepsForExercise(Store().getState(), name);
     const planned = plannedWeight != null && plannedWeight !== '' ? Number(plannedWeight) : null;
     const isSt = !!(opts.static || (E().isStaticName && E().isStaticName(name)));
@@ -570,7 +631,8 @@
         bodyweight: isBw,
         static: isSt,
         secsMin: tex.secsMin,
-        secsMax: tex.secsMax
+        secsMax: tex.secsMax,
+        sets: Number(tex.sets) || 3
       });
       const targetSecs = isMax ? 0 : (Number(tex.secsMax) || Number(tex.secsMin) || sug.secs || 45);
       sess.exercises.push({
@@ -745,6 +807,9 @@
     templateChanged: templateChanged,
     templatePayloadFromSession: templatePayloadFromSession,
     planSuggestion: planSuggestion,
+    loadRecommendation: loadRecommendation,
+    applyLoadRecommendation: applyLoadRecommendation,
+    recOptsFromExercise: recOptsFromExercise,
     startHold: startHold,
     stopHold: stopHold,
     cancelHold: cancelHold,

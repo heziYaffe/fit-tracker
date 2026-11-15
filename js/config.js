@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '23';
+  const APP_VERSION = '24';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -233,6 +233,14 @@
     bottle: [500, 750, 1000, 1500]
   };
 
+  const LOAD_RULES = {
+    volumeRate: 0.025,
+    deloadRate: -0.10,
+    staticPlusSec: 5,
+    maxPlusReps: 1,
+    twoForTwoExtra: 2
+  };
+
   const DEFAULT_SETTINGS = {
     weeklyWorkoutTarget: 4,
     dailyProteinTarget: 150,
@@ -266,6 +274,7 @@
     WATER_VESSEL_PRESETS,
     REST_DEFAULT_SEC,
     SMALL_LIFTS,
+    LOAD_RULES,
     MUSCLES,
     EXERCISE_MUSCLES,
     BODYWEIGHT_EXERCISES,

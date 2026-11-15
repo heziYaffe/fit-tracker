@@ -545,6 +545,75 @@
     return String(Math.round(v * 10) / 10);
   }
 
+  function renderLoadRecLine(rec, applyAction, extra) {
+    if (!rec || !rec.label) return '';
+    extra = extra || '';
+    return '<div class="load-rec">' +
+      '<button type="button" class="load-rec-main"' +
+      (applyAction ? (' data-action="' + applyAction + '" ' + extra) : ' disabled') + '>' +
+      'המלצה: ' + esc(rec.label) + '</button>' +
+      '<button type="button" class="load-rec-info" data-action="load-rec-info" data-reason="' + esc(rec.reason || '') + '" aria-label="הסבר ההמלצה">i</button>' +
+      '</div>';
+  }
+
+  function trendChangeHtml(s) {
+    if (s.change == null && s.changeAbs == null) return '<span class="trend-delta muted">—</span>';
+    const up = (s.changeAbs != null ? s.changeAbs > 0 : s.change > 0);
+    const down = (s.changeAbs != null ? s.changeAbs < 0 : s.change < 0);
+    const good = s.upIsGood == null ? null : ((up && s.upIsGood) || (down && s.upIsGood === false));
+    const cls = good == null ? 'neutral' : (good ? 'good' : 'bad');
+    const arrow = up ? '↑' : (down ? '↓' : '→');
+    let bit = arrow + ' ';
+    if (s.changeAbs != null && s.unit === '%') bit += (s.changeAbs > 0 ? '+' : '') + (Math.round(s.changeAbs * 10) / 10) + '%';
+    else if (s.change != null) bit += (s.change > 0 ? '+' : '') + Math.round(s.change * 100) + '%';
+    else bit += (s.changeAbs > 0 ? '+' : '') + String(Math.round(s.changeAbs * 10) / 10);
+    return '<span class="trend-delta ' + cls + '">' + bit + '</span>';
+  }
+
+  function formatTrendValue(s) {
+    if (s.current == null) return '—';
+    const n = Number(s.current);
+    if (s.unit === 'bpm' || s.unit === '%') return String(Math.round(n));
+    if (s.unit === 'שע׳') return (E.formatHoursClock ? E.formatHoursClock(n) : (Math.round(n * 10) / 10));
+    if (Math.abs(n) >= 100) return String(Math.round(n));
+    return String(Math.round(n * 10) / 10);
+  }
+
+  function renderTrendCard(s) {
+    if (!s || s.points < 3) {
+      return '<section class="card trend-card sparse"><div class="trend-head"><h3>' + esc(s.title) + '</h3>' +
+        '<p class="hp-legend">אין מספיק נתונים בטווח הזה</p></div></section>';
+    }
+    return '<section class="card trend-card">' +
+      '<div class="trend-head"><div><h3>' + esc(s.title) + '</h3>' +
+      '<p class="trend-now">' + esc(formatTrendValue(s)) + (s.unit && s.current != null ? (' <span class="unit">' + esc(s.unit) + '</span>') : '') +
+      '</p></div>' + trendChangeHtml(s) + '</div>' +
+      Charts.lineChart({
+        labels: s.labels,
+        values: s.values,
+        color: s.upIsGood === false ? '#ff8a7a' : (s.id === 'weight' || s.id === 'calories' ? '#8ab4ff' : '#d36bff'),
+        tighten: true,
+        height: 140,
+        aria: s.title
+      }) +
+      '<p class="hp-legend">ממוצע נע של 7 ימים' + (s.id === 'weeklyVolume' ? ' · סה״כ שבועי' : '') + '</p></section>';
+  }
+
+  function renderTrends(s) {
+    if (!E.computeTrends) return '';
+    const days = Number(ui.trendRange) || 90;
+    const tr = E.computeTrends(s, days);
+    const chips = [[30, '30 ימים'], [90, '90 ימים'], [365, 'שנה']].map(function (pair) {
+      return '<button type="button" class="chip' + (days === pair[0] ? ' active' : '') + '" data-action="trend-range" data-days="' + pair[0] + '">' + pair[1] + '</button>';
+    }).join('');
+    const main = (tr.series || []).map(renderTrendCard).join('');
+    const e1 = (tr.e1rm || []).map(renderTrendCard).join('');
+    return '<section class="trends-block"><div class="section-title"><h2>מגמות</h2></div>' +
+      '<div class="chips trend-range">' + chips + '</div>' +
+      main + (e1 ? '<p class="section-kicker">1RM משוער</p>' + e1 : '') +
+      '</section>';
+  }
+
   function renderDatePill(info) {
     const label = info.isToday ? 'היום' : E.formatDay(info.day);
     return '<div class="date-pill" role="group" aria-label="בחירת יום">' +
@@ -1136,6 +1205,7 @@
       '<button type="button" class="card weekly-card" data-action="open-summary"><p class="kicker">סיכום שבועי</p><h2>שיאים, נפח והמלצות</h2><p class="linkish">פתחו את הסיכום לשיתוף</p></button>' +
       '<button type="button" class="card weekly-card" data-action="open-body"><p class="kicker">גוף</p><h2>תמונות ומדידות היקפים</h2><p class="linkish">לפני/אחרי, שכבת רפאים ומעקב היקפים</p></button>' +
       renderBodyMapCard(s, false) +
+      renderTrends(s) +
       '<section class="card"><h2>אימונים לפי שבוע</h2>' +
       Charts.barChart({
         labels: weekCounts.map(function (w) { return w.label; }),
@@ -1155,7 +1225,6 @@
       }) +
       '<p class="hp-legend">14 הימים האחרונים מול יעד של ' + pTarget + ' גרם.</p></section>' +
       '<section class="card"><h2>משקל גוף</h2>' + weightChart + '</section>' +
-      recoveryChart +
       '<section class="card"><h2>לוח פעילות</h2>' +
       Charts.heatmap({ weeks: 16, getClass: hmClass }) +
       '<div class="legend">' +
@@ -2090,6 +2159,32 @@
       '<button type="button" class="btn wide" data-action="new-template" style="margin-top:8px">בניית תבנית חדשה</button></div>';
   }
 
+  function renderStartPreview() {
+    const id = (ui.modal && ui.modal.props && ui.modal.props.templateId) || '';
+    const tpl = Store.getTemplate(id);
+    if (!tpl) return '<div class="sheet"><p>התבנית לא נמצאה</p></div>';
+    const rows = (tpl.exercises || []).map(function (tex, i) {
+      const name = E.normName(tex.name);
+      const rec = E.recommendNextLoad ? E.recommendNextLoad(state(), name, {
+        sets: Number(tex.sets) || 3,
+        repsMin: tex.repsMin,
+        repsMax: tex.repsMax,
+        repsMode: tex.repsMode,
+        bodyweight: tex.bodyweight,
+        static: tex.static
+      }) : null;
+      return '<div class="preview-ex"><div class="title">' + (i + 1) + '. ' + esc(name) + '</div>' +
+        (rec ? renderLoadRecLine(rec, '') : '<p class="hp-legend">אין היסטוריה — בלי המלצה</p>') +
+        '</div>';
+    }).join('');
+    return '<div class="sheet" role="dialog" aria-label="תצוגת אימון"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>' + esc(tpl.name) + '</h2>' +
+      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+      '<p class="hp-legend">המלצה לכל תרגיל לפי האימון הקודם. אפשר לשנות בתוך האימון.</p>' +
+      '<div class="preview-list">' + (rows || '<p class="hp-legend">אין תרגילים בתבנית.</p>') + '</div>' +
+      '<button type="button" class="btn primary wide" data-action="start-template-go" data-id="' + esc(tpl.id) + '">התחלת אימון</button></div>';
+  }
+
   function renderLevelUp() {
     const lv = (ui.modal.props || {}).level || '';
     return '<div class="dialog celebrate" role="dialog" aria-label="עליית רמה">' +
@@ -2138,6 +2233,7 @@
     else if (type === 'badge') overlay.innerHTML = renderBadgeDialog();
     else if (type === 'food') overlay.innerHTML = renderFoodSheet();
     else if (type === 'start') overlay.innerHTML = renderStartSheet();
+    else if (type === 'start-preview') overlay.innerHTML = renderStartPreview();
     else if (type === 'levelup') overlay.innerHTML = renderLevelUp();
     else if (type === 'unlock') overlay.innerHTML = renderUnlock();
     else if (type === 'swap-food') overlay.innerHTML = renderSwapFoodSheet();
@@ -2397,6 +2493,10 @@
       ? '<p class="planned">מתוכנן: ' + ex.targetSets + ' סטים × ' + repsTargetLabel(ex) +
         ' · ' + loadLabel(ex.targetWeight, isBwEx(ex, ex.name)) + '</p>'
       : '';
+    const liveRec = (ex && root.FitLive && root.FitLive.loadRecommendation)
+      ? root.FitLive.loadRecommendation(ex.name, root.FitLive.recOptsFromExercise(ex))
+      : null;
+    const recHtml = liveRec ? renderLoadRecLine(liveRec, 'apply-load-rec') : '';
     const maxHint = ex && isSt
       ? '<p class="max-hint">' + (isMaxReps(ex) ? 'הפעילו את הטיימר והחזיקו עד כשל' : 'הפעילו את הטיימר או הזינו שניות ידנית') +
         (ex.bestHold ? ' · שיא קודם: <strong>' + formatSecs(ex.bestHold) + '</strong>' : '') +
@@ -2435,7 +2535,7 @@
       '<details class="live-type"' + (sess.templateId ? '' : ' open') + '><summary>סוג אימון</summary><div class="chips">' + chips + '</div></details>' +
       restBar +
       (ex
-        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' + planned + maxHint + holdBanner +
+        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' + planned + recHtml + maxHint + holdBanner +
           lastHtml +
           (ex.notes ? '<p class="hp-legend">' + esc(ex.notes) + '</p>' : '') +
           (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
@@ -3166,6 +3266,28 @@
     }
     if (action === 'start-live' || action === 'resume-live') { closeModal(); openLive(); return; }
     if (action === 'start-template') {
+      const tpl = Store.getTemplate(btn.dataset.id);
+      if (!tpl) { toast('התבנית לא נמצאה'); return; }
+      openModal('start-preview', { templateId: tpl.id });
+      return;
+    }
+    if (action === 'apply-load-rec') {
+      const rec = root.FitLive && root.FitLive.applyLoadRecommendation && root.FitLive.applyLoadRecommendation();
+      if (rec) toast('הוחלה: ' + rec.label);
+      else toast('אין המלצה לתרגיל הזה');
+      render();
+      return;
+    }
+    if (action === 'load-rec-info') {
+      toast(btn.dataset.reason || 'אין הסבר');
+      return;
+    }
+    if (action === 'trend-range') {
+      ui.trendRange = Number(btn.dataset.days) || 90;
+      render();
+      return;
+    }
+    if (action === 'start-template-go') {
       closeModal();
       const tpl = Store.getTemplate(btn.dataset.id);
       if (!tpl) { toast('התבנית לא נמצאה'); return; }

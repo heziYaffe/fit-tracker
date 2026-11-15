@@ -1057,6 +1057,421 @@
     return best;
   }
 
+  function brzycki1RM(weight, reps) {
+    const w = Number(weight) || 0;
+    const r = Number(reps) || 0;
+    if (w <= 0 || r <= 0 || r > 10) return 0;
+    if (r === 1) return w;
+    return w * (36 / (37 - r));
+  }
+
+  function roundToStep(weight, step) {
+    const s = Number(step) > 0 ? Number(step) : 2.5;
+    const w = Number(weight) || 0;
+    if (w <= 0) return 0;
+    return Math.round(Math.round(w / s) * s * 100) / 100;
+  }
+
+  function formatLoadKg(w) {
+    const n = Number(w) || 0;
+    if (Math.abs(n - Math.round(n)) < 0.001) return String(Math.round(n));
+    return String(Math.round(n * 4) / 4);
+  }
+
+  function sessionSetCount(session) {
+    if (!session) return 0;
+    let n = 0;
+    (session.rows || []).forEach(function (e) {
+      const logs = expandSets(e);
+      n += logs.length ? logs.length : (Number(e.sets) || 0);
+    });
+    return n;
+  }
+
+  function lastSetOf(session) {
+    if (!session) return null;
+    const rows = session.rows || [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const logs = expandSets(rows[i]);
+      if (logs.length) return logs[logs.length - 1];
+      if (Number(rows[i].reps) || Number(rows[i].secs) || Number(rows[i].weight)) {
+        return { weight: Number(rows[i].weight) || 0, reps: Number(rows[i].reps) || 0, secs: Number(rows[i].secs) || 0 };
+      }
+    }
+    return null;
+  }
+
+  function hitsTwoForTwo(session, repsMax, extra) {
+    if (!session || !(repsMax > 0)) return false;
+    const last = lastSetOf(session);
+    return !!(last && (Number(last.reps) || 0) >= repsMax + extra);
+  }
+
+  function recommendNextLoad(state, name, opts) {
+    opts = opts || {};
+    const rules = (C && C.LOAD_RULES) || { volumeRate: 0.025, deloadRate: -0.10, staticPlusSec: 5, maxPlusReps: 1, twoForTwoExtra: 2 };
+    const target = normName(name);
+    if (!target) return null;
+    const sessions = sessionsForExercise(state, target).filter(function (s) {
+      return !opts.exceptWorkoutId || s.workoutId !== opts.exceptWorkoutId;
+    });
+    if (!sessions.length) return null;
+    const last = sessions[sessions.length - 1];
+    const prev = sessions.length > 1 ? sessions[sessions.length - 2] : null;
+    const prev2 = sessions.length > 2 ? sessions[sessions.length - 3] : null;
+    const isMax = !!(opts.repsMode === 'max' || isMaxReps(opts) || isMaxReps(last.rows && last.rows[0]));
+    const isBw = !!(opts.bodyweight || last.bodyweight || isBodyweightName(target));
+    const isSt = !!(opts.static || last.static || isStaticName(target));
+    const plannedSets = Math.max(1, Number(opts.sets) || sessionSetCount(last) || 3);
+    let repsMin = Number(opts.repsMin);
+    let repsMax = Number(opts.repsMax);
+    if (!(repsMin > 0)) repsMin = Math.max(1, Number(last.topReps) || Number(last.maxReps) || 8);
+    if (!(repsMax > 0) || repsMax < repsMin) repsMax = repsMin;
+    const day = opts.date || todayISO();
+    const snap = metricSnapshot ? metricSnapshot(state, day) : {};
+    const recPct = snap && snap.recoveryPct != null ? Number(snap.recoveryPct) : null;
+    const zone = recoveryZone ? recoveryZone(recPct) : null;
+    const dropped2 = !!(last && prev && prev2 && last.e1rm > 0 && prev.e1rm > 0 && prev2.e1rm > 0 &&
+      last.e1rm < prev.e1rm && prev.e1rm < prev2.e1rm);
+    const droppedHold2 = !!(isSt && last && prev && prev2 && last.maxHold > 0 && prev.maxHold > 0 && prev2.maxHold > 0 &&
+      last.maxHold < prev.maxHold && prev.maxHold < prev2.maxHold);
+    const droppedReps2 = !!(isBw && !isSt && last && prev && prev2 && last.maxReps > 0 && prev.maxReps > 0 && prev2.maxReps > 0 &&
+      last.maxReps < prev.maxReps && prev.maxReps < prev2.maxReps);
+
+    let r = rules.volumeRate;
+    let reason = 'נפח +' + (Math.round(r * 1000) / 10) + '% מהאימון הקודם';
+    if (dropped2 || droppedHold2 || droppedReps2) {
+      r = rules.deloadRate;
+      reason = 'ירידה בביצועים בשני אימונים — הפחתה 10%';
+    } else if (zone === 'red') {
+      r = rules.deloadRate;
+      reason = 'התאוששות נמוכה — הפחתה 10%';
+    } else if (zone === 'yellow') {
+      r = 0;
+      reason = 'התאוששות בינונית — שמירה על הנפח';
+    } else if (zone === 'green') {
+      reason = 'התאוששות טובה · נפח +' + (Math.round(r * 1000) / 10) + '% מהאימון הקודם';
+    }
+
+    const twoForTwo = !isSt && !isMax && r >= 0 &&
+      hitsTwoForTwo(last, repsMax, rules.twoForTwoExtra) &&
+      hitsTwoForTwo(prev, repsMax, rules.twoForTwoExtra);
+
+    const increment = Number(opts.increment) > 0
+      ? Number(opts.increment)
+      : weightStep(target, last.topWeight || (last.bestRow && last.bestRow.weight) || 0);
+
+    /* Static / timed */
+    if (isSt) {
+      const lastHold = Number(last.maxHold) || Number(lastSetOf(last) && lastSetOf(last).secs) || 0;
+      if (!(lastHold > 0)) return null;
+      let secs = lastHold;
+      if (r < 0) secs = Math.max(1, Math.round(lastHold * (1 + r)));
+      else if (r === 0) secs = lastHold;
+      else secs = lastHold + (rules.staticPlusSec || 5);
+      const label = plannedSets + '×' + secs + ' שנ׳';
+      return {
+        kind: 'static',
+        sets: plannedSets,
+        reps: 0,
+        weight: Number(last.topWeight) || 0,
+        secs: secs,
+        label: label,
+        reason: r < 0 ? reason : (r === 0 ? reason : '+5 שנ׳ להחזקה'),
+        r: r,
+        e1rm: last.e1rm,
+        volumeLast: last.volume,
+        twoForTwo: false
+      };
+    }
+
+    /* MAX reps */
+    if (isMax) {
+      const lastMax = Number(last.maxReps) || Number(lastSetOf(last) && lastSetOf(last).reps) || 0;
+      if (!(lastMax > 0)) return null;
+      let reps = lastMax;
+      if (r < 0) reps = Math.max(1, lastMax - 1);
+      else if (r === 0) reps = lastMax;
+      else reps = lastMax + (rules.maxPlusReps || 1);
+      const w = isBw && !(Number(last.topWeight) > 0) ? 0 : (Number(last.topWeight) || 0);
+      const label = w
+        ? ('MAX · ' + reps + ' חזרות · ' + formatLoadKg(w) + ' ק״ג')
+        : ('MAX · ' + reps + ' חזרות');
+      return {
+        kind: 'max',
+        sets: plannedSets,
+        reps: reps,
+        weight: w,
+        secs: 0,
+        label: label,
+        reason: r < 0 ? reason : (r === 0 ? reason : 'שיא MAX קודם +1'),
+        r: r,
+        e1rm: last.e1rm,
+        volumeLast: last.volume,
+        twoForTwo: false
+      };
+    }
+
+    /* Bodyweight (no added load): progress reps */
+    if (isBw && !(Number(last.topWeight) > 0)) {
+      const lastRepsTotal = Number(last.totalReps) || 0;
+      const lastAvg = lastRepsTotal && plannedSets ? lastRepsTotal / plannedSets : (Number(last.maxReps) || repsMin);
+      let nextTotal = lastRepsTotal * (1 + r);
+      if (!(lastRepsTotal > 0)) nextTotal = plannedSets * repsMin * (1 + r);
+      let reps = Math.max(1, Math.round(nextTotal / plannedSets));
+      if (r > 0 && reps <= lastAvg) reps = Math.ceil(lastAvg) + 1;
+      if (reps < repsMin) reps = repsMin;
+      if (reps > repsMax && r <= 0) reps = repsMax;
+      const label = plannedSets + '×' + reps + ' חזרות';
+      return {
+        kind: 'bodyweight',
+        sets: plannedSets,
+        reps: reps,
+        weight: 0,
+        secs: 0,
+        label: label,
+        reason: reason,
+        r: r,
+        e1rm: last.e1rm,
+        volumeLast: last.volume,
+        volumeNext: plannedSets * reps,
+        twoForTwo: false
+      };
+    }
+
+    /* Weighted: Epley volume target */
+    const e1rm = Number(last.e1rm) || 0;
+    if (!(e1rm > 0)) return null;
+    const vLast = Number(last.volume) || 0;
+    const vNext = vLast > 0 ? vLast * (1 + r) : 0;
+    let best = null;
+    for (let reps = repsMin; reps <= repsMax; reps++) {
+      let w = e1rm / (1 + reps / 30);
+      w = roundToStep(w, increment);
+      if (!(w > 0)) continue;
+      const vol = plannedSets * reps * w;
+      const err = vNext > 0 ? Math.abs(vol - vNext) : 0;
+      const mid = (repsMin + repsMax) / 2;
+      const midDist = Math.abs(reps - mid);
+      if (!best || err < best.err - 0.01 || (Math.abs(err - best.err) < 0.01 && midDist < best.midDist)) {
+        best = { reps: reps, weight: w, volume: vol, err: err, midDist: midDist };
+      }
+    }
+    if (!best) return null;
+    if (twoForTwo) {
+      best.weight = roundToStep(best.weight + increment, increment);
+      best.volume = plannedSets * best.reps * best.weight;
+      reason = 'כלל 2-for-2 — העלאת משקל';
+    }
+    const label = plannedSets + '×' + best.reps + ' · ' + formatLoadKg(best.weight) + ' ק״ג';
+    return {
+      kind: 'weight',
+      sets: plannedSets,
+      reps: best.reps,
+      weight: best.weight,
+      secs: 0,
+      label: label,
+      reason: reason,
+      r: r,
+      e1rm: e1rm,
+      brzycki: (function () {
+        const set = last.bestRow;
+        if (!set) return 0;
+        return brzycki1RM((Number(set.weight) || 0), Number(set.reps) || 0);
+      })(),
+      volumeLast: vLast,
+      volumeNext: best.volume,
+      twoForTwo: twoForTwo,
+      increment: increment,
+      zone: zone
+    };
+  }
+
+  function rollingAverage(values, window) {
+    const w = window || 7;
+    const out = [];
+    for (let i = 0; i < values.length; i++) {
+      let sum = 0;
+      let n = 0;
+      for (let j = Math.max(0, i - w + 1); j <= i; j++) {
+        const v = values[j];
+        if (v == null || v === '' || Number.isNaN(Number(v))) continue;
+        sum += Number(v);
+        n += 1;
+      }
+      out.push(n ? sum / n : null);
+    }
+    return out;
+  }
+
+  function firstLastPresent(values) {
+    let first = null;
+    let last = null;
+    for (let i = 0; i < values.length; i++) {
+      if (values[i] != null && !Number.isNaN(Number(values[i]))) {
+        if (first == null) first = Number(values[i]);
+        last = Number(values[i]);
+      }
+    }
+    return { first: first, last: last };
+  }
+
+  function trendChange(first, last) {
+    if (first == null || last == null) return null;
+    if (first === 0) return last === 0 ? 0 : null;
+    return (last - first) / Math.abs(first);
+  }
+
+  function downsampleTrend(labels, values, maxPts) {
+    const n = values.length;
+    if (n <= maxPts) return { labels: labels, values: values };
+    const outL = [];
+    const outV = [];
+    const step = n / maxPts;
+    for (let i = 0; i < maxPts; i++) {
+      const a = Math.round(i * step);
+      const b = Math.min(n, Math.round((i + 1) * step));
+      let sum = 0;
+      let c = 0;
+      for (let j = a; j < b; j++) {
+        if (values[j] == null || Number.isNaN(Number(values[j]))) continue;
+        sum += Number(values[j]);
+        c += 1;
+      }
+      outL.push(labels[Math.min(n - 1, Math.floor((a + b - 1) / 2))]);
+      outV.push(c ? sum / c : null);
+    }
+    return { labels: outL, values: outV };
+  }
+
+  function computeTrends(state, days, now) {
+    const range = Number(days) || 90;
+    const dates = lastNDates(range, now).slice().reverse();
+    const metrics = bestMetricsByDate(state);
+    function metricSeries(key) {
+      return dates.map(function (d) {
+        const snap = metricSnapshot(state, d);
+        if (!snap || snap[key] == null || snap[key] === '') return null;
+        const n = Number(snap[key]);
+        return Number.isFinite(n) ? n : null;
+      });
+    }
+    const weightByDate = {};
+    (state.weights || []).forEach(function (w) {
+      if (!w || !w.date) return;
+      const n = Number(w.weight);
+      if (Number.isFinite(n)) weightByDate[w.date] = n;
+    });
+    const calByDate = {};
+    (state.nutrition || []).forEach(function (n) {
+      if (!n || !n.date) return;
+      const c = Number(n.calories);
+      if (Number.isFinite(c) && c > 0) calByDate[n.date] = c;
+    });
+    const volumeByDate = {};
+    (state.workouts || []).forEach(function (w) {
+      if (!w || !w.date) return;
+      let v = 0;
+      (w.exercises || []).forEach(function (e) { v += setVolume(e, state, w.date); });
+      volumeByDate[w.date] = (volumeByDate[w.date] || 0) + v;
+    });
+
+    function pack(id, title, unit, raw, upIsGood) {
+      const rolled = rollingAverage(raw, 7);
+      const ends = firstLastPresent(rolled);
+      const change = trendChange(ends.first, ends.last);
+      const present = raw.filter(function (v) { return v != null; }).length;
+      const plot = downsampleTrend(dates.map(function (d) {
+        return parseISO(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
+      }), rolled, range > 90 ? 52 : 90);
+      return {
+        id: id,
+        title: title,
+        unit: unit || '',
+        raw: raw,
+        rolled: rolled,
+        labels: plot.labels,
+        values: plot.values,
+        current: ends.last,
+        start: ends.first,
+        change: change,
+        changeAbs: (ends.first != null && ends.last != null) ? (ends.last - ends.first) : null,
+        upIsGood: upIsGood,
+        points: present
+      };
+    }
+
+    /* Weekly training volume — one point per week in range */
+    const weekStart = weekStartSunday(dates[0]);
+    const weekLabels = [];
+    const weekVals = [];
+    let ws = weekStart;
+    const lastDate = dates[dates.length - 1];
+    while (ws <= lastDate) {
+      const we = addDays(ws, 6);
+      let sum = 0;
+      let has = false;
+      for (let d = ws; d <= we; d = addDays(d, 1)) {
+        if (volumeByDate[d] != null) { sum += volumeByDate[d]; has = true; }
+      }
+      weekLabels.push(parseISO(ws).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' }));
+      weekVals.push(has ? sum : null);
+      ws = addDays(ws, 7);
+    }
+    const weekEnds = firstLastPresent(weekVals);
+    const weekly = {
+      id: 'weeklyVolume',
+      title: 'נפח אימון שבועי',
+      unit: 'ק״ג',
+      raw: weekVals,
+      rolled: weekVals,
+      labels: weekLabels,
+      values: weekVals,
+      current: weekEnds.last,
+      start: weekEnds.first,
+      change: trendChange(weekEnds.first, weekEnds.last),
+      changeAbs: (weekEnds.first != null && weekEnds.last != null) ? (weekEnds.last - weekEnds.first) : null,
+      upIsGood: true,
+      points: weekVals.filter(function (v) { return v != null; }).length
+    };
+
+    const series = [
+      pack('hrv', 'HRV', 'ms', metricSeries('hrv'), true),
+      pack('rhr', 'דופק מנוחה', 'bpm', metricSeries('rhr'), false),
+      pack('recovery', 'התאוששות', '%', metricSeries('recoveryPct'), true),
+      pack('sleepPerf', 'ביצועי שינה', '%', metricSeries('sleepPerformance'), true),
+      pack('sleepHours', 'שעות שינה', 'שע׳', metricSeries('sleepHours'), true),
+      pack('weight', 'משקל גוף', 'ק״ג', dates.map(function (d) { return weightByDate[d] != null ? weightByDate[d] : null; }), null),
+      pack('calories', 'קלוריות יומיות', 'קק״ל', dates.map(function (d) { return calByDate[d] != null ? calByDate[d] : null; }), null),
+      weekly
+    ];
+
+    const index = exerciseIndex(state) || [];
+    index.sort(function (a, b) { return (b.sessions || 0) - (a.sessions || 0); });
+    const top = index.slice(0, 4);
+    const e1rmSeries = top.map(function (it) {
+      const sessions = sessionsForExercise(state, it.name).filter(function (s) {
+        return s.date >= dates[0] && s.date <= lastDate && s.e1rm > 0;
+      });
+      const byDate = {};
+      sessions.forEach(function (s) { byDate[s.date] = s.e1rm; });
+      let lastSeen = null;
+      const raw = dates.map(function (d) {
+        if (byDate[d] != null) lastSeen = byDate[d];
+        return lastSeen;
+      });
+      /* only start filling after first session in range */
+      const firstIdx = dates.findIndex(function (d) { return byDate[d] != null; });
+      const clipped = raw.map(function (v, i) { return i < firstIdx || firstIdx < 0 ? null : v; });
+      const packed = pack('e1rm-' + it.name, '1RM משוער · ' + it.name, 'ק״ג', clipped, true);
+      packed.exercise = it.name;
+      return packed;
+    }).filter(function (s) { return s.points > 0; });
+
+    return { days: range, dates: dates, series: series, e1rm: e1rmSeries };
+  }
+
+
   const FitEngine = {
     todayISO: todayISO,
     parseISO: parseISO,
@@ -1101,6 +1516,11 @@
     isStaticName: isStaticName,
     isStaticEx: isStaticEx,
     epley1RM: epley1RM,
+    brzycki1RM: brzycki1RM,
+    roundToStep: roundToStep,
+    recommendNextLoad: recommendNextLoad,
+    rollingAverage: rollingAverage,
+    computeTrends: computeTrends,
     sessionsForExercise: sessionsForExercise,
     attachPRs: attachPRs,
     exerciseStats: exerciseStats,
