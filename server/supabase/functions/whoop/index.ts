@@ -55,6 +55,33 @@ function json(body: unknown, status = 200) {
   });
 }
 
+
+function waitUntil(task: Promise<unknown>) {
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (runtime && typeof runtime.waitUntil === "function") {
+    runtime.waitUntil(task);
+    return;
+  }
+  task.catch((err) => console.error(err));
+}
+
+function withTimeout(task: Promise<unknown>, ms: number, label: string) {
+  let timer: number | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      console.error(label + " timed out after " + ms + "ms");
+      resolve();
+    }, ms) as unknown as number;
+  });
+  return Promise.race([
+    task.then(() => { if (timer) clearTimeout(timer); }, (err) => {
+      if (timer) clearTimeout(timer);
+      console.error(label, err);
+    }),
+    timeout,
+  ]);
+}
+
 function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
 }
@@ -465,15 +492,23 @@ Deno.serve(async (req) => {
         }).then((r) => r.json()).catch(() => ({}));
         const sb = admin();
         await saveTokens(sb, userId, token, profile.user_id ? String(profile.user_id) : undefined);
-        const tok = await getValidToken(sb, userId);
-        if (tok) await pullRecent(sb, userId, tok.access_token).catch((e) => console.error(e));
+        const access = token && token.access_token ? String(token.access_token) : "";
+        if (access) {
+          // Return the success page immediately; the first pull can take tens of seconds
+          // and was leaving the Whoop Grant screen spinning in Safari / in-app browsers.
+          waitUntil(withTimeout(
+            pullRecent(sb, userId, access),
+            45_000,
+            "whoop initial sync",
+          ));
+        }
       } catch (err) {
         const msg = String((err as Error).message || err);
         return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>${escapeHtml(msg)}</p><p>אפשר לסגור את החלון ולחזור לאפליקציה.</p>`, 400);
       }
       return htmlPage(
         "חיבור Whoop",
-        `<h1>חובר בהצלחה, חזור לאפליקציה</h1><p>אפשר לסגור את החלון הזה ולחזור לפיט. הנתונים יימשכו אוטומטית.</p><p><a href="${escapeHtml(app)}">פתיחת האפליקציה</a></p><script>try{location.replace(${JSON.stringify(app)});}catch(e){}</script>`,
+        `<h1>חובר בהצלחה, חזור לאפליקציה</h1><p>אפשר לסגור את החלון הזה ולחזור לפיט. הנתונים יימשכו ברקע.</p><p><a href="${escapeHtml(app)}">פתיחת האפליקציה</a></p>`,
       );
     }
 
