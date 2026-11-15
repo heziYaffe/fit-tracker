@@ -121,26 +121,39 @@
     persist();
   }
 
+  function prefillDraftFromLastSet(ex) {
+    if (!session || !ex || !ex.sets || !ex.sets.length) return false;
+    const last = ex.sets[ex.sets.length - 1];
+    const isSt = E().isStaticEx ? E().isStaticEx(ex, ex.name) : !!ex.static;
+    session.draft.weight = Number(last.weight) || 0;
+    if (isSt) {
+      session.draft.secs = Number(last.secs) || 0;
+      session.draft.reps = 0;
+    } else {
+      session.draft.reps = Number(last.reps) || 0;
+    }
+    return true;
+  }
+
   function applyDraftForExercise(ex) {
+    if (prefillDraftFromLastSet(ex)) return;
     const sug = E().suggestNextSet(Store().getState(), ex.name, ex.sets, null);
     const isMax = E().isMaxReps(ex);
     const isBw = E().isBodyweightEx(ex, ex.name);
     const isSt = E().isStaticEx ? E().isStaticEx(ex, ex.name) : !!ex.static;
-    session.draft.weight = ex.sets.length
-      ? sug.weight
-      : (ex.targetWeight != null && ex.targetWeight !== '' ? ex.targetWeight : (isBw || isSt ? (sug.weight || 0) : sug.weight));
+    session.draft.weight = (ex.targetWeight != null && ex.targetWeight !== '')
+      ? ex.targetWeight
+      : (isBw || isSt ? (sug.weight || 0) : sug.weight);
     if (isSt) {
       const best = E().bestHoldForExercise ? E().bestHoldForExercise(Store().getState(), ex.name) : 0;
-      const last = ex.sets.length ? (Number(ex.sets[ex.sets.length - 1].secs) || 0) : 0;
-      if (isMax) session.draft.secs = last || best || sug.secs || 45;
-      else session.draft.secs = ex.sets.length ? (last || sug.secs) : (ex.targetSecs || sug.secs || 45);
+      if (isMax) session.draft.secs = best || sug.secs || 45;
+      else session.draft.secs = ex.targetSecs || sug.secs || 45;
       session.draft.reps = 0;
     } else if (isMax) {
       const best = E().bestRepsForExercise(Store().getState(), ex.name);
-      const last = ex.sets.length ? ex.sets[ex.sets.length - 1].reps : 0;
-      session.draft.reps = last || best || sug.reps || 8;
+      session.draft.reps = best || sug.reps || 8;
     } else {
-      session.draft.reps = ex.sets.length ? sug.reps : (ex.targetReps || sug.reps);
+      session.draft.reps = ex.targetReps || sug.reps;
     }
   }
 
@@ -199,16 +212,7 @@
     const pr = E().setIsPR(Store().getState(), ex.name, weight, reps, null, secs);
     const row = { weight: weight, reps: reps, secs: secs, at: nowMs(), pr: pr.isPR, prTypes: pr.types };
     ex.sets.push(row);
-    const sug = E().suggestNextSet(Store().getState(), ex.name, ex.sets, null);
-    session.draft.weight = sug.weight;
-    if (isSt) {
-      if (E().isMaxReps(ex)) session.draft.secs = secs || sug.secs || 45;
-      else session.draft.secs = ex.targetSecs || sug.secs || secs;
-    } else if (E().isMaxReps(ex)) {
-      session.draft.reps = reps || sug.reps;
-    } else {
-      session.draft.reps = ex.targetReps || sug.reps;
-    }
+    prefillDraftFromLastSet(ex);
     startRest();
     const targetSets = Number(ex.targetSets) || 0;
     let advanced = false;
@@ -230,10 +234,7 @@
     const ex = currentExercise();
     if (!ex || !ex.sets.length) return;
     ex.sets.pop();
-    const sug = E().suggestNextSet(Store().getState(), ex.name, ex.sets, null);
-    session.draft.weight = sug.weight;
-    session.draft.reps = sug.reps;
-    if (sug.secs != null) session.draft.secs = sug.secs;
+    applyDraftForExercise(ex);
     cancelHold();
     cancelRest();
     persist();
