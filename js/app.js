@@ -4,11 +4,56 @@
 
   if (typeof document === 'undefined') return;
 
+  function consumeWhoopQuery() {
+    try {
+      var u = new URL(location.href);
+      var flag = u.searchParams.get('whoop');
+      if (!flag) return null;
+      var reason = u.searchParams.get('reason') || '';
+      u.searchParams.delete('whoop');
+      u.searchParams.delete('reason');
+      var search = u.searchParams.toString();
+      history.replaceState({}, '', u.pathname + (search ? '?' + search : '') + u.hash);
+      return { flag: flag, reason: reason };
+    } catch (e) { return null; }
+  }
+
+  function handleWhoopReturn() {
+    var got = consumeWhoopQuery();
+    if (!got) return;
+    if (got.flag === 'connected') {
+      if (window.FitUI && FitUI.toast) FitUI.toast('Whoop חובר בהצלחה. מושכים נתונים…');
+      if (window.FitSync && FitSync.whoopRefresh) {
+        FitSync.whoopRefresh().then(function () { return FitSync.syncNow(); }).then(function () {
+          if (window.FitUI && FitUI.toast) FitUI.toast('נתוני Whoop עודכנו');
+          if (window.FitUI) FitUI.render();
+        }).catch(function (e) {
+          if (window.FitUI && FitUI.toast) FitUI.toast((e && e.message) || 'משיכת הנתונים נכשלה');
+          if (window.FitUI) FitUI.render();
+        });
+      }
+      return;
+    }
+    var msg = 'החיבור ל-Whoop נכשל. נסו שוב מההגדרות';
+    if (got.reason === 'denied') msg = 'החיבור ל-Whoop בוטל';
+    else if (got.reason === 'invalid' || got.reason === 'expired') msg = 'הבקשה לא תקינה או שפג תוקפה. נסו שוב מההגדרות';
+    else if (got.reason === 'config') msg = 'חיבור Whoop לא מוכן עדיין';
+    else if (got.reason === 'token') msg = 'חיבור Whoop נכשל. נסו לחבר מחדש מההגדרות';
+    if (window.FitUI && FitUI.toast) FitUI.toast(msg);
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     FitStore.load();
     FitUI.init();
     if (window.FitNotify) FitNotify.start();
-    if (window.FitSync) FitSync.init().then(function () { if (window.FitUI) FitUI.render(); });
+    if (window.FitSync) {
+      FitSync.init().then(function () {
+        if (window.FitUI) FitUI.render();
+        handleWhoopReturn();
+      });
+    } else {
+      handleWhoopReturn();
+    }
 
     var fgTimer = 0;
     function onForeground() {

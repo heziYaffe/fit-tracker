@@ -31,6 +31,14 @@ function appReturnUrl() {
   return origin + "/fit-tracker";
 }
 
+function appRedirect(status: "connected" | "error", reason?: string) {
+  const base = appReturnUrl().replace(/\/+$/, "") + "/";
+  const dest = new URL(base);
+  dest.searchParams.set("whoop", status);
+  if (status === "error") dest.searchParams.set("reason", (reason || "server").slice(0, 40));
+  return Response.redirect(dest.toString(), 302);
+}
+
 function whoopConfigured() {
   return !!(Deno.env.get("WHOOP_CLIENT_ID") && Deno.env.get("WHOOP_CLIENT_SECRET"));
 }
@@ -182,11 +190,14 @@ async function saveTokens(sb: ReturnType<typeof admin>, userId: string, token: R
   const expires = token.expires_in
     ? new Date(Date.now() + Number(token.expires_in) * 1000).toISOString()
     : null;
+  const { data: existing } = await sb.from("whoop_tokens").select("refresh_token, whoop_user_id").eq("user_id", userId).maybeSingle();
+  // Whoop rotates refresh tokens; persist the new one, but never wipe the old if omitted.
+  const refresh = (token.refresh_token ? String(token.refresh_token) : "") || (existing && existing.refresh_token) || null;
   const row = {
     user_id: userId,
-    whoop_user_id: whoopUserId || null,
+    whoop_user_id: whoopUserId || (existing && existing.whoop_user_id) || null,
     access_token: token.access_token,
-    refresh_token: token.refresh_token || null,
+    refresh_token: refresh,
     expires_at: expires,
     scope: token.scope || SCOPES,
     updated_at: new Date().toISOString(),
@@ -222,16 +233,57 @@ async function whoopGet(access: string, path: string) {
   return await res.json();
 }
 
-function localDateFromStart(start: string, offset?: string) {
-  // start is ISO UTC; apply Whoop timezone_offset like "-05:00" if present.
-  const d = new Date(start);
+function localDateJerusalem(iso: string, offset?: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
   if (offset && /^[+-]\d{2}:\d{2}$/.test(offset)) {
     const sign = offset[0] === "-" ? -1 : 1;
     const [hh, mm] = offset.slice(1).split(":").map(Number);
     const shifted = new Date(d.getTime() + sign * (hh * 60 + mm) * 60000);
     return shifted.toISOString().slice(0, 10);
   }
-  return d.toISOString().slice(0, 10);
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Jerusalem",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return fmt.format(d);
+  } catch (_) {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+function localDateFromStart(start: string, offset?: string) {
+  return localDateJerusalem(start, offset);
+}
+
+function jerusalemToday(offset?: string) {
+  return localDateJerusalem(new Date().toISOString(), offset);
+}
+
+function cycleDayDate(cycle: Record<string, unknown>) {
+  const offset = String(cycle.timezone_offset || "");
+  // An open cycle is "today" — its strain is accumulating after wake-up.
+  if (!cycle.end) return jerusalemToday(offset || undefined);
+  // A closed cycle represents the day it started (wake-to-wake).
+  return localDateJerusalem(String(cycle.start || ""), offset);
+}
+
+function recoveryDayDate(
+  rec: Record<string, unknown>,
+  sleepDateById: Record<string, { date: string; cycleId?: string }>,
+  cycleById: Record<string, Record<string, unknown>>,
+) {
+  const sleepId = rec.sleep_id != null ? String(rec.sleep_id) : "";
+  const cycleId = rec.cycle_id != null ? String(rec.cycle_id) : "";
+  if (sleepId && sleepDateById[sleepId] && sleepDateById[sleepId].date) return sleepDateById[sleepId].date;
+  const cycle = cycleId ? cycleById[cycleId] : undefined;
+  if (cycle && cycle.end) return localDateJerusalem(String(cycle.end), String(cycle.timezone_offset || ""));
+  if (cycle && !cycle.end) return jerusalemToday(String(cycle.timezone_offset || "") || undefined);
+  // Recovery without a cycle/sleep: wake-up day from created_at, in Jerusalem — never bare UTC.
+  return localDateJerusalem(String(rec.created_at || rec.updated_at || new Date().toISOString()), String((rec as { timezone_offset?: string }).timezone_offset || ""));
 }
 
 function hoursFromMilli(ms: unknown) {
@@ -285,7 +337,7 @@ function mapRecovery(rec: Record<string, unknown>, date: string) {
 
 function mapCycle(cycle: Record<string, unknown>) {
   const score = (cycle.score || {}) as Record<string, unknown>;
-  const date = localDateFromStart(String(cycle.start || ""), String(cycle.timezone_offset || ""));
+  const date = cycleDayDate(cycle);
   return {
     date,
     strain: numOrNull(score.strain),
@@ -325,7 +377,11 @@ async function upsertMetric(sb: ReturnType<typeof admin>, userId: string, patch:
     .eq("record_id", recordId)
     .maybeSingle();
   const prev = (existing && existing.data) || { id: recordId, date: patch.date, source: "whoop" };
-  const next = { ...prev, ...patch, source: "whoop", id: recordId, updatedAt: new Date().toISOString() };
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== null && v !== undefined) clean[k] = v;
+  }
+  const next = { ...prev, ...clean, source: "whoop", id: recordId, date: patch.date, updatedAt: new Date().toISOString() };
   await sb.from("fit_records").upsert({
     user_id: userId,
     collection: "metrics",
@@ -389,34 +445,80 @@ async function ingestByType(sb: ReturnType<typeof admin>, userId: string, access
   }
 }
 
+function mergeRecordsById(groups: Array<{ records?: Record<string, unknown>[] }>) {
+  const map: Record<string, Record<string, unknown>> = {};
+  for (const g of groups) {
+    for (const row of g.records || []) {
+      const id = row.id != null ? String(row.id) : "";
+      if (id) map[id] = row;
+      else map["anon-" + Object.keys(map).length] = row;
+    }
+  }
+  return Object.values(map);
+}
+
 async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: string) {
   const end = new Date();
   const start = new Date(end.getTime() - 14 * 86400000);
   const q = "?start=" + start.toISOString() + "&end=" + end.toISOString() + "&limit=25";
-  const cycleDateById: Record<string, string> = {};
-  const cycles = await whoopGet(access, "/v2/cycle" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
-  for (const c of cycles.records || []) {
-    const mapped = mapCycle(c);
-    if (c.id != null && mapped.date) cycleDateById[String(c.id)] = mapped.date;
-    await upsertMetric(sb, userId, mapped);
+  const rangedCycles = await whoopGet(access, "/v2/cycle" + q).catch((e) => {
+    console.error("cycle range", e);
+    return { records: [] as Record<string, unknown>[] };
+  });
+  // Also fetch the newest cycles so an open current cycle isn't missed by the date filter.
+  const latestCycles = await whoopGet(access, "/v2/cycle?limit=10").catch((e) => {
+    console.error("cycle latest", e);
+    return { records: [] as Record<string, unknown>[] };
+  });
+  const cycleList = mergeRecordsById([rangedCycles, latestCycles]);
+  const cycleById: Record<string, Record<string, unknown>> = {};
+  for (const c of cycleList) {
+    if (c.id != null) cycleById[String(c.id)] = c;
   }
-  const sleeps = await whoopGet(access, "/v2/activity/sleep" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
+  const sleeps = await whoopGet(access, "/v2/activity/sleep" + q).catch((e) => {
+    console.error("sleep", e);
+    return { records: [] as Record<string, unknown>[] };
+  });
   const sleepDateById: Record<string, { date: string; cycleId?: string }> = {};
+  const sleepDateByCycle: Record<string, string> = {};
   for (const s of sleeps.records || []) {
     const mapped = mapSleep(s);
     if (s.id != null && mapped.date) {
       sleepDateById[String(s.id)] = { date: mapped.date, cycleId: s.cycle_id != null ? String(s.cycle_id) : undefined };
     }
+    if (s.cycle_id != null && mapped.date) sleepDateByCycle[String(s.cycle_id)] = mapped.date;
     await upsertMetric(sb, userId, mapped);
   }
-  const recs = await whoopGet(access, "/v2/recovery" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
+  // Strain belongs on the wake-up day of the cycle's sleep, not bedtime (cycle.start).
+  for (const c of cycleList) {
+    const mapped = mapCycle(c);
+    const fromSleep = c.id != null ? sleepDateByCycle[String(c.id)] : undefined;
+    if (fromSleep) mapped.date = fromSleep;
+    await upsertMetric(sb, userId, mapped);
+  }
+  const recs = await whoopGet(access, "/v2/recovery" + q).catch((e) => {
+    console.error("recovery", e);
+    return { records: [] as Record<string, unknown>[] };
+  });
+  const recByCycle: Record<string, Record<string, unknown>> = {};
   for (const r of recs.records || []) {
-    const cycleId = r.cycle_id != null ? String(r.cycle_id) : "";
-    const sleepId = r.sleep_id != null ? String(r.sleep_id) : "";
-    const date = (cycleId && cycleDateById[cycleId])
-      || (sleepId && sleepDateById[sleepId] && sleepDateById[sleepId].date)
-      || localDateFromStart(String(r.created_at || r.updated_at || end.toISOString()), "");
+    if (r.cycle_id != null) recByCycle[String(r.cycle_id)] = r;
+    const date = recoveryDayDate(r, sleepDateById, cycleById);
     await upsertMetric(sb, userId, mapRecovery(r, date));
+  }
+  // Per-cycle recovery for the current / recent cycles if the list endpoint omitted them.
+  for (const c of cycleList) {
+    const id = c.id != null ? String(c.id) : "";
+    if (!id || recByCycle[id]) continue;
+    try {
+      const rec = await whoopGet(access, "/v2/cycle/" + id + "/recovery");
+      if (rec) {
+        const date = recoveryDayDate(rec, sleepDateById, cycleById);
+        await upsertMetric(sb, userId, mapRecovery(rec, date));
+      }
+    } catch (err) {
+      console.error("cycle recovery " + id, err);
+    }
   }
   const workouts = await whoopGet(access, "/v2/activity/workout" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
   for (const w of workouts.records || []) {
@@ -468,18 +570,19 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === "GET" && (route === "/callback" || url.searchParams.has("code") || url.searchParams.has("error"))) {
-      const app = appReturnUrl() + "/#/settings?whoop=connected";
+      // supabase.co cannot serve HTML (forced text/plain). Always 302 back to the app.
+      // Never await the Whoop pull before redirecting — it left Grant spinning on iPhone.
       const oauthErr = url.searchParams.get("error");
       if (oauthErr) {
-        const desc = url.searchParams.get("error_description") || oauthErr;
-        return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>${escapeHtml(desc)}</p><p>אפשר לסגור את החלון ולחזור לאפליקציה.</p>`, 400);
+        const reason = oauthErr === "access_denied" ? "denied" : "invalid";
+        return appRedirect("error", reason);
       }
-      if (!whoopConfigured()) return missingWhoopConfig();
+      if (!whoopConfigured()) return appRedirect("error", "config");
       const code = url.searchParams.get("code") || "";
       const state = url.searchParams.get("state") || "";
       const [userId, ts, sig] = state.split(".");
       if (!code || !userId || sig !== await signState(userId + "." + ts)) {
-        return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>הבקשה לא תקינה או שפג תוקפה. חזרו לאפליקציה ונסו שוב.</p>`, 400);
+        return appRedirect("error", "invalid");
       }
       try {
         const token = await whoopToken({
@@ -494,8 +597,6 @@ Deno.serve(async (req) => {
         await saveTokens(sb, userId, token, profile.user_id ? String(profile.user_id) : undefined);
         const access = token && token.access_token ? String(token.access_token) : "";
         if (access) {
-          // Return the success page immediately; the first pull can take tens of seconds
-          // and was leaving the Whoop Grant screen spinning in Safari / in-app browsers.
           waitUntil(withTimeout(
             pullRecent(sb, userId, access),
             45_000,
@@ -503,13 +604,12 @@ Deno.serve(async (req) => {
           ));
         }
       } catch (err) {
-        const msg = String((err as Error).message || err);
-        return htmlPage("חיבור Whoop", `<h1>החיבור ל-Whoop נכשל</h1><p>${escapeHtml(msg)}</p><p>אפשר לסגור את החלון ולחזור לאפליקציה.</p>`, 400);
+        console.error(err);
+        const msg = String((err as Error).message || err).toLowerCase();
+        const reason = msg.includes("token") ? "token" : "server";
+        return appRedirect("error", reason);
       }
-      return htmlPage(
-        "חיבור Whoop",
-        `<h1>חובר בהצלחה, חזור לאפליקציה</h1><p>אפשר לסגור את החלון הזה ולחזור לפיט. הנתונים יימשכו ברקע.</p><p><a href="${escapeHtml(app)}">פתיחת האפליקציה</a></p>`,
-      );
+      return appRedirect("connected");
     }
 
     if (req.method === "POST" && route === "/webhook") {

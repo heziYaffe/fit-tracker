@@ -395,23 +395,45 @@
     });
   }
 
+  function markWhoopPulled() {
+    try { localStorage.setItem('fit-whoop-last-pull', String(Date.now())); } catch (e) {}
+  }
+
+  function lastWhoopPullAt() {
+    try { return Number(localStorage.getItem('fit-whoop-last-pull') || 0) || 0; } catch (e) { return 0; }
+  }
+
   function whoopRefresh() {
     if (!whoopReady()) return Promise.reject(new Error('חיבור Whoop לא מוכן עדיין'));
     if (!authUser) return Promise.reject(new Error('קודם צריך להתחבר לחשבון'));
     return fetch(fnUrl() + '/refresh', { method: 'POST', headers: headers() }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (!r.ok) throw new Error(authErrorMessage(body, 'משיכת נתוני Whoop נכשלה'));
+        markWhoopPulled();
         return body;
       });
     });
   }
 
   var lastWhoopSyncSeen = null;
-  function onForeground() {
+  var WHOOP_PULL_EVERY_MS = 15 * 60 * 1000;
+
+  function onForeground(opts) {
     if (!isConfigured() || !authUser || !whoopReady()) return Promise.resolve(null);
+    const force = !!(opts && opts.force);
     return whoopStatus().then(function (s) {
+      if (!(s && s.connected)) return s;
+      const due = force || (Date.now() - lastWhoopPullAt() >= WHOOP_PULL_EVERY_MS);
+      if (due) {
+        return whoopRefresh().then(function () {
+          return syncNow().then(function () { return s; });
+        }).catch(function (err) {
+          status.whoop = Object.assign({}, s, { error: err && err.message });
+          return s;
+        });
+      }
       const stamp = s && s.link && (s.link.last_sync_at || s.last_sync_at);
-      if (s && s.connected && stamp && stamp !== lastWhoopSyncSeen) {
+      if (stamp && stamp !== lastWhoopSyncSeen) {
         lastWhoopSyncSeen = stamp;
         return syncNow().then(function () { return s; }).catch(function () { return s; });
       }
