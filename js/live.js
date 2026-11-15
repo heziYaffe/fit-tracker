@@ -133,7 +133,7 @@
   function addExercise(name) {
     if (!session) return null;
     commitRest();
-    const n = E().normName(name);
+    const n = Store().addExerciseName ? Store().addExerciseName(name) : E().normName(name);
     if (!n) return null;
     const sug = E().suggestNextSet(Store().getState(), n, [], null);
     const bw = E().isBodyweightName(n);
@@ -154,7 +154,9 @@
       sets: [],
       fromTemplate: false,
       bodyweight: bw || st,
-      static: st
+      static: st,
+      originalName: n,
+      planSets: 0
     });
     session.currentEx = session.exercises.length - 1;
     session.draft.weight = sug.weight;
@@ -196,9 +198,10 @@
     const isMax = E().isMaxReps(ex);
     const isBw = E().isBodyweightEx(ex, ex.name);
     const isSt = E().isStaticEx ? E().isStaticEx(ex, ex.name) : !!ex.static;
+    const blankSwap = !!(ex.insteadOf && (ex.targetWeight === '' || ex.targetWeight == null));
     session.draft.weight = (ex.targetWeight != null && ex.targetWeight !== '')
       ? ex.targetWeight
-      : (isBw || isSt ? (sug.weight || 0) : sug.weight);
+      : (blankSwap ? 0 : (isBw || isSt ? (sug.weight || 0) : sug.weight));
     if (isSt) {
       const best = E().bestHoldForExercise ? E().bestHoldForExercise(Store().getState(), ex.name) : 0;
       if (isMax) session.draft.secs = best || sug.secs || 45;
@@ -687,7 +690,14 @@
         }),
         bodyweight: !!ex.bodyweight,
         static: !!ex.static,
-        secs: ex.sets.reduce(function (m, s) { return Math.max(m, Number(s.secs) || 0); }, 0)
+        secs: ex.sets.reduce(function (m, s) { return Math.max(m, Number(s.secs) || 0); }, 0),
+        insteadOf: ex.insteadOf || '',
+        notes: (function () {
+          const bits = [];
+          if (ex.notes) bits.push(ex.notes);
+          if (ex.insteadOf) bits.push('במקום ' + ex.insteadOf);
+          return bits.join(' · ');
+        }())
       });
     });
     if (!exercises.length) return null;
@@ -868,6 +878,10 @@
         bestHold: sug.bestHold || 0,
         sets: [],
         fromTemplate: true,
+        originalName: name,
+        planSets: Number(tex.sets) || 3,
+        planRepsMin: Number(tex.repsMin) || 0,
+        planRepsMax: Number(tex.repsMax) || 0,
         templateExId: tex.id,
         bodyweight: isBw,
         static: isSt
@@ -933,8 +947,10 @@
     for (let i = 0; i < snap.length; i++) {
       const a = snap[i];
       const b = session.exercises[i];
-      if (E().normName(a.name) !== E().normName(b.name)) return true;
-      if ((Number(a.sets) || 0) !== (Number(b.targetSets) || b.sets.length || 0)) return true;
+      const bName = b.originalName || b.name;
+      if (E().normName(a.name) !== E().normName(bName)) return true;
+      const planSets = b.planSets != null && b.planSets !== '' ? Number(b.planSets) : (Number(b.targetSets) || b.sets.length || 0);
+      if ((Number(a.sets) || 0) !== planSets) return true;
     }
     return session.exercises.some(function (ex) { return !ex.fromTemplate && ex.sets.length; })
       || session.exercises.some(function (ex) { return ex.fromTemplate && ex.sets.length !== (Number(ex.targetSets) || 0); });
@@ -949,8 +965,8 @@
         const last = ex.sets.length ? ex.sets[ex.sets.length - 1] : null;
         return {
           id: ex.templateExId || undefined,
-          name: ex.name,
-          sets: ex.sets.length || ex.targetSets || 3,
+          name: ex.originalName || ex.name,
+          sets: (ex.planSets != null && ex.planSets !== '') ? (Number(ex.planSets) || 3) : (ex.sets.length || ex.targetSets || 3),
           repsMode: ex.repsMode || 'range',
           repsMin: ex.repsMin || (last && last.reps) || ex.targetReps || 8,
           repsMax: ex.repsMax || (last && last.reps) || ex.targetReps || 12,
@@ -995,6 +1011,124 @@
     };
     discard();
     return summary;
+  }
+
+  function snapshotExercisePlan(ex) {
+    return {
+      name: ex.name,
+      bodyweight: !!ex.bodyweight,
+      static: !!ex.static,
+      targetWeight: ex.targetWeight,
+      targetReps: ex.targetReps,
+      targetSecs: ex.targetSecs,
+      repsMode: ex.repsMode,
+      suggestReason: ex.suggestReason || '',
+      bestMaxReps: ex.bestMaxReps || 0,
+      bestHold: ex.bestHold || 0
+    };
+  }
+
+  function applySwapLoad(ex) {
+    const rec = loadRecommendation(ex.name, recOptsFromExercise(ex));
+    const last = E().lastPerformance(Store().getState(), ex.name);
+    const hasHist = !!(rec || last);
+    if (hasHist && rec) {
+      ex.targetWeight = rec.weight || 0;
+      if (rec.kind !== 'max' && rec.reps) ex.targetReps = rec.reps;
+      if (rec.secs) ex.targetSecs = rec.secs;
+      ex.suggestReason = rec.reason || '';
+      ex.loadRec = rec;
+    } else if (hasHist && last && last.last) {
+      ex.targetWeight = last.last.weight || 0;
+      if (last.last.reps) ex.targetReps = last.last.reps;
+      if (last.last.secs) ex.targetSecs = last.last.secs;
+      ex.suggestReason = '';
+    } else {
+      ex.targetWeight = '';
+      ex.suggestReason = '';
+      ex.loadRec = null;
+    }
+  }
+
+  function swapExercise(index, rawName) {
+    if (!session) return { ok: false, error: 'no-session' };
+    const idx = index == null ? session.currentEx : Number(index);
+    const ex = session.exercises[idx];
+    if (!ex) return { ok: false, error: 'no-exercise' };
+    if (ex.sets && ex.sets.length) return { ok: false, error: 'has-sets' };
+    const name = Store().addExerciseName ? Store().addExerciseName(rawName) : E().canonicalName(rawName, E().exerciseCatalog(Store().getState()));
+    if (!name) return { ok: false, error: 'bad-name' };
+    if (E().foldName(ex.name) === E().foldName(name)) return { ok: true, exercise: ex, same: true };
+    if (!ex.originalName) ex.originalName = ex.name;
+    if (!ex.originalPlan) ex.originalPlan = snapshotExercisePlan(ex);
+    const from = ex.insteadOf || ex.originalName || ex.name;
+    ex.name = name;
+    ex.insteadOf = from;
+    ex.bodyweight = E().isBodyweightName(name) || (E().isStaticName && E().isStaticName(name));
+    ex.static = !!(E().isStaticName && E().isStaticName(name));
+    applySwapLoad(ex);
+    if (Store().recordSubstitution) Store().recordSubstitution(from, name);
+    if (idx === session.currentEx) applyDraftForExercise(ex);
+    if (!hasHistWeight(ex)) {
+      if (idx === session.currentEx) {
+        session.draft.weight = ex.static || ex.bodyweight ? (Number(ex.targetWeight) || 0) : (Number(ex.targetWeight) || 0);
+        if (ex.targetWeight === '' && !ex.static) session.draft.weight = 0;
+      }
+    }
+    persist();
+    return { ok: true, exercise: ex };
+  }
+
+  function hasHistWeight(ex) {
+    return ex && ex.targetWeight !== '' && ex.targetWeight != null;
+  }
+
+  function unswapExercise(index) {
+    if (!session) return { ok: false, error: 'no-session' };
+    const idx = index == null ? session.currentEx : Number(index);
+    const ex = session.exercises[idx];
+    if (!ex) return { ok: false, error: 'no-exercise' };
+    if (ex.sets && ex.sets.length) return { ok: false, error: 'has-sets' };
+    if (!ex.insteadOf && !ex.originalPlan) return { ok: false, error: 'not-swapped' };
+    const snap = ex.originalPlan;
+    if (snap) {
+      ex.name = snap.name;
+      ex.bodyweight = !!snap.bodyweight;
+      ex.static = !!snap.static;
+      ex.targetWeight = snap.targetWeight;
+      ex.targetReps = snap.targetReps;
+      ex.targetSecs = snap.targetSecs;
+      ex.repsMode = snap.repsMode;
+      ex.suggestReason = snap.suggestReason;
+      ex.bestMaxReps = snap.bestMaxReps;
+      ex.bestHold = snap.bestHold;
+    } else {
+      ex.name = ex.originalName || ex.name;
+    }
+    ex.insteadOf = '';
+    ex.originalPlan = null;
+    if (idx === session.currentEx) applyDraftForExercise(ex);
+    persist();
+    return { ok: true, exercise: ex };
+  }
+
+  function editSessionTarget(index, patch) {
+    if (!session) return null;
+    const idx = index == null ? session.currentEx : Number(index);
+    const ex = session.exercises[idx];
+    if (!ex) return null;
+    patch = patch || {};
+    if (patch.targetSets != null && patch.targetSets !== '') {
+      ex.targetSets = Math.max(1, Math.round(Number(patch.targetSets) || 1));
+    }
+    if (patch.repsMin != null && patch.repsMin !== '') ex.repsMin = Math.max(0, Math.round(Number(patch.repsMin) || 0));
+    if (patch.repsMax != null && patch.repsMax !== '') ex.repsMax = Math.max(Number(ex.repsMin) || 0, Math.round(Number(patch.repsMax) || 0));
+    if (patch.targetReps != null && patch.targetReps !== '') ex.targetReps = Math.max(0, Math.round(Number(patch.targetReps) || 0));
+    if (patch.targetSecs != null && patch.targetSecs !== '') ex.targetSecs = Math.max(0, Math.round(Number(patch.targetSecs) || 0));
+    if (patch.repsMode) ex.repsMode = patch.repsMode;
+    if (!(ex.sets && ex.sets.length) && idx === session.currentEx) applyDraftForExercise(ex);
+    persist();
+    return ex;
   }
 
   const FitLive = {
@@ -1047,6 +1181,9 @@
     loadRecommendation: loadRecommendation,
     applyLoadRecommendation: applyLoadRecommendation,
     recOptsFromExercise: recOptsFromExercise,
+    swapExercise: swapExercise,
+    unswapExercise: unswapExercise,
+    editSessionTarget: editSessionTarget,
     startHold: startHold,
     stopHold: stopHold,
     cancelHold: cancelHold,

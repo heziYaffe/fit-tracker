@@ -165,7 +165,9 @@
       templates: [],
       menus: [],
       dayMenus: [],
-      measures: []
+      measures: [],
+      exercises: [],
+      substitutions: {}
     };
   }
 
@@ -243,6 +245,120 @@
     return set;
   }
 
+  function normalizeExerciseList(list) {
+    const E = root.FitEngine;
+    const out = [];
+    const seen = {};
+    (Array.isArray(list) ? list : []).forEach(function (e) {
+      const rawName = e && typeof e === 'object' ? (e.name || e.id) : e;
+      const name = E && E.normName ? E.normName(rawName) : String(rawName || '').trim();
+      if (!name) return;
+      const key = E && E.foldName ? E.foldName(name) : name.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push({
+        id: (e && e.id) || name,
+        name: name,
+        createdAt: (e && e.createdAt) || ''
+      });
+    });
+    return out;
+  }
+
+  function normalizeSubstitutions(map) {
+    const E = root.FitEngine;
+    const out = {};
+    if (!map || typeof map !== 'object') return out;
+    Object.keys(map).forEach(function (key) {
+      const from = E && E.normName ? E.normName(key) : String(key || '').trim();
+      if (!from) return;
+      const rows = [];
+      (Array.isArray(map[key]) ? map[key] : []).forEach(function (row) {
+        const name = E && E.normName ? E.normName(row && row.name) : String((row && row.name) || '').trim();
+        if (!name) return;
+        rows.push({
+          name: name,
+          count: Math.max(1, Number(row.count) || 1),
+          lastAt: row.lastAt || ''
+        });
+      });
+      if (rows.length) out[from] = rows;
+    });
+    return out;
+  }
+
+  function exerciseCatalog() {
+    const E = root.FitEngine;
+    if (E && E.exerciseCatalog) return E.exerciseCatalog(state);
+    return [];
+  }
+
+  function addExerciseName(raw) {
+    const E = root.FitEngine;
+    if (!E || !E.canonicalName) return (E && E.normName ? E.normName(raw) : String(raw || '').trim());
+    const name = E.canonicalName(raw, E.exerciseCatalog(state));
+    if (!name) return '';
+    const key = E.foldName(name);
+    const exists = E.exerciseCatalog(state).some(function (n) { return E.foldName(n) === key; });
+    if (!exists) {
+      state.exercises = state.exercises || [];
+      state.exercises.push({ id: name, name: name, createdAt: new Date().toISOString() });
+      commit();
+    }
+    return name;
+  }
+
+  function substitutionKey(name) {
+    const E = root.FitEngine;
+    const want = E && E.foldName ? E.foldName(name) : String(name || '').toLowerCase();
+    const keys = Object.keys(state.substitutions || {});
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      const fold = E && E.foldName ? E.foldName(k) : String(k || '').toLowerCase();
+      if (fold === want) return k;
+    }
+    return E && E.normName ? E.normName(name) : String(name || '').trim();
+  }
+
+  function recordSubstitution(fromRaw, toRaw) {
+    const E = root.FitEngine;
+    const catalog = E && E.exerciseCatalog ? E.exerciseCatalog(state) : [];
+    const from = E && E.canonicalName ? E.canonicalName(fromRaw, catalog) : String(fromRaw || '').trim();
+    const to = E && E.canonicalName ? E.canonicalName(toRaw, catalog) : String(toRaw || '').trim();
+    if (!from || !to || (E && E.foldName ? E.foldName(from) === E.foldName(to) : from === to)) return null;
+    if (!state.substitutions) state.substitutions = {};
+    const key = substitutionKey(from) || from;
+    const list = (state.substitutions[key] || []).slice();
+    const toFold = E && E.foldName ? E.foldName(to) : to.toLowerCase();
+    let found = -1;
+    for (let i = 0; i < list.length; i++) {
+      const fold = E && E.foldName ? E.foldName(list[i].name) : String(list[i].name || '').toLowerCase();
+      if (fold === toFold) { found = i; break; }
+    }
+    const now = new Date().toISOString();
+    if (found >= 0) {
+      list[found].name = to;
+      list[found].count = Math.max(1, Number(list[found].count) || 1) + 1;
+      list[found].lastAt = now;
+    } else {
+      list.push({ name: to, count: 1, lastAt: now });
+    }
+    state.substitutions[key] = list;
+    commit();
+    return list;
+  }
+
+  function substitutesFor(name) {
+    const E = root.FitEngine;
+    const key = substitutionKey(name);
+    const list = ((state.substitutions || {})[key] || []).slice();
+    list.sort(function (a, b) {
+      if (a.lastAt !== b.lastAt) return a.lastAt < b.lastAt ? 1 : -1;
+      return (Number(b.count) || 0) - (Number(a.count) || 0);
+    });
+    return list;
+  }
+
   function normalize(raw) {
     const base = defaultState();
     if (!raw || typeof raw !== 'object') return base;
@@ -264,7 +380,9 @@
       templates: Array.isArray(raw.templates) ? raw.templates.map(normalizeTemplate) : [],
       menus: Array.isArray(raw.menus) ? raw.menus.map(normalizeMenu) : [],
       dayMenus: Array.isArray(raw.dayMenus) ? raw.dayMenus : [],
-      measures: Array.isArray(raw.measures) ? raw.measures.map(normalizeMeasureRow) : []
+      measures: Array.isArray(raw.measures) ? raw.measures.map(normalizeMeasureRow) : [],
+      exercises: normalizeExerciseList(raw.exercises),
+      substitutions: normalizeSubstitutions(raw.substitutions)
     };
   }
 
@@ -795,7 +913,9 @@
         templates: state.templates,
         menus: state.menus,
         dayMenus: state.dayMenus,
-        measures: state.measures
+        measures: state.measures,
+        exercises: state.exercises,
+        substitutions: state.substitutions
       }
     };
   }
@@ -803,7 +923,7 @@
   function importJSON(payload) {
     const raw = payload && payload.data ? payload.data : payload;
     if (!raw || typeof raw !== 'object') throw new Error('invalid');
-    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus || raw.measures;
+    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus || raw.measures || raw.exercises || raw.substitutions;
     if (!hasAny) throw new Error('invalid');
     state = normalize(raw);
     commit();
@@ -871,7 +991,11 @@
     upsertMeasure: upsertMeasure,
     deleteMeasure: deleteMeasure,
     normalizeTemplate: normalizeTemplate,
-    normalizeMenu: normalizeMenu
+    normalizeMenu: normalizeMenu,
+    addExerciseName: addExerciseName,
+    recordSubstitution: recordSubstitution,
+    substitutesFor: substitutesFor,
+    exerciseCatalog: exerciseCatalog
   };
 
   root.FitStore = FitStore;

@@ -2222,6 +2222,52 @@
       }).join('') + '</div></div>';
   }
 
+  function renderSwapExerciseSheet() {
+    const props = (ui.modal && ui.modal.props) || {};
+    const L = root.FitLive;
+    const sess = L && L.getSession && L.getSession();
+    const ex = sess && sess.exercises[Number(props.index)];
+    if (!ex) return '<div class="sheet"><p>אין תרגיל</p></div>';
+    const original = ex.insteadOf || ex.originalName || ex.name;
+    const q = ui.swapQuery || '';
+    const catalog = (Store.exerciseCatalog && Store.exerciseCatalog()) || (E.exerciseCatalog ? E.exerciseCatalog(state()) : []);
+    const recent = (Store.substitutesFor ? Store.substitutesFor(original) : []).map(function (row) { return row.name; })
+      .filter(function (n) { return E.foldName(n) !== E.foldName(ex.name); });
+    const foldedQ = E.foldName ? E.foldName(q) : String(q || '').toLowerCase();
+    function matches(n) {
+      if (!foldedQ) return true;
+      const fold = E.foldName ? E.foldName(n) : String(n || '').toLowerCase();
+      return fold.indexOf(foldedQ) !== -1 || String(n).indexOf(String(q).trim()) !== -1;
+    }
+    const recentHit = recent.filter(matches);
+    const rest = catalog.filter(function (n) {
+      if (!matches(n)) return false;
+      if (E.foldName(n) === E.foldName(ex.name)) return false;
+      return recentHit.every(function (r) { return E.foldName(r) !== E.foldName(n); });
+    });
+    const canonical = String(q || '').trim() ? E.canonicalName(q, catalog) : '';
+    const isNew = !!(canonical && E.foldName(canonical) !== E.foldName(ex.name)
+      && catalog.every(function (n) { return E.foldName(n) !== E.foldName(canonical); }));
+    function item(n, tag) {
+      return '<button type="button" class="list-item" data-action="pick-swap-ex" data-name="' + esc(n) + '">' +
+        '<div class="title">' + esc(n) + '</div>' +
+        (tag ? '<div class="sub">' + esc(tag) + '</div>' : '') +
+        '</button>';
+    }
+    return '<div class="sheet" role="dialog" aria-label="החלפת תרגיל"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>החלפה באימון הזה</h2>' +
+      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+      '<p class="hp-legend">התוכנית נשארת כמו שהיא. מחליפים את «' + esc(original) + '» רק באימון הנוכחי.</p>' +
+      '<label class="field"><span>חיפוש או שם חדש</span>' +
+      '<input type="text" id="swap-query" value="' + esc(q) + '" placeholder="למשל לחיצה במכונה" autocomplete="off" /></label>' +
+      (isNew ? '<button type="button" class="btn primary wide" data-action="create-swap-ex">הוספת «' + esc(canonical) + '» לספרייה</button>' : '') +
+      (recentHit.length ? ('<div class="section-title"><h2>הוחלפו לאחרונה</h2></div><div class="list">' +
+        recentHit.map(function (n) { return item(n, 'תחליף קודם'); }).join('') + '</div>') : '') +
+      '<div class="section-title"><h2>ספרייה</h2></div><div class="list">' +
+      (rest.length ? rest.map(function (n) { return item(n); }).join('') : '<p class="hp-legend">אין תרגילים מתאימים.</p>') +
+      '</div></div>';
+  }
+
   function renderOverlay() {
     const overlay = document.getElementById('overlay');
     if (!ui.modal) {
@@ -2246,6 +2292,7 @@
     else if (type === 'swap-food') overlay.innerHTML = renderSwapFoodSheet();
     else if (type === 'whoop-detail') overlay.innerHTML = renderWhoopDetailSheet();
     else if (type === 'fit-detail') overlay.innerHTML = renderFitDetailSheet();
+    else if (type === 'live-swap') overlay.innerHTML = renderSwapExerciseSheet();
     else overlay.innerHTML = '';
     bindSheetDrag(overlay);
   }
@@ -2551,13 +2598,29 @@
       '<details class="live-type"' + (sess.templateId ? '' : ' open') + '><summary>סוג אימון</summary><div class="chips">' + chips + '</div></details>' +
       restBar +
       (ex
-        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' +
+        ? ('<section class="card live-ex"><div class="live-ex-head"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' +
+          '<button type="button" class="linkish" data-action="live-swap">החלף</button>' +
+          (ex.insteadOf && !(ex.sets && ex.sets.length) ? '<button type="button" class="linkish" data-action="live-unswap">בטל החלפה</button>' : '') +
+          '</div>' +
+          (ex.insteadOf ? '<p class="hp-legend">במקום ' + esc(ex.insteadOf) + '</p>' : '') +
           (function () {
             const group = L.supersetGroup ? L.supersetGroup(sess.currentEx) : [];
             if (group.length < 2) return '';
             const names = group.map(function (idx) { return esc(sess.exercises[idx].name); }).join(' + ');
             return '<p class="ss-now">סופרסט · ' + names + '</p>';
-          }()) + planned + recHtml + maxHint + holdBanner +
+          }()) + planned +
+          (function () {
+            if (!ex) return '';
+            const rangeVal = (ex.repsMin && ex.repsMax && Number(ex.repsMax) !== Number(ex.repsMin))
+              ? (ex.repsMin + '-' + ex.repsMax)
+              : String(ex.repsMin || ex.targetReps || '');
+            return '<div class="session-edit"><div class="session-edit-label">יעד באימון הזה בלבד</div><div class="session-edit-row">' +
+              '<label>סטים <input type="number" min="1" inputmode="numeric" data-live-target="targetSets" value="' + esc(ex.targetSets || '') + '" /></label>' +
+              (isStaticEx(ex, ex.name)
+                ? '<label>שניות <input type="number" min="0" inputmode="numeric" data-live-target="targetSecs" value="' + esc(ex.targetSecs || '') + '" /></label>'
+                : (isMaxReps(ex) ? '' : '<label>טווח <input type="text" dir="ltr" inputmode="text" data-live-target="repsRange" placeholder="8-12" value="' + esc(rangeVal) + '" /></label>')) +
+              '</div></div>';
+          }()) + recHtml + maxHint + holdBanner +
           lastHtml +
           (ex.notes ? '<p class="hp-legend">' + esc(ex.notes) + '</p>' : '') +
           (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
@@ -3322,6 +3385,38 @@
       haptic(16);
       return;
     }
+    if (action === 'live-swap') {
+      const sess = root.FitLive.getSession();
+      if (!sess) return;
+      const idx = btn.dataset.index != null ? Number(btn.dataset.index) : sess.currentEx;
+      const ex = sess.exercises[idx];
+      if (ex && ex.sets && ex.sets.length) { toast('אפשר להחליף רק לפני שמתעדים סטים'); return; }
+      ui.swapQuery = '';
+      openModal('live-swap', { index: idx });
+      return;
+    }
+    if (action === 'live-unswap') {
+      const res = root.FitLive.unswapExercise();
+      if (!res || !res.ok) {
+        toast(res && res.error === 'has-sets' ? 'אפשר לבטל רק לפני שמתעדים סטים' : 'אין החלפה לביטול');
+        return;
+      }
+      toast('חזרנו לתרגיל המקורי');
+      render();
+      return;
+    }
+    if (action === 'pick-swap-ex' || action === 'create-swap-ex') {
+      const idx = ui.modal && ui.modal.props ? Number(ui.modal.props.index) : (root.FitLive.getSession() || {}).currentEx;
+      const name = action === 'create-swap-ex' ? (ui.swapQuery || '') : btn.dataset.name;
+      const res = root.FitLive.swapExercise(idx, name);
+      if (!res || !res.ok) {
+        toast(res && res.error === 'has-sets' ? 'אפשר להחליף רק לפני שמתעדים סטים' : 'לא הצלחתי להחליף');
+        return;
+      }
+      closeModal();
+      toast(res.same ? 'זה אותו תרגיל' : 'הוחלף לאימון הזה');
+      return;
+    }
     if (action === 'live-skip') { root.FitLive.skipExercise(); render(); return; }
     if (action === 'update-template-from-live') {
       const sum = ui.liveSummary;
@@ -4044,6 +4139,24 @@
   function onChange(ev) {
     const el = ev.target;
     if (!el) return;
+    if (el.dataset.liveTarget) {
+      if (!root.FitLive || !root.FitLive.editSessionTarget) return;
+      const patch = {};
+      if (el.dataset.liveTarget === 'repsRange') {
+        const raw = String(el.value || '').trim();
+        const m = raw.match(/^(\d+)\s*[-–—]\s*(\d+)$/) || raw.match(/^(\d+)$/);
+        if (!m) return;
+        patch.repsMin = Number(m[1]);
+        patch.repsMax = Number(m[2] || m[1]);
+        patch.targetReps = patch.repsMin;
+      } else {
+        patch[el.dataset.liveTarget] = el.value;
+      }
+      const sess = root.FitLive.getSession();
+      root.FitLive.editSessionTarget(sess ? sess.currentEx : 0, patch);
+      render();
+      return;
+    }
     if (el.dataset.setRest != null) {
       if (root.FitLive && root.FitLive.setSetRest) {
         root.FitLive.setSetRest(Number(el.dataset.ex), Number(el.dataset.set), el.value);
@@ -4270,6 +4383,17 @@
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);
       if (el && el.dataset.tex != null) onTexInput(el);
       if (el && el.dataset.meal != null) syncMeal(el);
+      if (el && el.id === 'swap-query') {
+        ui.swapQuery = el.value;
+        const pos = el.selectionStart;
+        render();
+        const q = document.getElementById('swap-query');
+        if (q) {
+          q.focus();
+          try { q.setSelectionRange(pos, pos); } catch (err) { /* ignore */ }
+        }
+        return;
+      }
       if (el && el.id === 'food-query') {
         ui.foodQuery = el.value;
         const pos = el.selectionStart;

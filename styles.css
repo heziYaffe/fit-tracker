@@ -1273,6 +1273,19 @@ details.live-type .chips { margin-top: 8px; }
 .list-item.on { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-dim); }
 .live-actions { display: flex; gap: 8px; margin-top: 8px; }
 .live-actions .btn { flex: 1; }
+.live-ex-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.live-ex-head h1 { flex: 1; min-width: 0; margin: 0; }
+.session-edit { margin: 4px 0 12px; }
+.session-edit-label { font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 6px; }
+.session-edit-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.session-edit-row label { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-muted); }
+.session-edit-row input { width: 88px; padding: 6px 8px; }
 
 /* Body map */
 .body-map { width: 100%; height: auto; display: block; }

@@ -493,7 +493,101 @@
 
 
   function normName(name) {
-    return String(name || '').trim();
+    return String(name || '').replace(/[\u200E\u200F\u202A-\u202E]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function foldName(name) {
+    return normName(name)
+      .replace(/[\u05F3\u05F4''״"’‘]/g, '')
+      .replace(/[־–—−-]+/g, ' ')
+      .replace(/[()[\]{}.,/\\:+]/g, ' ')
+      .replace(/ך/g, 'כ')
+      .replace(/ם/g, 'מ')
+      .replace(/ן/g, 'נ')
+      .replace(/ף/g, 'פ')
+      .replace(/ץ/g, 'צ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function levenshtein(a, b) {
+    a = String(a || '');
+    b = String(b || '');
+    const m = a.length;
+    const n = b.length;
+    if (!m) return n;
+    if (!n) return m;
+    const dp = [];
+    for (let j = 0; j <= n; j++) dp[j] = j;
+    for (let i = 1; i <= m; i++) {
+      let prev = dp[0];
+      dp[0] = i;
+      for (let j = 1; j <= n; j++) {
+        const cur = dp[j];
+        const cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+        dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+        prev = cur;
+      }
+    }
+    return dp[n];
+  }
+
+  function nearNameAllowed(len) {
+    if (len <= 10) return 1;
+    return 2;
+  }
+
+  function exerciseCatalog(state) {
+    const out = [];
+    const seen = {};
+    function add(n) {
+      const name = normName(n);
+      if (!name) return;
+      const key = foldName(name);
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      out.push(name);
+    }
+    Object.keys((C && C.EXERCISE_MUSCLES) || {}).forEach(add);
+    ((state && state.exercises) || []).forEach(function (e) {
+      add(e && (e.name || e.id) ? (e.name || e.id) : e);
+    });
+    exerciseNames(state).forEach(add);
+    ((state && state.templates) || []).forEach(function (t) {
+      ((t && t.exercises) || []).forEach(function (e) { add(e && e.name); });
+    });
+    Object.keys((state && state.substitutions) || {}).forEach(function (k) {
+      add(k);
+      ((state.substitutions[k] || [])).forEach(function (s) { add(s && s.name); });
+    });
+    return out;
+  }
+
+  function canonicalName(name, catalog) {
+    const cleaned = normName(name);
+    if (!cleaned) return '';
+    const folded = foldName(cleaned);
+    if (!folded) return cleaned;
+    const list = catalog || [];
+    let i;
+    for (i = 0; i < list.length; i++) {
+      if (foldName(list[i]) === folded) return list[i];
+    }
+    let best = '';
+    let bestD = 99;
+    for (i = 0; i < list.length; i++) {
+      const other = foldName(list[i]);
+      if (!other) continue;
+      const d = levenshtein(other, folded);
+      if (!d) return list[i];
+      const allowed = nearNameAllowed(Math.max(other.length, folded.length));
+      if (d <= allowed && d < bestD) {
+        best = list[i];
+        bestD = d;
+      }
+    }
+    return best || cleaned;
   }
 
   function expandSets(ex) {
@@ -1508,6 +1602,10 @@
     waterUnitCount: waterUnitCount,
     formatWaterUnits: formatWaterUnits,
     normName: normName,
+    foldName: foldName,
+    levenshtein: levenshtein,
+    exerciseCatalog: exerciseCatalog,
+    canonicalName: canonicalName,
     setVolume: setVolume,
     isBodyweightName: isBodyweightName,
     isBodyweightEx: isBodyweightEx,
