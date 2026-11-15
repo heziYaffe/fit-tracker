@@ -178,7 +178,7 @@
       tips.push({
         id: 'sleep',
         priority: 7,
-        text: 'שינה ממוצעת ' + stats.sleepAvg.toFixed(1) + ' שעות. כוונו ל-7 ומעלה בשביל XP והתאוששות.'
+        text: 'שינה ממוצעת ' + stats.sleepAvg.toFixed(1) + ' שעות. כוונו ל-7 שעות ומעלה לשינה טובה יותר ולהתאוששות.'
       });
     }
     if (stats.recoveryAvg != null && stats.recoveryAvg < 50) {
@@ -277,7 +277,7 @@
     if (stats.nutrition && stats.nutrition.waterHits != null) {
       lines.push('מים: ' + stats.nutrition.waterHits + '/' + stats.nutrition.days + ' ימים ביעד');
     }
-    lines.push('XP: ' + stats.xp + ' · רצף: ' + stats.streak);
+    lines.push('רצף: ' + stats.streak);
     (stats.tips || []).forEach(function (t) { lines.push('• ' + t.text); });
     lines.push('https://heziyaffe.github.io/fit-tracker/');
     return lines.join('\n');

@@ -70,4 +70,21 @@ const red = E.homeInsight({
 assert(red.tone === 'red', 'red tone');
 assert(red.body.indexOf('התאוששות') >= 0 || red.body.indexOf('קל') >= 0, 'red body ' + red.body);
 
+
+const weekState = {
+  settings: { weeklyWorkoutTarget: 4 },
+  workouts: [
+    { id: 'w1', date: '2026-11-10', type: 'push' },
+    { id: 'w2', date: '2026-11-14', type: 'pull' },
+    { id: 'w3', date: '2026-11-15', type: 'legs' }
+  ]
+};
+assert(typeof E.workoutsInWeek === 'function', 'workoutsInWeek exported');
+assert(E.weekStartSunday('2026-11-14') === '2026-11-08', 'week start sat ' + E.weekStartSunday('2026-11-14'));
+assert(E.weekStartSunday('2026-11-15') === '2026-11-15', 'week start sun ' + E.weekStartSunday('2026-11-15'));
+const week = E.workoutsInWeek(weekState, '2026-11-14');
+assert(week.length === 2, 'week count ' + week.length);
+const next = E.workoutsInWeek(weekState, '2026-11-15');
+assert(next.length === 1 && next[0].id === 'w3', 'sunday starts a new week');
+
 console.log('whoop-home tests passed');

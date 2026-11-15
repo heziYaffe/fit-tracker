@@ -63,6 +63,14 @@
     return (state.workouts || []).filter(function (w) { return w.date === iso; });
   }
 
+  function workoutsInWeek(state, iso) {
+    const start = weekStartSunday(iso);
+    const end = addDays(start, 6);
+    return (state.workouts || []).filter(function (w) {
+      return w.date >= start && w.date <= end;
+    });
+  }
+
   function metricsOn(state, iso) {
     return (state.metrics || []).filter(function (m) { return m.date === iso; });
   }
@@ -1059,6 +1067,7 @@
     formatDayLong: formatDayLong,
     nutritionOn: nutritionOn,
     workoutsOn: workoutsOn,
+    workoutsInWeek: workoutsInWeek,
     metricsOn: metricsOn,
     hitsProtein: hitsProtein,
     hitsWater: hitsWater,
