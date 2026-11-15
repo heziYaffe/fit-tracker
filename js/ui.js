@@ -2449,8 +2449,9 @@
     const sess = L.getSession();
     if (!sess) return '';
     const ex = L.currentExercise();
-    const left = L.restRemaining();
-    const total = (L.restTotal && L.restTotal()) || sess.restSec || 90;
+    const restOn = !!(L.isRestRunning && L.isRestRunning());
+    const restElapsed = restOn && L.restElapsedSec ? L.restElapsedSec() : 0;
+    const restTarget = restOn && L.restTargetSec ? L.restTargetSec() : 0;
     const pr = L.prForDraft();
     const prog = L.progress ? L.progress() : { current: sess.currentEx + 1, total: sess.exercises.length };
     const nxt = L.nextExercise ? L.nextExercise() : sess.exercises[sess.currentEx + 1];
@@ -2461,17 +2462,13 @@
           return '<span class="set-pill">סט ' + (i + 1) + ': ' + setShort(s, ex) + '</span>';
         }).join('') + '</div></div>'
       : '<p class="hp-legend">אין היסטוריה לתרגיל הזה עדיין.</p>';
-    const C_R = 2 * Math.PI * 52;
-    const frac = total ? left / total : 0;
-    const restBar = left > 0
-      ? '<div class="rest-banner" id="rest-banner"><div class="rest-label">מנוחה</div>' +
-        '<div class="rest-ring-wrap">' +
-        '<svg class="rest-ring" viewBox="0 0 120 120" aria-hidden="true">' +
-        '<circle class="rest-track" cx="60" cy="60" r="52"/>' +
-        '<circle class="rest-prog" id="rest-prog" cx="60" cy="60" r="52" stroke-dasharray="' + C_R.toFixed(2) + '" stroke-dashoffset="' + (C_R * (1 - frac)).toFixed(2) + '"/>' +
-        '</svg><div class="rest-count" id="rest-count">' + left + '</div></div>' +
-        '<div class="kicker">שניות · ' + (nxt ? 'הבא: ' + esc(nxt.name) : '') + '</div>' +
-        '<button type="button" class="btn" data-action="skip-rest">דלג</button></div>'
+    const restClock = L.formatHoldClock ? L.formatHoldClock(restElapsed) : formatSecs(restElapsed);
+    const restBar = restOn
+      ? '<div class="rest-banner rest-up' + (restTarget && restElapsed >= restTarget ? ' over-target' : '') + '" id="rest-banner">' +
+        '<div class="rest-meta"><div class="rest-label">מנוחה</div>' +
+        '<div class="rest-sub" id="rest-sub">' + (restTarget ? ('יעד ' + formatSecs(restTarget)) : 'נספר עד הסט הבא') + '</div></div>' +
+        '<div class="rest-count" id="rest-count">' + restClock + '</div>' +
+        '<button type="button" class="btn" data-action="skip-rest">עצירה</button></div>'
       : '';
     const chips = C.WORKOUT_TYPES.map(function (tp) {
       return '<button type="button" class="chip' + (sess.type === tp.id ? ' active' : '') + '" data-action="live-type" data-type="' + tp.id + '">' + esc(tp.label) + '</button>';
@@ -2515,7 +2512,12 @@
       : '';
     const setList = ex ? '<ul class="set-list">' +
       (ex.sets.map(function (s, i) {
-        return '<li class="done"><span>סט ' + (i + 1) + '</span><span>' + setShort(s, ex) + (s.pr ? ' ⭐' : '') + '</span></li>';
+        const restVal = (s.restAfter != null && s.restAfter !== '') ? String(s.restAfter) : '';
+        const restEdit = restVal === '' ? '' : (
+          '<label class="set-rest">מנוחה <input type="number" min="0" step="5" inputmode="numeric" data-set-rest="1" data-ex="' +
+          sess.currentEx + '" data-set="' + i + '" value="' + esc(restVal) + '" /> שנ׳</label>'
+        );
+        return '<li class="done"><span>סט ' + (i + 1) + '</span><span>' + setShort(s, ex) + (s.pr ? ' ⭐' : '') + restEdit + '</span></li>';
       }).join('')) +
       '<li class="current"><span>סט ' + (ex.sets.length + 1) + '</span><span>עכשיו</span></li>' +
       (ex.targetSets ? Array.from({ length: Math.max(0, ex.targetSets - ex.sets.length - 1) }).map(function (_, i) {
@@ -2575,11 +2577,6 @@
       '<div class="live-add"><input type="text" id="live-ex-name" placeholder="שם התרגיל" autocomplete="off" />' +
       '<button type="button" class="btn primary" data-action="live-add-ex">הוספה</button></div>' +
       '<div id="live-ex-suggest" class="ex-suggest" hidden></div></section>' +
-      '<div class="rest-pref"><span>מנוחה אחרי סט</span>' +
-      '<button type="button" class="chip' + (sess.restSec === 60 ? ' active' : '') + '" data-action="live-rest" data-sec="60">60 שנ׳</button>' +
-      '<button type="button" class="chip' + (sess.restSec === 90 ? ' active' : '') + '" data-action="live-rest" data-sec="90">90 שנ׳</button>' +
-      '<button type="button" class="chip' + (sess.restSec === 120 ? ' active' : '') + '" data-action="live-rest" data-sec="120">120 שנ׳</button>' +
-      '</div>' +
       (exList ? '<div class="section-title"><h2>האימון הזה</h2></div><div class="list">' + exList + '</div>' : '');
   }
 
@@ -3712,7 +3709,12 @@
       return;
     }
     if (action === 'live-undo') { root.FitLive.undoLastSet(); render(); return; }
-    if (action === 'skip-rest') { root.FitLive.cancelRest(); render(); return; }
+    if (action === 'skip-rest') {
+      if (root.FitLive.commitRest) root.FitLive.commitRest();
+      else root.FitLive.cancelRest();
+      render();
+      return;
+    }
     if (action === 'use-food') {
       const food = Store.useFood(btn.dataset.id, btn.dataset.date || ui.nutritionDate || E.todayISO());
       if (food) toast('נוסף: ' + food.name);
@@ -4020,6 +4022,13 @@
   function onChange(ev) {
     const el = ev.target;
     if (!el) return;
+    if (el.dataset.setRest != null) {
+      if (root.FitLive && root.FitLive.setSetRest) {
+        root.FitLive.setSetRest(Number(el.dataset.ex), Number(el.dataset.set), el.value);
+      }
+      render();
+      return;
+    }
     if (el.id === 'import-file' && el.files && el.files[0]) {
       const file = el.files[0];
       el.value = '';
@@ -4186,16 +4195,13 @@
           if (el) el.textContent = formatElapsed(ev.ms);
         } else if (ev.type === 'rest') {
           const el = document.getElementById('rest-count');
-          if (el) el.textContent = ev.left;
-          const ring = document.getElementById('rest-prog');
-          if (ring && root.FitLive.restTotal) {
-            const total = root.FitLive.restTotal() || 90;
-            const C_R = 2 * Math.PI * 52;
-            ring.setAttribute('stroke-dashoffset', (C_R * (1 - ev.left / total)).toFixed(2));
-          }
-        } else if (ev.type === 'rest-done') {
-          toast('המנוחה נגמרה');
-          render();
+          if (el) el.textContent = root.FitLive.formatHoldClock ? root.FitLive.formatHoldClock(ev.elapsed || 0) : ev.elapsed;
+          const banner = document.getElementById('rest-banner');
+          if (banner) banner.classList.toggle('over-target', !!(ev.target && ev.elapsed >= ev.target));
+        } else if (ev.type === 'rest-target') {
+          toast('הגיע יעד המנוחה');
+          const banner = document.getElementById('rest-banner');
+          if (banner) banner.classList.add('over-target');
         } else if (ev.type === 'hold' || ev.type === 'hold-phase') {
           const el = document.getElementById('hold-count');
           if (ev.type === 'hold-phase' || !el) {
@@ -4219,6 +4225,8 @@
       document.addEventListener('visibilitychange', function () {
         if (document.visibilityState === 'visible' && root.FitLive.getSession()) {
           root.FitLive.requestWakeLock();
+          if (root.FitLive.pulseRest) root.FitLive.pulseRest();
+          render();
         }
       });
     }

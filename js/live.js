@@ -13,7 +13,9 @@
   function E() { return root.FitEngine; }
   function Store() { return root.FitStore; }
 
-  function nowMs() { return Date.now(); }
+  let clockNow = null;
+  function nowMs() { return clockNow != null ? clockNow : Date.now(); }
+  function setClock(ms) { clockNow = (ms == null || ms === '') ? null : Number(ms); }
 
   function getSession() { return session; }
 
@@ -29,6 +31,13 @@
       const raw = sessionStorage.getItem(SESSION_KEY);
       if (!raw) return null;
       session = JSON.parse(raw);
+      if (session && session.restUntil && !session.restStartedAt) {
+        const total = Number(session.restTotal) || Number(session.restSec) || 0;
+        session.restStartedAt = total ? (session.restUntil - total * 1000) : Date.now();
+        session.restTargetSec = total || 0;
+        session.restTargetNotified = total ? (session.restUntil <= Date.now()) : false;
+        session.restUntil = null;
+      }
       return session;
     } catch (err) {
       return null;
@@ -48,6 +57,10 @@
       exercises: [],
       draft: { weight: 20, reps: 8, secs: 45 },
       restUntil: null,
+      restStartedAt: null,
+      restTargetSec: 0,
+      restTargetNotified: false,
+      restFor: null,
       notes: '',
       templateId: opts.templateId || '',
       templateName: opts.templateName || '',
@@ -79,6 +92,7 @@
 
   function addExercise(name) {
     if (!session) return null;
+    commitRest();
     const n = E().normName(name);
     if (!n) return null;
     const sug = E().suggestNextSet(Store().getState(), n, [], null);
@@ -93,7 +107,7 @@
       repsMode: 'range',
       repsMin: sug.reps,
       repsMax: sug.reps,
-      restSec: session.restSec,
+      restSec: 0,
       notes: '',
       supersetId: '',
       suggestReason: sug.reason,
@@ -112,6 +126,7 @@
 
   function selectExercise(index) {
     if (!session) return;
+    if (index !== session.currentEx) commitRest();
     cancelHold();
     session.currentEx = index;
     const ex = currentExercise();
@@ -211,6 +226,7 @@
     }
     const pr = E().setIsPR(Store().getState(), ex.name, weight, reps, null, secs);
     const row = { weight: weight, reps: reps, secs: secs, at: nowMs(), pr: pr.isPR, prTypes: pr.types };
+    commitRest();
     ex.sets.push(row);
     prefillDraftFromLastSet(ex);
     startRest();
@@ -236,7 +252,7 @@
     ex.sets.pop();
     applyDraftForExercise(ex);
     cancelHold();
-    cancelRest();
+    stopRest();
     persist();
   }
 
@@ -250,7 +266,7 @@
 
   function startHold() {
     if (!session) return null;
-    cancelRest();
+    commitRest();
     const ex = currentExercise();
     if (!ex) return null;
     const isMax = E().isMaxReps(ex);
@@ -360,22 +376,102 @@
     return logSet();
   }
 
+  function plannedRestSec(ex) {
+    const n = Number(ex && ex.restSec);
+    return n > 0 ? n : 0;
+  }
+
+  function clearRestClock() {
+    if (!session) return;
+    session.restStartedAt = null;
+    session.restTargetSec = 0;
+    session.restTargetNotified = false;
+    session.restFor = null;
+    session.restUntil = null;
+  }
+
   function startRest() {
     if (!session) return;
     const ex = currentExercise();
-    const sec = (ex && ex.restSec) ? ex.restSec : session.restSec;
-    session.restUntil = nowMs() + Math.max(15, Number(sec) || 90) * 1000;
-    session.restTotal = Math.max(15, Number(sec) || 90);
-    persist();
-  }
-
-  function cancelRest() {
-    if (!session) return;
+    if (!ex || !ex.sets.length) return;
+    session.restStartedAt = nowMs();
+    session.restTargetSec = plannedRestSec(ex);
+    session.restTargetNotified = false;
+    session.restFor = { exIndex: session.currentEx, setIndex: ex.sets.length - 1 };
     session.restUntil = null;
     persist();
   }
 
+  function restElapsedSec() {
+    if (!session || !session.restStartedAt) return 0;
+    return Math.max(0, Math.round((nowMs() - session.restStartedAt) / 1000));
+  }
+
+  function isRestRunning() {
+    return !!(session && session.restStartedAt);
+  }
+
+  function restTargetSec() {
+    return (session && Number(session.restTargetSec) > 0) ? Number(session.restTargetSec) : 0;
+  }
+
+  function setRestOnRef(ref, sec) {
+    if (!session || !ref) return false;
+    const ex = session.exercises[ref.exIndex];
+    const row = ex && ex.sets && ex.sets[ref.setIndex];
+    if (!row) return false;
+    row.restAfter = Math.max(0, Math.round(Number(sec) || 0));
+    return true;
+  }
+
+  function commitRest() {
+    if (!session || !session.restStartedAt) return 0;
+    const sec = restElapsedSec();
+    setRestOnRef(session.restFor, sec);
+    clearRestClock();
+    persist();
+    return sec;
+  }
+
+  function stopRest() {
+    if (!session) return;
+    clearRestClock();
+    persist();
+  }
+
+  function cancelRest() {
+    stopRest();
+  }
+
+  function setSetRest(exIndex, setIndex, sec) {
+    if (!session) return;
+    const ok = setRestOnRef({ exIndex: Number(exIndex), setIndex: Number(setIndex) }, sec);
+    if (!ok) return;
+    if (session.restFor && session.restFor.exIndex === Number(exIndex) && session.restFor.setIndex === Number(setIndex)) {
+      clearRestClock();
+    }
+    persist();
+  }
+
+  function pulseRest() {
+    if (!session || !session.restStartedAt) return false;
+    const target = restTargetSec();
+    if (!(target > 0) || session.restTargetNotified) return false;
+    if (restElapsedSec() < target) return false;
+    session.restTargetNotified = true;
+    persist();
+    beep();
+    vibrate();
+    if (tickFn) tickFn({ type: 'rest-target', elapsed: restElapsedSec(), target: target });
+    return true;
+  }
+
   function restRemaining() {
+    if (session && session.restStartedAt) {
+      const target = restTargetSec();
+      if (!(target > 0)) return 0;
+      return Math.max(0, target - restElapsedSec());
+    }
     if (!session || !session.restUntil) return 0;
     return Math.max(0, Math.ceil((session.restUntil - nowMs()) / 1000));
   }
@@ -415,23 +511,12 @@
 
   function startClocks() {
     stopTimers();
-    let restFired = false;
     restTimer = setInterval(function () {
       if (!session) return;
       if (session.hold) tickHold();
-      if (session.restUntil) {
-        const left = restRemaining();
-        if (left <= 0 && !restFired) {
-          restFired = true;
-          session.restUntil = null;
-          persist();
-          beep();
-          vibrate();
-          if (tickFn) tickFn({ type: 'rest-done' });
-        } else if (left > 0) {
-          restFired = false;
-          if (tickFn) tickFn({ type: 'rest', left: left });
-        }
+      if (session.restStartedAt) {
+        pulseRest();
+        if (tickFn) tickFn({ type: 'rest', elapsed: restElapsedSec(), target: restTargetSec() });
       }
     }, 250);
     elapsedTimer = setInterval(function () {
@@ -471,7 +556,11 @@
         sets: ex.sets.length,
         reps: top.reps,
         weight: top.weight,
-        setLogs: ex.sets.map(function (s) { return { weight: s.weight, reps: s.reps, secs: s.secs || 0 }; }),
+        setLogs: ex.sets.map(function (s) {
+          const log = { weight: s.weight, reps: s.reps, secs: s.secs || 0 };
+          if (s.restAfter != null && s.restAfter !== '') log.restAfter = Number(s.restAfter) || 0;
+          return log;
+        }),
         bodyweight: !!ex.bodyweight,
         static: !!ex.static,
         secs: ex.sets.reduce(function (m, s) { return Math.max(m, Number(s.secs) || 0); }, 0)
@@ -647,7 +736,7 @@
         repsMax: isMax ? tex.repsMax : (Number(tex.repsMax) || sug.reps),
         secsMin: Number(tex.secsMin) || targetSecs,
         secsMax: Number(tex.secsMax) || targetSecs,
-        restSec: Number(tex.restSec) || sess.restSec,
+        restSec: (tex.restSec !== '' && tex.restSec != null && Number(tex.restSec) > 0) ? Number(tex.restSec) : 0,
         notes: tex.notes || '',
         supersetId: tex.supersetId || '',
         suggestReason: sug.reason,
@@ -698,8 +787,7 @@
   }
 
   function restTotal() {
-    if (!session) return 0;
-    return session.restTotal || session.restSec || 90;
+    return restTargetSec();
   }
 
   function templateChanged() {
@@ -744,6 +832,7 @@
   }
 
   function finish() {
+    stopRest();
     const payload = toWorkout();
     if (!payload) return null;
     const prs = [];
@@ -789,7 +878,15 @@
     undoLastSet: undoLastSet,
     startRest: startRest,
     cancelRest: cancelRest,
+    commitRest: commitRest,
+    stopRest: stopRest,
     restRemaining: restRemaining,
+    restElapsedSec: restElapsedSec,
+    restTargetSec: restTargetSec,
+    isRestRunning: isRestRunning,
+    setSetRest: setSetRest,
+    pulseRest: pulseRest,
+    setClock: setClock,
     elapsedMs: elapsedMs,
     onTick: onTick,
     startClocks: startClocks,

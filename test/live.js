@@ -96,6 +96,87 @@ try {
   assert(plank.sets.length === 0, 'undone');
   assert(Number(Live.getSession().draft.secs) === 45, 'undo without history restores plan, got ' + Live.getSession().draft.secs);
 } finally {
+  if (Live.setClock) Live.setClock(null);
+  if (Live.getSession()) Live.discard();
+}
+
+// Count-up rest: timestamps, auto-fill on next set, planned target, finish, manual edit.
+try {
+  let now = 1_000_000;
+  Live.setClock(now);
+  const sess = Live.startFromTemplate({
+    id: 't3',
+    name: 'Push',
+    type: 'push',
+    exercises: [
+      { name: 'לחיצת חזה', sets: 3, repsMin: 8, repsMax: 10, weight: 50, restSec: 90 },
+      { name: 'חתירה', sets: 3, repsMin: 8, repsMax: 10, weight: 40 }
+    ]
+  }, { date: '2026-11-15' });
+  const first = Live.currentExercise();
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  assert(Live.isRestRunning(), 'rest starts after save');
+  assert(Live.restElapsedSec() === 0, 'elapsed starts at 0, got ' + Live.restElapsedSec());
+  assert(Live.restTargetSec() === 90, 'planned rest is the target, got ' + Live.restTargetSec());
+
+  // "Background" jump: no intervals, only the timestamp matters.
+  now += 75 * 1000;
+  Live.setClock(now);
+  assert(Live.restElapsedSec() === 75, 'elapsed follows timestamp, got ' + Live.restElapsedSec());
+  assert(!Live.pulseRest(), 'no target cue before 90s');
+
+  now += 20 * 1000;
+  Live.setClock(now);
+  assert(Live.restElapsedSec() === 95, 'still running past the target, got ' + Live.restElapsedSec());
+  assert(Live.pulseRest(), 'target cues once at 90s');
+  assert(!Live.pulseRest(), 'target cue does not repeat');
+  assert(Live.isRestRunning(), 'timer keeps counting after the target');
+
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  assert(first.sets[0].restAfter === 95, 'rest saved on previous set, got ' + first.sets[0].restAfter);
+  assert(Live.isRestRunning(), 'new rest starts after the next save');
+  assert(first.sets[1].restAfter == null, 'new set has no rest yet');
+
+  Live.setSetRest(0, 0, 80);
+  assert(first.sets[0].restAfter === 80, 'rest is manually editable');
+
+  now += 30 * 1000;
+  Live.setClock(now);
+  Live.skipExercise();
+  assert(first.sets[1].restAfter === 30, 'skip/next records elapsed rest, got ' + first.sets[1].restAfter);
+  assert(!Live.isRestRunning(), 'rest stops after skip');
+
+  const second = Live.currentExercise();
+  Live.setDraft({ weight: 40, reps: 8 });
+  Live.logSet();
+  now += 12 * 1000;
+  Live.setClock(now);
+  const payload = Live.toWorkout();
+  // finish stops the trailing timer and does not record rest on the last set
+  if (Live.getSession()) Live.discard();
+  Live.setClock(now);
+  const sess2 = Live.startFromTemplate({
+    id: 't4',
+    name: 'Push',
+    type: 'push',
+    exercises: [{ name: 'לחיצת חזה', sets: 2, repsMin: 8, repsMax: 8, weight: 50 }]
+  }, { date: '2026-11-15' });
+  Live.setDraft({ weight: 50, reps: 8 });
+  Live.logSet();
+  now += 40 * 1000;
+  Live.setClock(now);
+  assert(Live.isRestRunning(), 'rest running after last-exercise set');
+  assert(Live.restTargetSec() === 0, 'no target when rest was not planned');
+  const summary = Live.finish();
+  assert(summary && summary.workout, 'workout saved');
+  const logs = summary.exercises[0].setLogs;
+  assert(logs.length === 1, 'one logged set');
+  assert(logs[0].restAfter == null || logs[0].restAfter === undefined, 'finish does not store trailing rest, got ' + logs[0].restAfter);
+  assert(!Live.getSession(), 'session cleared');
+} finally {
+  if (Live.setClock) Live.setClock(null);
   if (Live.getSession()) Live.discard();
 }
 

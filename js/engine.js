@@ -499,7 +499,9 @@
   function expandSets(ex) {
     if (ex && Array.isArray(ex.setLogs) && ex.setLogs.length) {
       return ex.setLogs.map(function (s) {
-        return { weight: Number(s.weight) || 0, reps: Number(s.reps) || 0, secs: Number(s.secs) || 0 };
+        const row = { weight: Number(s.weight) || 0, reps: Number(s.reps) || 0, secs: Number(s.secs) || 0 };
+        if (s.restAfter != null && s.restAfter !== '') row.restAfter = Number(s.restAfter) || 0;
+        return row;
       });
     }
     const sets = Math.max(1, Number(ex && ex.sets) || 0);

@@ -1232,6 +1232,41 @@ details.live-type .chips { margin-top: 8px; }
   color: var(--accent);
   padding-bottom: 6px;
 }
+.rest-banner.rest-up {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: start;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.rest-banner.rest-up .rest-meta { flex: 1; min-width: 0; }
+.rest-banner.rest-up .rest-label { font-weight: 700; }
+.rest-banner.rest-up .rest-sub { color: var(--text-dim); font-size: 0.85rem; margin-top: 2px; }
+.rest-banner.rest-up .rest-count {
+  font-size: 1.45rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  min-width: 4.8ch;
+  text-align: center;
+}
+.rest-banner.rest-up.over-target .rest-count { color: var(--accent-2); }
+.set-rest {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 8px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.set-rest input {
+  width: 4.4rem;
+  padding: 2px 6px;
+  font-size: 0.85rem;
+  text-align: center;
+}
 .rest-pref { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
 .live-add { display: flex; gap: 8px; }
 .live-add input { flex: 1; }
