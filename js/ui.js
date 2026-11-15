@@ -1950,7 +1950,7 @@
       const ss = ex.supersetId && draft.exercises[i + 1] && draft.exercises[i + 1].supersetId === ex.supersetId;
       const ssPrev = ex.supersetId && i > 0 && draft.exercises[i - 1].supersetId === ex.supersetId;
       return '<div class="builder-ex' + (ex.supersetId ? ' superset' : '') + '" data-ex-index="' + i + '">' +
-        (ssPrev ? '<div class="ss-label">סופרסט</div>' : '') +
+        ((ss || ssPrev) ? '<div class="ss-label">סופרסט</div>' : '') +
         '<div class="builder-head">' +
         '<span class="drag-handle" data-action="drag-tex" data-index="' + i + '" aria-label="גרירה">⠿</span>' +
         '<input type="text" data-tex="' + i + '" data-texk="name" placeholder="שם התרגיל" value="' + esc(ex.name || '') + '" />' +
@@ -2173,7 +2173,12 @@
         bodyweight: tex.bodyweight,
         static: tex.static
       }) : null;
-      return '<div class="preview-ex"><div class="title">' + (i + 1) + '. ' + esc(name) + '</div>' +
+      const sid = tex.supersetId;
+      const ssPrev = !!(sid && i > 0 && tpl.exercises[i - 1].supersetId === sid);
+      const ssHead = !!(sid && !ssPrev && tpl.exercises[i + 1] && tpl.exercises[i + 1].supersetId === sid);
+      return '<div class="preview-ex' + (sid && (ssHead || ssPrev) ? ' superset' : '') + '">' +
+        (ssHead ? '<div class="ss-label">סופרסט</div>' : '') +
+        '<div class="title">' + (i + 1) + '. ' + esc(name) + '</div>' +
         (rec ? renderLoadRecLine(rec, '') : '<p class="hp-legend">אין היסטוריה — בלי המלצה</p>') +
         '</div>';
     }).join('');
@@ -2473,16 +2478,23 @@
     const chips = C.WORKOUT_TYPES.map(function (tp) {
       return '<button type="button" class="chip' + (sess.type === tp.id ? ' active' : '') + '" data-action="live-type" data-type="' + tp.id + '">' + esc(tp.label) + '</button>';
     }).join('');
-    const exList = sess.exercises.map(function (item, i) {
+    let exList = '';
+    sess.exercises.forEach(function (item, i) {
       const done = item.sets.length;
       const target = Number(item.targetSets) || 0;
       const sets = item.sets.map(function (s, si) {
         return 'סט ' + (si + 1) + ' ' + setShort(s, item) + (s.pr ? ' ⭐' : '');
       }).join(' · ') || 'אין סטים עדיין';
-      return '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
+      const sid = item.supersetId;
+      const ssPrev = !!(sid && i > 0 && sess.exercises[i - 1].supersetId === sid);
+      const ssNext = !!(sid && i + 1 < sess.exercises.length && sess.exercises[i + 1].supersetId === sid);
+      const ssHead = !!(sid && !ssPrev && ssNext);
+      if (ssHead) exList += '<div class="ss-group"><div class="ss-label">סופרסט</div>';
+      exList += '<button type="button" class="list-item' + (i === sess.currentEx ? ' on' : '') + (ssHead || ssPrev ? ' ss' : '') + '" data-action="live-select-ex" data-index="' + i + '">' +
         '<div class="title">' + (i + 1) + '. ' + esc(item.name) + ' ' + staticBadge(item, item.name) + ' ' + maxBadge(item) + ' ' + bwBadge(item, item.name) + (target ? ' · ' + done + '/' + target : '') + '</div>' +
         '<div class="sub">' + esc(sets) + '</div></button>';
-    }).join('');
+      if ((ssHead || ssPrev) && !ssNext) exList += '</div>';
+    });
     const suggest = ex ? (ex.suggestReason || '') : '';
     const isSt = ex && isStaticEx(ex, ex.name);
     const hold = L.holdState ? L.holdState() : null;
@@ -2537,7 +2549,13 @@
       '<details class="live-type"' + (sess.templateId ? '' : ' open') + '><summary>סוג אימון</summary><div class="chips">' + chips + '</div></details>' +
       restBar +
       (ex
-        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' + planned + recHtml + maxHint + holdBanner +
+        ? ('<section class="card live-ex"><h1>' + esc(ex.name) + ' ' + staticBadge(ex, ex.name) + ' ' + maxBadge(ex) + ' ' + bwBadge(ex, ex.name) + '</h1>' +
+          (function () {
+            const group = L.supersetGroup ? L.supersetGroup(sess.currentEx) : [];
+            if (group.length < 2) return '';
+            const names = group.map(function (idx) { return esc(sess.exercises[idx].name); }).join(' + ');
+            return '<p class="ss-now">סופרסט · ' + names + '</p>';
+          }()) + planned + recHtml + maxHint + holdBanner +
           lastHtml +
           (ex.notes ? '<p class="hp-legend">' + esc(ex.notes) + '</p>' : '') +
           (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
@@ -3476,7 +3494,7 @@
       const i = Number(btn.dataset.index);
       const arr = ui.editingTemplate.exercises;
       if (!arr[i + 1]) { toast('צריך תרגיל הבא לסופרסט'); return; }
-      const sid = 'ss_' + Date.now();
+      const sid = arr[i].supersetId || arr[i + 1].supersetId || ('ss_' + Date.now());
       arr[i].supersetId = sid;
       arr[i + 1].supersetId = sid;
       render();

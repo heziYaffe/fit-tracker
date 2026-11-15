@@ -1327,6 +1327,24 @@ details.live-type .chips { margin-top: 8px; }
   color: var(--accent-2);
   margin-bottom: 6px;
 }
+.ss-group {
+  border: 1px solid color-mix(in srgb, var(--accent-2) 40%, transparent);
+  border-radius: 16px;
+  padding: 8px;
+  margin: 0 0 10px;
+  background: color-mix(in srgb, var(--accent-2) 8%, transparent);
+}
+.ss-group .list-item { margin-bottom: 6px; }
+.ss-group .list-item:last-child { margin-bottom: 0; }
+.ss-now {
+  color: var(--accent-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+.preview-ex.superset {
+  border-color: color-mix(in srgb, var(--accent-2) 40%, transparent);
+}
 .drag-handle {
   width: 44px; height: 44px;
   display: grid; place-items: center;

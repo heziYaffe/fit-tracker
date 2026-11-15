@@ -83,6 +83,37 @@
     return session.exercises[session.currentEx] || null;
   }
 
+  function supersetGroup(index) {
+    if (!session || index == null || index < 0 || index >= session.exercises.length) return [];
+    const sid = session.exercises[index] && session.exercises[index].supersetId;
+    if (!sid) return [index];
+    let start = index;
+    let end = index;
+    while (start > 0 && session.exercises[start - 1].supersetId === sid) start -= 1;
+    while (end < session.exercises.length - 1 && session.exercises[end + 1].supersetId === sid) end += 1;
+    if (start === end) return [index];
+    const out = [];
+    for (let i = start; i <= end; i++) out.push(i);
+    return out;
+  }
+
+  function needsMoreSets(ex) {
+    if (!ex) return false;
+    const t = Number(ex.targetSets) || 0;
+    if (!t) return false;
+    return (ex.sets || []).length < t;
+  }
+
+  function plannedRestForRound(exIndex) {
+    const group = supersetGroup(exIndex);
+    const idxs = group.length ? group : [exIndex];
+    for (let k = 0; k < idxs.length; k++) {
+      const n = plannedRestSec(session.exercises[idxs[k]]);
+      if (n > 0) return n;
+    }
+    return 0;
+  }
+
   function applySuggestion(name) {
     const sug = E().suggestNextSet(Store().getState(), name, [], null);
     session.draft.weight = sug.weight;
@@ -229,16 +260,54 @@
     commitRest();
     ex.sets.push(row);
     prefillDraftFromLastSet(ex);
-    startRest();
-    const targetSets = Number(ex.targetSets) || 0;
+    const loggedIndex = session.currentEx;
     let advanced = false;
-    if (targetSets && ex.sets.length >= targetSets) {
-      const next = session.currentEx + 1;
-      if (next < session.exercises.length) {
-        session.currentEx = next;
-        const nxt = currentExercise();
-        if (nxt) applyDraftForExercise(nxt);
+    const group = supersetGroup(loggedIndex);
+    if (group.length >= 2) {
+      const justLogged = ex.sets.length;
+      const pos = group.indexOf(loggedIndex);
+      let nextIdx = null;
+      for (let step = 1; step < group.length; step++) {
+        const idx = group[(pos + step) % group.length];
+        if (session.exercises[idx].sets.length < justLogged) {
+          nextIdx = idx;
+          break;
+        }
+      }
+      if (nextIdx != null) {
+        session.currentEx = nextIdx;
+        applyDraftForExercise(session.exercises[nextIdx]);
         advanced = true;
+      } else {
+        startRest();
+        let still = -1;
+        for (let g = 0; g < group.length; g++) {
+          if (needsMoreSets(session.exercises[group[g]])) { still = group[g]; break; }
+        }
+        if (still >= 0) {
+          session.currentEx = still;
+          applyDraftForExercise(session.exercises[still]);
+          advanced = true;
+        } else {
+          const after = group[group.length - 1] + 1;
+          if (after < session.exercises.length) {
+            session.currentEx = after;
+            applyDraftForExercise(session.exercises[after]);
+            advanced = true;
+          }
+        }
+      }
+    } else {
+      startRest();
+      const targetSets = Number(ex.targetSets) || 0;
+      if (targetSets && ex.sets.length >= targetSets) {
+        const next = loggedIndex + 1;
+        if (next < session.exercises.length) {
+          session.currentEx = next;
+          const nxt = currentExercise();
+          if (nxt) applyDraftForExercise(nxt);
+          advanced = true;
+        }
       }
     }
     persist();
@@ -395,7 +464,7 @@
     const ex = currentExercise();
     if (!ex || !ex.sets.length) return;
     session.restStartedAt = nowMs();
-    session.restTargetSec = plannedRestSec(ex);
+    session.restTargetSec = plannedRestForRound(session.currentEx);
     session.restTargetNotified = false;
     session.restFor = { exIndex: session.currentEx, setIndex: ex.sets.length - 1 };
     session.restUntil = null;
@@ -778,7 +847,19 @@
 
   function nextExercise() {
     if (!session) return null;
-    return session.exercises[session.currentEx + 1] || null;
+    const i = session.currentEx;
+    const group = supersetGroup(i);
+    if (group.length >= 2) {
+      const pos = group.indexOf(i);
+      for (let step = 1; step < group.length; step++) {
+        const idx = group[(pos + step) % group.length];
+        const partner = session.exercises[idx];
+        const t = Number(partner.targetSets) || 0;
+        if (!t || partner.sets.length < t) return partner;
+      }
+      return session.exercises[group[group.length - 1] + 1] || null;
+    }
+    return session.exercises[i + 1] || null;
   }
 
   function progress() {
@@ -869,6 +950,7 @@
     addExercise: addExercise,
     selectExercise: selectExercise,
     currentExercise: currentExercise,
+    supersetGroup: supersetGroup,
     setDraft: setDraft,
     stepDraft: stepDraft,
     setType: setType,

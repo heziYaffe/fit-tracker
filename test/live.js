@@ -180,4 +180,64 @@ try {
   if (Live.getSession()) Live.discard();
 }
 
+
+// Superset: no rest mid-round, rest after last of the round, carry-forward per exercise.
+try {
+  let now = 2_000_000;
+  Live.setClock(now);
+  const sess = Live.startFromTemplate({
+    id: 'ss1',
+    name: 'Push',
+    type: 'push',
+    exercises: [
+      { name: 'לחיצת חזה', sets: 3, repsMin: 8, repsMax: 8, weight: 50, restSec: 90, supersetId: 'ss_ab' },
+      { name: 'חתירה', sets: 3, repsMin: 10, repsMax: 10, weight: 40, supersetId: 'ss_ab' },
+      { name: 'כתפיים', sets: 3, repsMin: 8, repsMax: 8, weight: 20 }
+    ]
+  }, { date: '2026-11-15' });
+  const group = Live.supersetGroup(0);
+  assert(group.length === 2 && group[0] === 0 && group[1] === 1, 'group is the two linked exercises');
+  Live.setDraft({ weight: 52.5, reps: 8 });
+  Live.logSet();
+  assert(sess.currentEx === 1, 'after A, focus moves to B, got ' + sess.currentEx);
+  assert(!Live.isRestRunning(), 'no rest timer mid-round');
+  assert(sess.exercises[0].sets.length === 1, 'A has one set');
+  assert(Number(sess.draft.weight) === 40, 'B keeps its own planned weight, got ' + sess.draft.weight);
+  assert(Number(sess.draft.reps) === 10, 'B keeps its own planned reps, got ' + sess.draft.reps);
+
+  Live.setDraft({ weight: 42.5, reps: 10 });
+  Live.logSet();
+  assert(Live.isRestRunning(), 'rest starts after the last exercise of the round');
+  assert(Live.restTargetSec() === 90, 'planned rest of the group is the round target, got ' + Live.restTargetSec());
+  assert(sess.currentEx === 0, 'focus returns to A for the next round, got ' + sess.currentEx);
+  assert(Number(sess.draft.weight) === 52.5 && Number(sess.draft.reps) === 8, 'A next set carries A values');
+  const restFor = sess.restFor;
+  assert(restFor && restFor.exIndex === 1 && restFor.setIndex === 0, 'rest belongs to last set of the round (B)');
+
+  now += 40 * 1000;
+  Live.setClock(now);
+  Live.setDraft({ weight: 55, reps: 8 });
+  Live.logSet();
+  assert(sess.exercises[1].sets[0].restAfter === 40, 'elapsed rest saved on last set of the previous round, got ' + sess.exercises[1].sets[0].restAfter);
+  assert(!Live.isRestRunning(), 'no rest after first exercise of the next round');
+  assert(sess.currentEx === 1, 'moves to B again');
+  assert(Number(sess.draft.weight) === 42.5 && Number(sess.draft.reps) === 10, 'B next set carries B values, got ' + sess.draft.weight + 'x' + sess.draft.reps);
+
+  Live.logSet();
+  assert(Live.isRestRunning(), 'rest after round 2');
+  assert(sess.currentEx === 0, 'back to A for round 3, got ' + sess.currentEx);
+  now += 15 * 1000;
+  Live.setClock(now);
+  Live.logSet(); // A3, go to B no rest
+  assert(!Live.isRestRunning(), 'no rest after A3');
+  assert(sess.currentEx === 1, 'A3 moves to B, got ' + sess.currentEx);
+  Live.logSet(); // B3, rest starts, group done, advance past group to shoulders
+  assert(Live.isRestRunning(), 'rest after final round');
+  assert(sess.currentEx === 2, 'after the last round, move to the next exercise, got ' + sess.currentEx);
+  assert(Number(sess.draft.weight) === 20, 'next exercise keeps its own plan, got ' + sess.draft.weight);
+} finally {
+  if (Live.setClock) Live.setClock(null);
+  if (Live.getSession()) Live.discard();
+}
+
 console.log('live tests passed');
