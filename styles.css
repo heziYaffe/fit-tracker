@@ -121,9 +121,76 @@ html[data-theme="light"] {
   --hm-both: #9b2fe0;
 }
 
+@property --accent { syntax: "<color>"; inherits: true; initial-value: #d36bff; }
+@property --accent-2 { syntax: "<color>"; inherits: true; initial-value: #ff3dce; }
+@property --accent-dim { syntax: "<color>"; inherits: true; initial-value: rgba(211, 107, 255, 0.16); }
+@property --accent-glow { syntax: "<color>"; inherits: true; initial-value: rgba(211, 107, 255, 0.50); }
+@property --accent-ink { syntax: "<color>"; inherits: true; initial-value: #1a0520; }
+@property --bg { syntax: "<color>"; inherits: true; initial-value: #0c0714; }
+@property --ok { syntax: "<color>"; inherits: true; initial-value: #d36bff; }
+
+html[data-recovery="green"] {
+  --accent: #4fd98a;
+  --accent-2: #2fb56e;
+  --accent-dim: rgba(62, 224, 122, 0.16);
+  --accent-glow: rgba(62, 224, 122, 0.40);
+  --accent-ink: #052010;
+  --ok: #4fd98a;
+  --bg: #0a100c;
+}
+html[data-recovery="yellow"] {
+  --accent: #e6b84a;
+  --accent-2: #e8953a;
+  --accent-dim: rgba(230, 194, 74, 0.16);
+  --accent-glow: rgba(230, 194, 74, 0.40);
+  --accent-ink: #1a1204;
+  --ok: #e6b84a;
+  --bg: #120e08;
+}
+html[data-recovery="red"] {
+  --accent: #ff8a62;
+  --accent-2: #e86850;
+  --accent-dim: rgba(255, 138, 98, 0.16);
+  --accent-glow: rgba(255, 138, 98, 0.40);
+  --accent-ink: #1a0806;
+  --ok: #ff8a62;
+  --bg: #140a0a;
+}
+
+html[data-theme="light"][data-recovery="green"] {
+  --accent: #1a9a54;
+  --accent-2: #148a48;
+  --accent-dim: rgba(26, 154, 84, 0.14);
+  --accent-glow: rgba(26, 154, 84, 0.28);
+  --accent-ink: #ffffff;
+  --ok: #1a9a54;
+  --bg: #f3f8f4;
+}
+html[data-theme="light"][data-recovery="yellow"] {
+  --accent: #b07a12;
+  --accent-2: #c4841a;
+  --accent-dim: rgba(176, 122, 18, 0.14);
+  --accent-glow: rgba(176, 122, 18, 0.28);
+  --accent-ink: #ffffff;
+  --ok: #b07a12;
+  --bg: #faf6ee;
+}
+html[data-theme="light"][data-recovery="red"] {
+  --accent: #c44e32;
+  --accent-2: #d85a3a;
+  --accent-dim: rgba(196, 78, 50, 0.14);
+  --accent-glow: rgba(196, 78, 50, 0.28);
+  --accent-ink: #ffffff;
+  --ok: #c44e32;
+  --bg: #faf3f0;
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
-html { background: var(--bg); }
+html { background: var(--bg); transition: background-color 0.7s ease; }
+@media (prefers-reduced-motion: reduce) {
+  html { transition: none; }
+}
 body {
   margin: 0;
   font-family: var(--font);
@@ -2153,3 +2220,67 @@ button.linkish.add-rest {
 body.is-live .main { padding-bottom: 8px; }
 
 .metric-info-body { font-size: 1rem; line-height: 1.55; margin: 8px 0 0; }
+
+.home-hello {
+  text-align: center;
+  margin: 6px 0 10px;
+}
+.home-hello .home-greet {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+.home-hello .home-line {
+  margin: 6px auto 0;
+  max-width: 28rem;
+  color: var(--text-muted);
+  font-size: var(--fs-md);
+  line-height: 1.4;
+}
+
+.milestone-card {
+  position: relative;
+  overflow: hidden;
+  padding: 14px 16px;
+  padding-inline-end: 44px;
+  margin: 0 0 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, var(--bg-card)), var(--bg-card));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  animation: milestone-glow 1.6s ease-out;
+}
+.milestone-card .kicker {
+  margin: 0 0 4px;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+}
+.milestone-card h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
+.milestone-card .dismiss {
+  position: absolute;
+  top: 8px;
+  inset-inline-end: 8px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+@keyframes milestone-glow {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  70% { box-shadow: 0 0 24px 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+  100% { box-shadow: var(--shadow-soft); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-card { animation: none; }
+}

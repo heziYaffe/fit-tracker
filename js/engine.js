@@ -2172,6 +2172,409 @@
     };
   }
 
+
+  function hitsCalorie(state, iso) {
+    const t = Number(state && state.settings && state.settings.dailyCalorieTarget);
+    if (!(t > 0)) return false;
+    const n = nutritionOn(state, iso);
+    return !!(n && Number(n.calories) >= t);
+  }
+
+  function nutritionStreak(state, kind, now) {
+    const calorie = kind === 'calories';
+    if (calorie) {
+      const t = Number(state && state.settings && state.settings.dailyCalorieTarget);
+      if (!(t > 0)) return 0;
+    }
+    const hit = calorie
+      ? function (iso) { return hitsCalorie(state, iso); }
+      : function (iso) { return hitsProtein(state, iso); };
+    const lookback = lastNDates(400, now);
+    let start = 0;
+    if (lookback.length && !hit(lookback[0])) start = 1;
+    let streak = 0;
+    for (let i = start; i < lookback.length; i++) {
+      if (hit(lookback[i])) streak += 1;
+      else break;
+    }
+    return streak;
+  }
+
+  function workoutWeekStreak(state, now) {
+    const iso = typeof now === 'string' ? now : todayISO(now);
+    const target = Number(state && state.settings && state.settings.weeklyWorkoutTarget) || 4;
+    const thisStart = weekStartSunday(iso);
+    const thisCount = workoutsInWeek(state, thisStart).length;
+    let start = thisStart;
+    if (thisCount < target) start = addDays(thisStart, -7);
+    let weeks = 0;
+    for (let i = 0; i < 80; i++) {
+      const weekIso = addDays(start, -7 * i);
+      if (workoutsInWeek(state, weekIso).length >= target) weeks += 1;
+      else break;
+    }
+    return { weeks: weeks, target: target, thisWeek: thisCount, weekStart: thisStart };
+  }
+
+  function usualWeeklyWorkouts(state, now) {
+    const iso = typeof now === 'string' ? now : todayISO(now);
+    const thisStart = weekStartSunday(iso);
+    const counts = [];
+    for (let i = 1; i <= 4; i++) {
+      const c = workoutsInWeek(state, addDays(thisStart, -7 * i)).length;
+      if (c > 0) counts.push(c);
+    }
+    if (counts.length >= 2) {
+      return Math.round(counts.reduce(function (a, b) { return a + b; }, 0) / counts.length);
+    }
+    return Number(state && state.settings && state.settings.weeklyWorkoutTarget) || 4;
+  }
+
+  function plannedWorkoutName(state, iso) {
+    const dow = parseISO(iso).getDay();
+    const tpls = ((state && state.templates) || []).filter(function (t) {
+      return t && (t.days || []).map(Number).indexOf(dow) >= 0;
+    });
+    if (!tpls.length) return '';
+    const name = normName(tpls[0].name || '');
+    return name;
+  }
+
+  function formatKg(n) {
+    const x = Math.round(Number(n) * 10) / 10;
+    if (!Number.isFinite(x)) return '';
+    const num = Math.abs(x - Math.round(x)) < 0.05 ? String(Math.round(x)) : String(x);
+    return num + ' ק״ג';
+  }
+
+  function displayNameOf(state) {
+    return String((state && state.settings && state.settings.displayName) || '').trim();
+  }
+
+  function greetingHello(state, now) {
+    const at = now ? new Date(now) : new Date();
+    const hour = at.getHours();
+    let hello = 'שלום';
+    if (hour >= 5 && hour < 12) hello = 'בוקר טוב';
+    else if (hour >= 12 && hour < 17) hello = 'צהריים טובים';
+    else if (hour >= 17 && hour < 21) hello = 'ערב טוב';
+    else hello = 'לילה טוב';
+    const name = displayNameOf(state);
+    if (name) hello += ', ' + name;
+    return hello;
+  }
+
+  const STREAK_LINE_DAYS = [3, 7, 14, 21, 30];
+
+  function hebDaysPhrase(n) {
+    if (n === 2) return 'יומיים ברצף';
+    if (n === 3) return 'שלושה ימים ברצף';
+    if (n === 7) return 'שבוע ברצף';
+    if (n === 14) return 'שבועיים ברצף';
+    if (n === 21) return 'שבוע שלישי ברצף';
+    if (n === 30) return 'חודש ברצף';
+    return n + ' ימים ברצף';
+  }
+
+  function hebWeeksPhrase(n) {
+    if (n === 1) return 'שבוע ברצף';
+    if (n === 2) return 'שבועיים ברצף';
+    if (n === 3) return 'שלושה שבועות ברצף';
+    if (n === 4) return 'ארבעה שבועות ברצף';
+    return n + ' שבועות ברצף';
+  }
+
+  function hebWorkouts(n) {
+    if (n === 0) return 'אין אימונים';
+    if (n === 1) return 'אימון אחד';
+    if (n === 2) return 'שני אימונים';
+    return n + ' אימונים';
+  }
+
+  function greetingLine(state, now) {
+    const at = now ? new Date(now) : new Date();
+    const iso = todayISO(at);
+    const snap = metricSnapshot(state, iso);
+    const rec = asNum(snap.recoveryPct);
+    const sleepH = asNum(snap.sleepHours);
+    const zone = recoveryZone(rec);
+    const planned = plannedWorkoutName(state, iso);
+    const trained = workoutsOn(state, iso).length > 0;
+
+    if (zone === 'red') {
+      var lead = '';
+      if (sleepH !== null && rec !== null) lead = 'ישנת ' + formatHoursClock(sleepH) + ' וההתאוששות נמוכה';
+      else if (sleepH !== null) lead = 'ישנת ' + formatHoursClock(sleepH);
+      else lead = 'ההתאוששות נמוכה היום';
+      return lead + '. שווה יום קל או מנוחה.';
+    }
+
+    const pStreak = nutritionStreak(state, 'protein', at);
+    const cStreak = nutritionStreak(state, 'calories', at);
+    if (STREAK_LINE_DAYS.indexOf(pStreak) >= 0) {
+      return hebDaysPhrase(pStreak) + ' שאתה עומד ביעד החלבון.';
+    }
+    if (STREAK_LINE_DAYS.indexOf(cStreak) >= 0) {
+      return hebDaysPhrase(cStreak) + ' שאתה עומד ביעד הקלוריות.';
+    }
+
+    const week = workoutWeekStreak(state, at);
+    if (trained && week.thisWeek === week.target && week.target > 0) {
+      return 'זה האימון ה-' + week.thisWeek + ' השבוע — עמדת ביעד.';
+    }
+
+    if (sleepH !== null || rec !== null) {
+      const sleepBit = sleepH !== null ? ('ישנת ' + formatHoursClock(sleepH)) : '';
+      const recBit = rec !== null ? ('ההתאוששות ' + Math.round(rec) + '%') : '';
+      if (planned && !trained) {
+        if (zone === 'green' && sleepBit) return sleepBit + ' והגוף מוכן ליום ' + planned + '.';
+        if (zone === 'green' && recBit) return recBit + ' — הגוף מוכן ליום ' + planned + '.';
+        if (zone === 'yellow') {
+          var leadY = sleepBit && recBit ? (sleepBit + ' ו' + recBit) : (sleepBit || recBit);
+          return leadY + ' — אפשר ' + planned + ', בלי להגזים.';
+        }
+        if (sleepBit) return sleepBit + ', היום מתוכנן ' + planned + '.';
+        if (recBit) return recBit + ', היום מתוכנן ' + planned + '.';
+      }
+      if (sleepBit && recBit) return sleepBit + ' ו' + recBit + '.';
+      if (sleepBit) return sleepBit + '.';
+      if (recBit) return recBit + '.';
+    }
+
+    const history = activeWorkouts(state).length;
+    if (history > 0) {
+      const usual = usualWeeklyWorkouts(state, at);
+      const done = week.thisWeek;
+      const dow = parseISO(iso).getDay();
+      if (done > 0 || dow >= 4) {
+        if (done === 0) return 'עדיין אין אימון השבוע, בדרך כלל ' + usual + '.';
+        if (done === usual) return hebWorkouts(done) + ' השבוע, כמו הרגיל.';
+        return hebWorkouts(done) + ' השבוע, בדרך כלל ' + usual + '.';
+      }
+    }
+    return '';
+  }
+
+  function personalGreeting(state, now) {
+    return {
+      hello: greetingHello(state, now),
+      line: greetingLine(state, now)
+    };
+  }
+
+  const MILESTONE_WINDOW_DAYS = 7;
+  const NUTRITION_STREAK_MARKS = [3, 7, 14, 21, 30];
+  const WORKOUT_WEEK_MARKS = [2, 3, 4, 6, 8, 12];
+  const WEIGHT_MARKS = [2, 5, 10];
+
+  function earliestDate(items, pick) {
+    let d = '';
+    (items || []).forEach(function (it) {
+      const iso = pick ? pick(it) : (it && it.date);
+      if (!iso) return;
+      if (!d || iso < d) d = iso;
+    });
+    return d;
+  }
+
+  function detectMilestones(state, now, seenIds) {
+    const today = todayISO(now);
+    const cutoff = addDays(today, -MILESTONE_WINDOW_DAYS);
+    const seen = {};
+    (seenIds || []).forEach(function (id) { if (id) seen[String(id)] = true; });
+    const out = [];
+
+    function add(row) {
+      if (!row || !row.id || seen[row.id]) return;
+      if (!row.date || row.date < cutoff || row.date > today) return;
+      out.push(row);
+    }
+
+    const workouts = activeWorkouts(state).slice().sort(function (a, b) {
+      return a.date.localeCompare(b.date) || String(a.id).localeCompare(String(b.id));
+    });
+    if (workouts.length) {
+      add({
+        id: 'first-workout',
+        type: 'first',
+        date: workouts[0].date,
+        title: 'האימון הראשון מאחוריך',
+        text: 'האימון הראשון מאחוריך'
+      });
+    }
+
+    const firstNut = earliestDate(state.nutrition || [], function (n) {
+      return n && n.date && ((Number(n.protein) || 0) > 0 || (Number(n.calories) || 0) > 0) ? n.date : '';
+    });
+    if (firstNut) {
+      add({
+        id: 'first-nutrition',
+        type: 'first',
+        date: firstNut,
+        title: 'נרשמה הארוחה הראשונה',
+        text: 'נרשמה הארוחה הראשונה'
+      });
+    }
+
+    const proteinDates = (state.nutrition || []).filter(function (n) { return hitsProtein(state, n.date); }).map(function (n) { return n.date; }).sort();
+    if (proteinDates.length) {
+      add({
+        id: 'first-protein',
+        type: 'first',
+        date: proteinDates[0],
+        title: 'פעם ראשונה שעמדת ביעד החלבון',
+        text: 'פעם ראשונה שעמדת ביעד החלבון'
+      });
+    }
+
+    const weights = (state.weights || []).filter(function (w) {
+      return w && (Number(w.weight) || Number(w.kg) || 0) > 0;
+    }).slice().sort(function (a, b) { return a.date.localeCompare(b.date); });
+    if (weights.length) {
+      const kg = Number(weights[0].weight || weights[0].kg);
+      add({
+        id: 'first-weight',
+        type: 'first',
+        date: weights[0].date,
+        title: 'נרשם המשקל הראשון: ' + formatKg(kg),
+        text: 'נרשם המשקל הראשון: ' + formatKg(kg)
+      });
+    }
+
+    (exerciseNames(state) || []).forEach(function (name) {
+      const sessions = attachPRs(sessionsForExercise(state, name));
+      sessions.forEach(function (sess) {
+        if (!sess || !sess.isPR) return;
+        const types = sess.prTypes || [];
+        const hasW = types.indexOf('weight') >= 0;
+        const hasE = types.indexOf('e1rm') >= 0;
+        if (!hasW && !hasE) return;
+        let title;
+        if (hasW && sess.topWeight > 0) {
+          const load = sess.bodyweight ? ('משקל גוף +' + formatKg(sess.topWeight).replace(' ק״ג', '') + ' ק״ג') : formatKg(sess.topWeight);
+          title = 'שיא חדש ב' + name + ': ' + load;
+        } else {
+          title = 'שיא חדש ב-1RM משוער ב' + name + ': ' + formatKg(sess.e1rm);
+        }
+        add({
+          id: 'pr-' + foldName(name) + '-' + sess.date,
+          type: 'pr',
+          date: sess.date,
+          title: title,
+          text: title,
+          exercise: name
+        });
+      });
+    });
+
+    function streakReachedOn(kind, mark) {
+      const n = nutritionStreak(state, kind, now);
+      if (n < mark) return '';
+      const todayHit = kind === 'calories' ? hitsCalorie(state, today) : hitsProtein(state, today);
+      const first = addDays(today, todayHit ? -(n - 1) : -n);
+      return addDays(first, mark - 1);
+    }
+    function addHighestNutrition(kind, prefix, titleOf, textOf) {
+      var best = 0;
+      NUTRITION_STREAK_MARKS.forEach(function (mark) {
+        if (nutritionStreak(state, kind, now) >= mark && mark > best) best = mark;
+      });
+      if (!best) return;
+      const reached = streakReachedOn(kind, best);
+      if (!reached) return;
+      add({
+        id: prefix + best,
+        type: 'streak',
+        date: reached,
+        title: titleOf(best),
+        text: textOf(best)
+      });
+    }
+    addHighestNutrition('protein', 'protein-streak-', function (mark) {
+      return hebDaysPhrase(mark) + ' ביעד החלבון';
+    }, function (mark) {
+      return hebDaysPhrase(mark) + ' שאתה עומד ביעד החלבון';
+    });
+    addHighestNutrition('calories', 'calorie-streak-', function (mark) {
+      return hebDaysPhrase(mark) + ' ביעד הקלוריות';
+    }, function (mark) {
+      return hebDaysPhrase(mark) + ' שאתה עומד ביעד הקלוריות';
+    });
+
+    const weekInfo = workoutWeekStreak(state, now);
+    var bestWeeks = 0;
+    WORKOUT_WEEK_MARKS.forEach(function (mark) {
+      if (weekInfo.weeks >= mark && mark > bestWeeks) bestWeeks = mark;
+    });
+    if (bestWeeks) {
+      const includeThis = weekInfo.thisWeek >= weekInfo.target;
+      const lastCountedStart = includeThis
+        ? weekInfo.weekStart
+        : addDays(weekInfo.weekStart, -7);
+      const reachedStart = addDays(lastCountedStart, -7 * (weekInfo.weeks - bestWeeks));
+      var reached = addDays(reachedStart, 6);
+      if (reached > today) reached = today;
+      add({
+        id: 'workout-weeks-' + bestWeeks,
+        type: 'streak',
+        date: reached,
+        title: hebWeeksPhrase(bestWeeks) + ' עם ' + weekInfo.target + ' אימונים בשבוע',
+        text: hebWeeksPhrase(bestWeeks) + ' עם ' + weekInfo.target + ' אימונים בשבוע'
+      });
+    }
+
+    const goal = state && state.settings && state.settings.menuPrefs && state.settings.menuPrefs.goal;
+    if ((goal === 'cut' || goal === 'bulk') && weights.length >= 2) {
+      const firstKg = Number(weights[0].weight || weights[0].kg);
+      const last = weights[weights.length - 1];
+      const lastKg = Number(last.weight || last.kg);
+      const delta = lastKg - firstKg;
+      const toward = (goal === 'cut' && delta < 0) || (goal === 'bulk' && delta > 0);
+      if (toward) {
+        const abs = Math.abs(delta);
+        var bestKg = 0;
+        WEIGHT_MARKS.forEach(function (mark) {
+          if (abs >= mark && mark > bestKg) bestKg = mark;
+        });
+        if (bestKg) {
+          const verb = goal === 'cut' ? 'ירדת' : 'עלית';
+          const title = verb + ' ' + formatKg(bestKg) + ' לכיוון היעד';
+          add({
+            id: 'weight-' + goal + '-' + bestKg,
+            type: 'weight',
+            date: last.date,
+            title: title,
+            text: title
+          });
+        }
+      }
+    }
+
+    function keepHighest(prefix) {
+      const marks = out.filter(function (m) { return m.id.indexOf(prefix) === 0; });
+      if (marks.length <= 1) return;
+      marks.sort(function (a, b) {
+        return (Number(String(b.id).slice(prefix.length)) || 0) - (Number(String(a.id).slice(prefix.length)) || 0);
+      });
+      const keep = marks[0].id;
+      for (let i = out.length - 1; i >= 0; i--) {
+        if (out[i].id.indexOf(prefix) === 0 && out[i].id !== keep) out.splice(i, 1);
+      }
+    }
+    keepHighest('protein-streak-');
+    keepHighest('calorie-streak-');
+    keepHighest('workout-weeks-');
+    keepHighest('weight-cut-');
+    keepHighest('weight-bulk-');
+
+    const rank = { first: 0, pr: 1, streak: 2, weight: 3 };
+    out.sort(function (a, b) {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return (rank[a.type] || 9) - (rank[b.type] || 9);
+    });
+    return out;
+  }
+
   const FitEngine = {
     todayISO: todayISO,
     parseISO: parseISO,
@@ -2268,7 +2671,17 @@
     homePrimaryAction: homePrimaryAction,
     metricUpIsGood: metricUpIsGood,
     widgetStats: widgetStats,
-    rawMetricOnDay: rawMetricOnDay
+    rawMetricOnDay: rawMetricOnDay,
+    hitsCalorie: hitsCalorie,
+    nutritionStreak: nutritionStreak,
+    workoutWeekStreak: workoutWeekStreak,
+    usualWeeklyWorkouts: usualWeeklyWorkouts,
+    plannedWorkoutName: plannedWorkoutName,
+    formatKg: formatKg,
+    greetingHello: greetingHello,
+    greetingLine: greetingLine,
+    personalGreeting: personalGreeting,
+    detectMilestones: detectMilestones
   };
 
   root.FitEngine = FitEngine;

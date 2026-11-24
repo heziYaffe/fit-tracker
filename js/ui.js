@@ -345,6 +345,35 @@
     if (meta) meta.setAttribute('content', color);
     const scheme = document.querySelector('meta[name="color-scheme"]');
     if (scheme) scheme.setAttribute('content', resolved);
+    applyRecoveryTint();
+  }
+
+  const RECOVERY_THEME_COLOR = {
+    dark: { green: '#0a100c', yellow: '#120e08', red: '#140a0a', none: '#0c0714' },
+    light: { green: '#f3f8f4', yellow: '#faf6ee', red: '#faf3f0', none: '#f6f1fa' }
+  };
+
+  function applyRecoveryTint() {
+    const rootEl = document.documentElement;
+    if (!rootEl) return;
+    var zone = null;
+    try {
+      const s = Store.getState && Store.getState();
+      const on = !s || !s.settings || s.settings.recoveryTint !== false;
+      if (on && E.metricSnapshot) {
+        const snap = E.metricSnapshot(s, E.todayISO());
+        zone = snap && snap.recoveryPct != null ? E.recoveryZone(snap.recoveryPct) : null;
+      }
+    } catch (err) {
+      zone = null;
+    }
+    if (zone) rootEl.setAttribute('data-recovery', zone);
+    else rootEl.removeAttribute('data-recovery');
+    const resolved = resolvedTheme();
+    const colors = RECOVERY_THEME_COLOR[resolved] || RECOVERY_THEME_COLOR.dark;
+    const color = colors[zone || 'none'] || colors.none;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', color);
   }
 
   function iconGear() {
@@ -449,7 +478,7 @@
     setTimeout(function () { el.remove(); }, 1200);
   }
 
-  function burstConfetti() {
+  function burstConfetti(count) {
     if (reducedMotion()) return;
     const canvas = document.getElementById('fx-layer');
     if (!canvas) return;
@@ -458,7 +487,8 @@
     const h = canvas.height = window.innerHeight;
     const colors = ['#d36bff', '#ff3dce', '#ffc46b', '#8ab4ff', '#f3eaff'];
     const parts = [];
-    for (let i = 0; i < 80; i++) {
+    const n = Math.max(12, Math.min(80, Number(count) || 80));
+    for (let i = 0; i < n; i++) {
       parts.push({
         x: w * 0.5 + (Math.random() - 0.5) * 80,
         y: h * 0.32,
@@ -973,7 +1003,6 @@
     const info = homeDay();
     const day = info.day;
     const cons = E.computeConsistency(s, E.parseISO(day));
-    const name = s.settings.displayName || 'Hazi';
     const pTarget = E.proteinTarget(s);
     const wTarget = E.waterTarget(s);
     const cTarget = Number(s.settings.dailyCalorieTarget) || 0;
@@ -1057,13 +1086,37 @@
     const smartBtn = '<button type="button" class="btn primary home-smart" data-action="home-smart" data-do="' +
       esc(primary.action) + '" data-kind="' + esc(primary.kind || '') + '">' + esc(primary.label) + '</button>';
 
+    const greet = E.personalGreeting
+      ? E.personalGreeting(s, new Date())
+      : { hello: (s.settings.displayName || '').trim() ? ('שלום, ' + s.settings.displayName.trim()) : 'שלום', line: '' };
+    const hello = '<div class="home-hello"><h1 class="home-greet">' + esc(greet.hello) + '</h1>' +
+      (greet.line ? '<p class="home-line">' + esc(greet.line) + '</p>' : '') +
+      '</div>';
+
     return install + emptyDemoCta() +
-      '<p class="section-kicker">שלום, ' + esc(name) + '</p>' +
+      hello +
       renderDatePill(info) +
+      renderMilestoneCard(s) +
       smartBtn +
       renderHomeDashboard(s, info, cons) +
       todayCard +
       renderWeeklyCard(s);
+  }
+
+  function renderMilestoneCard(s) {
+    if (!E.detectMilestones) return '';
+    const seen = (s.settings && s.settings.seenMilestones) || [];
+    const list = E.detectMilestones(s, new Date(), seen);
+    const m = list[0];
+    if (!m) return '';
+    if (ui.shownMilestone !== m.id) {
+      ui.shownMilestone = m.id;
+      try { setTimeout(function () { burstConfetti(36); }, 40); } catch (err) { /* ignore */ }
+    }
+    return '<section class="card milestone-card" aria-label="אבן דרך">' +
+      '<button type="button" class="dismiss" data-action="dismiss-milestone" data-id="' + esc(m.id) + '" aria-label="סגירה">×</button>' +
+      '<p class="kicker">אבן דרך</p>' +
+      '<h2>' + esc(m.title || m.text) + '</h2></section>';
   }
 
   function renderTodayMetrics(m) {
@@ -2140,7 +2193,11 @@
       '<button type="button" class="chip' + (themePref === 'system' ? ' active' : '') + '" data-action="set-theme" data-theme="system">מערכת</button>' +
       '<button type="button" class="chip' + (themePref === 'dark' ? ' active' : '') + '" data-action="set-theme" data-theme="dark">כהה</button>' +
       '<button type="button" class="chip' + (themePref === 'light' ? ' active' : '') + '" data-action="set-theme" data-theme="light">בהיר</button>' +
-      '</div></div></section>';
+      '</div></div>' +
+      '<div class="setting"><div class="grow"><div>צבע לפי התאוששות</div>' +
+      '<div class="desc">גוון עדין לפי ההתאוששות של היום מ-Whoop</div></div>' +
+      '<label class="toggle"><input type="checkbox" data-action="toggle-recovery-tint"' +
+      (set.recoveryTint !== false ? ' checked' : '') + ' /><span></span></label></div></section>';
 
     const N = (window.FitNotify && FitNotify.notifOf(s)) || (set.notifications || {});
     const perm = window.FitNotify ? FitNotify.permission() : 'unsupported';
@@ -3449,6 +3506,7 @@
   /* ---------- top-level render ---------- */
 
   function render() {
+    applyRecoveryTint();
     const main = document.getElementById('main');
     if (!main) return;
     const liveOn = !!(root.FitLive && root.FitLive.getSession()) && ui.tab === 'live' && !ui.liveSummary;
@@ -3937,6 +3995,23 @@
     }
     if (action === 'close') { closeModal(); return; }
     if (action === 'set-theme') { applyTheme(btn.dataset.theme); render(); haptic(8); return; }
+    if (action === 'toggle-recovery-tint') {
+      Store.updateSettings({ recoveryTint: !btn.checked ? false : true });
+      applyRecoveryTint();
+      render();
+      haptic(8);
+      return;
+    }
+    if (action === 'dismiss-milestone') {
+      const id = btn.dataset.id || ui.shownMilestone;
+      const seen = ((s.settings && s.settings.seenMilestones) || []).slice();
+      if (id && seen.indexOf(id) === -1) seen.push(id);
+      Store.updateSettings({ seenMilestones: seen });
+      ui.shownMilestone = null;
+      render();
+      haptic(8);
+      return;
+    }
     if (action === 'open-summary') {
       ui.view = 'summary';
       ui.summaryStart = btn.dataset.start || null;
@@ -5344,6 +5419,7 @@
       });
     } catch (err) { /* ignore */ }
     Store.load();
+    applyRecoveryTint();
     try {
       if (new URLSearchParams(location.search).get('demo') === '1' && !Store.isDemoMode()) {
         ui.suppressCeleb = true;
