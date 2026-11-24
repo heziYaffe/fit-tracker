@@ -73,6 +73,11 @@ window.FitCloudConfig = {
 
 אל תשימו כאן את `service_role` או את Whoop client secret. אחרי push ל-GitHub Pages, סעיפי החשבון ו-Whoop בהגדרות יהפכו לפעילים: כניסה בקישור מייל, סנכרון, ו«חבר Whoop».
 
+
+### 6. משיכה יומית אוטומטית
+
+אחרי פריסת הפונקציה, הגדירו את הסוד `WHOOP_CRON_SECRET` ב-Edge Function secrets, ואת אותו ערך בטבלה `public.app_private_settings` תחת המפתח `whoop_cron_secret`. אחר כך הריצו את `server/supabase/cron.sql` כדי לתזמן משיכה כל יום ב-07:10 שעון ישראל. החיבור עצמו נשמר בשרת; צריך לאשר ב-Whoop רק פעם אחת, אלא אם Whoop ביטל את ההרשאה.
+
 ### חלופה: Cloudflare Worker
 
 אם תעדיפו Worker במקום Edge Function, ראו `server/cloudflare-worker/`. אפשר להעתיק את `wrangler.toml.example`, לשים סודות ב-`wrangler secret put`, ולעדכן את `WHOOP_REDIRECT_URI` ואת כתובת ה-webhook ב-Whoop. אפשר גם להפנות (`WHOOP_FN_URL`) לפונקציית Supabase שכבר נפרסה.

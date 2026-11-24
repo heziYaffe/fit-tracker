@@ -10,7 +10,8 @@
 //   GET  /callback         → Whoop redirect with ?code&state
 //   POST /webhook          → Whoop webhooks (signature verified)
 //   POST /refresh          → refresh the calling user's token and pull recent data
-//   GET  /status           → { connected, last_sync_at }
+//   POST /cron             → scheduled pull for every connected user (WHOOP_CRON_SECRET)
+//   GET  /status           → { connected, needs_reconnect, last_sync_at, token_updated_at }
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -182,8 +183,26 @@ async function whoopToken(params: Record<string, string>) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!res.ok) throw new Error("token_exchange_failed " + (await res.text()));
-  return await res.json();
+  const text = await res.text();
+  let parsed: Record<string, unknown> = {};
+  try { parsed = text ? JSON.parse(text) : {}; } catch (_) { parsed = {}; }
+  if (!res.ok) {
+    const code = String(parsed.error || "token_exchange_failed");
+    const desc = String(parsed.error_description || "").slice(0, 160);
+    const err = new Error("token_exchange_failed " + res.status + " " + code + (desc ? " " + desc : ""));
+    (err as { code?: string; status?: number }).code = code;
+    (err as { code?: string; status?: number }).status = res.status;
+    throw err;
+  }
+  return parsed;
+}
+
+function isDefinitiveAuthLoss(err: unknown) {
+  const e = err as { code?: string; message?: string };
+  const code = String(e && e.code || "").toLowerCase();
+  const msg = String(e && e.message || err || "").toLowerCase();
+  if (code === "invalid_grant" || code === "invalid_token") return true;
+  return msg.includes("invalid_grant") || msg.includes("invalid_token") || msg.includes("refresh_token_not_found");
 }
 
 async function saveTokens(sb: ReturnType<typeof admin>, userId: string, token: Record<string, unknown>, whoopUserId?: string) {
@@ -212,19 +231,124 @@ async function saveTokens(sb: ReturnType<typeof admin>, userId: string, token: R
   });
 }
 
-async function getValidToken(sb: ReturnType<typeof admin>, userId: string) {
-  const { data, error } = await sb.from("whoop_tokens").select("*").eq("user_id", userId).maybeSingle();
-  if (error || !data) return null;
-  const exp = data.expires_at ? new Date(data.expires_at).getTime() : 0;
-  if (exp && exp - 60_000 > Date.now()) return data;
-  if (!data.refresh_token) return data;
-  const fresh = await whoopToken({
-    grant_type: "refresh_token",
-    refresh_token: data.refresh_token,
-    scope: SCOPES,
+const refreshInFlight = new Map<string, Promise<Record<string, unknown> | null>>();
+
+function accessStillValid(row: { expires_at?: string | null } | null, skewMs = 60_000) {
+  if (!row || !row.expires_at) return false;
+  const exp = new Date(row.expires_at).getTime();
+  return !!(exp && exp - skewMs > Date.now());
+}
+
+async function markLinkError(sb: ReturnType<typeof admin>, userId: string, lastError: string | null) {
+  await sb.from("whoop_links").upsert({
+    user_id: userId,
+    last_error: lastError,
   });
-  await saveTokens(sb, userId, fresh, data.whoop_user_id);
-  return { ...data, access_token: fresh.access_token, refresh_token: fresh.refresh_token || data.refresh_token };
+}
+
+async function refreshAndSave(
+  sb: ReturnType<typeof admin>,
+  userId: string,
+  current: Record<string, unknown>,
+  attempt = 0,
+): Promise<Record<string, unknown> | null> {
+  const usedRefresh = String(current.refresh_token || "");
+  if (!usedRefresh) return current;
+  try {
+    // Whoop's documented refresh payload uses scope=offline only, not the full
+    // data scopes. Sending the authorize scopes here can fail the refresh, and
+    // the access token then dies after ~1 hour so the app asks to reconnect.
+    const fresh = await whoopToken({
+      grant_type: "refresh_token",
+      refresh_token: usedRefresh,
+      scope: "offline",
+    });
+    const expires = fresh.expires_in
+      ? new Date(Date.now() + Number(fresh.expires_in) * 1000).toISOString()
+      : null;
+    const newRefresh = (fresh.refresh_token ? String(fresh.refresh_token) : "") || usedRefresh;
+    const patch = {
+      access_token: fresh.access_token,
+      refresh_token: newRefresh,
+      expires_at: expires,
+      scope: fresh.scope || current.scope || SCOPES,
+      updated_at: new Date().toISOString(),
+    };
+    // Compare-and-swap so a concurrent refresh cannot overwrite a newer token.
+    const { data: updated, error } = await sb.from("whoop_tokens")
+      .update(patch)
+      .eq("user_id", userId)
+      .eq("refresh_token", usedRefresh)
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    if (!updated) {
+      const { data: latest } = await sb.from("whoop_tokens").select("*").eq("user_id", userId).maybeSingle();
+      if (latest && accessStillValid(latest)) return latest;
+      if (latest && latest.refresh_token && String(latest.refresh_token) !== usedRefresh && attempt < 1) {
+        return refreshAndSave(sb, userId, latest, attempt + 1);
+      }
+      return latest || { ...current, ...patch };
+    }
+    await markLinkError(sb, userId, null);
+    console.log("whoop refresh ok", JSON.stringify({
+      user: String(userId).slice(0, 8),
+      expires_in: fresh.expires_in || null,
+      rotated_refresh: !!(fresh.refresh_token && String(fresh.refresh_token) !== usedRefresh),
+    }));
+    return updated;
+  } catch (err) {
+    if (isDefinitiveAuthLoss(err)) {
+      const { data: latest } = await sb.from("whoop_tokens").select("*").eq("user_id", userId).maybeSingle();
+      if (latest && latest.refresh_token && String(latest.refresh_token) !== usedRefresh) {
+        if (accessStillValid(latest)) return latest;
+        if (attempt < 1) return refreshAndSave(sb, userId, latest, attempt + 1);
+        return latest;
+      }
+      await markLinkError(sb, userId, "invalid_grant");
+      console.error("whoop refresh invalid_grant", String(userId).slice(0, 8));
+      const e = new Error("invalid_grant");
+      (e as { code?: string }).code = "invalid_grant";
+      throw e;
+    }
+    if (attempt < 1) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const { data: latest } = await sb.from("whoop_tokens").select("*").eq("user_id", userId).maybeSingle();
+      return refreshAndSave(sb, userId, latest || current, attempt + 1);
+    }
+    console.error("whoop refresh transient failure", String((err as Error).message || err).slice(0, 200));
+    throw err;
+  }
+}
+
+async function getValidToken(sb: ReturnType<typeof admin>, userId: string) {
+  const pending = refreshInFlight.get(userId);
+  if (pending) return pending;
+  const work = (async () => {
+    const { data, error } = await sb.from("whoop_tokens").select("*").eq("user_id", userId).maybeSingle();
+    if (error || !data) return null;
+    if (accessStillValid(data)) return data;
+    if (!data.refresh_token) return data;
+    return refreshAndSave(sb, userId, data);
+  })();
+  refreshInFlight.set(userId, work);
+  try {
+    return await work;
+  } finally {
+    if (refreshInFlight.get(userId) === work) refreshInFlight.delete(userId);
+  }
+}
+
+async function tokenMeta(sb: ReturnType<typeof admin>, userId: string) {
+  const { data } = await sb.from("whoop_tokens").select("expires_at, updated_at, refresh_token, scope").eq("user_id", userId).maybeSingle();
+  if (!data) return { has_token: false, has_refresh: false, access_expires_at: null, token_updated_at: null };
+  return {
+    has_token: true,
+    has_refresh: !!(data.refresh_token && String(data.refresh_token).length),
+    access_expires_at: data.expires_at || null,
+    token_updated_at: data.updated_at || null,
+    scope: data.scope || null,
+  };
 }
 
 async function whoopGet(access: string, path: string) {
@@ -660,10 +784,52 @@ Deno.serve(async (req) => {
       const user = await userFromReq(req);
       if (!user) return json({ error: "auth_required" }, 401);
       const sb = admin();
-      const tok = await getValidToken(sb, user.id);
-      if (!tok) return json({ error: "not_connected" }, 400);
-      await pullRecent(sb, user.id, tok.access_token);
-      return json({ ok: true });
+      try {
+        const before = await tokenMeta(sb, user.id);
+        const tok = await getValidToken(sb, user.id);
+        if (!tok) return json({ error: "not_connected" }, 400);
+        await pullRecent(sb, user.id, tok.access_token as string);
+        const meta = await tokenMeta(sb, user.id);
+        return json({ ok: true, refreshed: before.token_updated_at !== meta.token_updated_at, ...meta });
+      } catch (err) {
+        if (isDefinitiveAuthLoss(err)) {
+          return json({ error: "invalid_grant", message: "whoop needs reconnect" }, 409);
+        }
+        throw err;
+      }
+    }
+
+    if ((req.method === "POST" || req.method === "GET") && route === "/cron") {
+      const secret = Deno.env.get("WHOOP_CRON_SECRET") || "";
+      const header = req.headers.get("Authorization") || "";
+      const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+      const alt = req.headers.get("x-cron-secret") || url.searchParams.get("secret") || "";
+      if (!secret || (bearer !== secret && alt !== secret)) {
+        return json({ error: "auth_required" }, 401);
+      }
+      const sb = admin();
+      const { data: rows, error } = await sb.from("whoop_tokens").select("user_id");
+      if (error) throw error;
+      let pulled = 0, refreshed = 0, reconnect = 0, failed = 0;
+      for (const row of rows || []) {
+        const userId = String(row.user_id);
+        try {
+          const before = await tokenMeta(sb, userId);
+          const tok = await getValidToken(sb, userId);
+          if (!tok || !tok.access_token) { failed += 1; continue; }
+          const after = await tokenMeta(sb, userId);
+          if (before.token_updated_at !== after.token_updated_at) refreshed += 1;
+          await pullRecent(sb, userId, String(tok.access_token), 7);
+          pulled += 1;
+        } catch (err) {
+          if (isDefinitiveAuthLoss(err)) reconnect += 1;
+          else {
+            failed += 1;
+            console.error("whoop cron user failed", String((err as Error).message || err).slice(0, 200));
+          }
+        }
+      }
+      return json({ ok: true, pulled, refreshed, reconnect, failed });
     }
 
     if (req.method === "GET" && route === "/status") {
@@ -671,7 +837,15 @@ Deno.serve(async (req) => {
       if (!user) return json({ error: "auth_required" }, 401);
       const sb = admin();
       const { data } = await sb.from("whoop_links").select("whoop_user_id, connected_at, last_sync_at, last_error").eq("user_id", user.id).maybeSingle();
-      return json({ connected: !!data, link: data || null });
+      const meta = await tokenMeta(sb, user.id);
+      const lastError = data && data.last_error ? String(data.last_error) : "";
+      const needsReconnect = !!(lastError === "invalid_grant" || (data && !meta.has_token) || (meta.has_token && !meta.has_refresh && !accessStillValid({ expires_at: meta.access_expires_at })));
+      return json({
+        connected: !!(data && meta.has_token && !needsReconnect),
+        needs_reconnect: needsReconnect,
+        link: data || null,
+        ...meta,
+      });
     }
 
     return json({ error: "not_found", route }, 404);

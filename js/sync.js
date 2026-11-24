@@ -534,6 +534,24 @@
     });
   }
 
+  function applyWhoopStatusResponse(prev, httpStatus, body) {
+    prev = prev || {};
+    body = body || {};
+    if (httpStatus === 401) {
+      return Object.assign({}, prev, {
+        authRequired: true,
+        error: 'קודם צריך להתחבר לחשבון'
+      });
+    }
+    if (!(httpStatus >= 200 && httpStatus < 300)) {
+      return Object.assign({}, prev, {
+        statusFailed: true,
+        error: authErrorMessage(body, 'לא ניתן לבדוק את מצב Whoop')
+      });
+    }
+    return body;
+  }
+
   function whoopStatus() {
     if (!whoopReady() || !(authUser || readStoredAuth())) {
       status.whoop = { connected: false };
@@ -541,19 +559,11 @@
     }
     return authedFetch(fnUrl() + '/status').then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
-        if (r.status === 401) {
-          status.whoop = { connected: false, error: 'קודם צריך להתחבר לחשבון' };
-          return status.whoop;
-        }
-        if (!r.ok) {
-          status.whoop = { connected: false, error: authErrorMessage(body, 'לא ניתן לבדוק את מצב Whoop') };
-          return status.whoop;
-        }
-        status.whoop = body;
-        return body;
+        status.whoop = applyWhoopStatusResponse(status.whoop, r.status, body);
+        return status.whoop;
       });
     }).catch(function (err) {
-      status.whoop = { connected: false, error: String(err.message || err) };
+      status.whoop = Object.assign({}, status.whoop || {}, { error: String(err.message || err), statusFailed: true });
       return status.whoop;
     });
   }
@@ -571,8 +581,20 @@
     if (!authUser) return Promise.reject(new Error('קודם צריך להתחבר לחשבון'));
     return authedFetch(fnUrl() + '/refresh', { method: 'POST' }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
-        if (!r.ok) throw new Error(authErrorMessage(body, 'משיכת נתוני Whoop נכשלה'));
+        if (!r.ok) {
+          if (body && (body.error === 'invalid_grant' || body.error === 'not_connected')) {
+            status.whoop = Object.assign({}, status.whoop || {}, {
+              needs_reconnect: true,
+              connected: body.error === 'not_connected' ? false : (status.whoop && status.whoop.connected),
+              error: 'החיבור ל-Whoop פג. לחצו «חבר Whoop» פעם אחת.'
+            });
+          }
+          throw new Error(authErrorMessage(body, 'משיכת נתוני Whoop נכשלה'));
+        }
         markWhoopPulled();
+        if (body) {
+          status.whoop = Object.assign({}, status.whoop || {}, body, { needs_reconnect: !!body.needs_reconnect, error: null });
+        }
         return body;
       });
     });
@@ -634,6 +656,7 @@
     whoopStartUrl: whoopStartUrl,
     whoopAuthorizeUrl: whoopAuthorizeUrl,
     whoopStatus: whoopStatus,
+    applyWhoopStatusResponse: applyWhoopStatusResponse,
     whoopRefresh: whoopRefresh,
     onForeground: onForeground,
     init: init,

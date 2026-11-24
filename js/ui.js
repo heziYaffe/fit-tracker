@@ -635,7 +635,8 @@
     const st = window.FitSync ? FitSync.status() : { signedIn: false, whoop: {} };
     const whoopSt = st.whoop || {};
     const signedIn = !!st.signedIn;
-    const connected = !!(whoopSt.connected || (whoopSt.link && whoopSt.link.connected_at));
+    const needsReconnect = !!whoopSt.needs_reconnect;
+    const connected = !needsReconnect && !!(whoopSt.connected || (whoopSt.link && whoopSt.link.connected_at));
     const rec = snap.recoveryPct;
     const sleepP = snap.sleepPerformance;
     const strain = snap.strain;
@@ -706,7 +707,7 @@
     var actions = '';
     if (!signedIn) {
       actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="tab" data-tab="settings">התחברות לחשבון</button></div>';
-    } else if (!connected) {
+    } else if (needsReconnect || !connected) {
       actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="whoop-connect">חבר Whoop</button></div>';
     } else if (!hasSleep && !hasRec && !hasStrain) {
       actions = '<div class="whoop-empty-actions"><button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>';
@@ -1857,13 +1858,18 @@
         '<p class="hp-legend">אחרי הקמת השרת ומילוי מזהה הלקוח של Whoop ב-<code>js/cloud-config.js</code>, אפשר יהיה לחבר את החשבון. מדדי Recovery, Strain, שינה, HRV ואימונים ייכנסו עם מקור whoop.</p></section>')
       : ('<section class="card"><h2>חיבור Whoop</h2>' +
         (syncSt.signedIn
-          ? ((whoopSt.connected
-              ? ('<p class="hp-legend">מחוברים ל-Whoop' + (whoopSyncAt ? (' · סונכרן לאחרונה: ' + esc(String(whoopSyncAt).replace('T', ' ').slice(0, 16))) : '') + '.</p>')
-              : '<p class="hp-legend">לחיצה תפתח את אתר Whoop לאישור. אחרי האישור חזרו לאפליקציה — החיבור נשמר בשרת גם אם נפתח בדפדפן.</p>') +
-            '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
-            '<button type="button" class="btn primary" data-action="whoop-connect">' + (whoopSt.connected ? 'חיבור מחדש' : 'חבר Whoop') + '</button>' +
-            '<button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>' +
-            (whoopErr ? '<p class="hp-legend">' + esc(whoopErr) + '</p>' : ''))
+          ? ((whoopSt.needs_reconnect
+              ? '<p class="hp-legend">החיבור ל-Whoop פג. צריך לאשר פעם אחת מחדש, ואז הנתונים יימשכו לבד כל יום.</p>'
+              : (whoopSt.connected
+                ? ('<p class="hp-legend">מחוברים ל-Whoop' + (whoopSyncAt ? (' · סונכרן לאחרונה: ' + esc(String(whoopSyncAt).replace('T', ' ').slice(0, 16))) : '') + '. הנתונים נמשכים לבד, גם בלי לפתוח את האפליקציה.</p>')
+                : '<p class="hp-legend">לחיצה תפתח את אתר Whoop לאישור. אחרי האישור חזרו לאפליקציה — החיבור נשמר בשרת, וצריך לאשר רק פעם אחת.</p>')) +
+            (whoopSt.connected && !whoopSt.needs_reconnect
+              ? ('<button type="button" class="btn primary wide" data-action="whoop-refresh">משיכת נתונים</button>' +
+                '<p class="hp-legend"><button type="button" class="linkish" data-action="whoop-connect">חיבור מחדש</button></p>')
+              : ('<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
+                '<button type="button" class="btn primary" data-action="whoop-connect">' + (whoopSt.needs_reconnect ? 'חיבור מחדש' : 'חבר Whoop') + '</button>' +
+                '<button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>')) +
+            (whoopErr && (whoopSt.needs_reconnect || !whoopSt.connected) ? '<p class="hp-legend">' + esc(whoopErr) + '</p>' : ''))
           : '<p class="hp-legend">קודם התחברו לחשבון, ואז אפשר לחבר את Whoop.</p>') +
         '</section>');
 
