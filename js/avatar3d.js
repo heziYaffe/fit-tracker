@@ -148,7 +148,7 @@ function buildHuman(p, look, colors) {
     ring(0.83 * H, T.shoulderW * 0.5, T.chestD * 0.5),
     ring(0.845 * H, neckW * 1.4, neckW * 1.2)
   ];
-  const anim = { eyes: [], breath: [], head: null, upper: null, baseEye: 1 };
+  const anim = { eyes: [], breath: [], ears: [], arms: {}, hips: {}, knees: {}, head: null, upper: null, baseEye: 1, S: s, unit: H, headR: 0.066 * H };
   anim.breath.push(add(fig, loft(torsoRings, { pivotY: waistY, seg: 26 }), skin));
   // shorts (lower torso + thigh tops, slightly bigger)
   add(fig, loft(torsoRings.slice(0, 3).map((r) => Object.assign({}, r, { w: r.w * 1.035, d: r.d * 1.035 })).concat([
@@ -215,6 +215,11 @@ function buildHuman(p, look, colors) {
   const mouth = add(head, new TorusGeometry(headR * 0.22, headR * 0.028, 6, 16, mouthArc), mat('#8a3b4a', { roughness: 0.5 }), 0, -headR * (R.mood === 'tired' ? 0.5 : 0.36), headR * 0.86);
   mouth.rotation.z = R.mood === 'tired' ? Math.PI / 2 - mouthArc / 2 : -Math.PI / 2 - mouthArc / 2;
   if (R.mood === 'tired') mouth.position.y -= headR * 0.1;
+  anim.mouth = mouth;
+  const mo = add(head, new SphereGeometry(headR * 0.13, 12, 10), mat('#4a1a26', { roughness: 0.5 }), 0, -headR * 0.42, headR * 0.84);
+  mo.scale.set(1, 0.8, 0.5);
+  anim.mouthO = mo;
+  anim.faceZ = headR * 0.86; anim.mouthY = -headR * 0.42; anim.eyeY = headR * 0.12; anim.eyeX = headR * 0.33;
 
   // hair
   const hr = headR * 1.04;
@@ -281,32 +286,44 @@ function buildHuman(p, look, colors) {
     ].reverse(), { seg: 16 }), skin);
     const hand = add(arm, new SphereGeometry(rF * 0.95, 14, 10), skin, 0, -ua - fa - rF * 0.7, 0);
     hand.scale.set(0.7, 1.25, 0.9);
+    anim.arms[sd] = { g: arm, handY: -ua - fa - rF * 0.7, len: ua + fa };
   });
 
-  // legs
+  // legs: hip and knee pivots so the figure can shift weight and sit
   [-1, 1].forEach((sd) => {
     const hx = sd * T.hipsW * 0.48;
     const r = L.thighR, c = L.calfR;
-    const leg = loft([
+    const hipX = hx * 0.97, hipY = 0.5 * H, kneeX = hx * 0.96, kneeY = 0.29 * H;
+    const hip = new Group(); hip.position.set(hipX, hipY, 0); fig.add(hip);
+    const knee = new Group(); knee.position.set(kneeX - hipX, kneeY - hipY, 0); hip.add(knee);
+    const thigh = add(hip, loft([
+      { y: 0.28 * H, x: hx * 0.96, w: r * 0.58, d: r * 0.58 },
+      { y: 0.3 * H, x: hx * 0.96, w: r * 0.62, d: r * 0.62 },
+      { y: 0.37 * H, x: hx, w: r * 0.86, d: r * 0.88, z: r * 0.06 },
+      { y: 0.44 * H, x: hx, w: r * 1.0, d: r * 1.0 },
+      { y: 0.5 * H, x: hx * 0.95, w: r * 1.05, d: r * 1.0 }
+    ], { seg: 18 }), skin, -hipX, -hipY, 0);
+    void thigh;
+    add(hip, loft([
+      { y: 0.405 * H, x: hx, w: r * 0.98, d: r * 0.98 },
+      { y: 0.45 * H, x: hx, w: r * 1.06, d: r * 1.06 },
+      { y: 0.5 * H, x: hx * 0.95, w: r * 1.1, d: r * 1.06 }
+    ], { seg: 18 }), cloth, -hipX, -hipY, 0);
+    add(knee, loft([
       { y: 0.035 * H, x: hx * 0.92, w: c * 0.48, d: c * 0.5 },
       { y: 0.09 * H, x: hx * 0.92, w: c * 0.62, d: c * 0.68 },
       { y: 0.19 * H, x: hx * 0.94, w: c * 0.96, d: c * 1.02, z: -c * 0.12 },
       { y: 0.26 * H, x: hx * 0.95, w: c * 0.78, d: c * 0.82 },
-      { y: 0.29 * H, x: hx * 0.96, w: r * 0.6, d: r * 0.6 },
-      { y: 0.37 * H, x: hx, w: r * 0.86, d: r * 0.88, z: r * 0.06 },
-      { y: 0.44 * H, x: hx, w: r * 1.0, d: r * 1.0 },
-      { y: 0.5 * H, x: hx * 0.95, w: r * 1.05, d: r * 1.0 }
-    ], { seg: 18 });
-    add(fig, leg, skin);
-    // shorts legs
-    add(fig, loft([
-      { y: 0.405 * H, x: hx, w: r * 0.98, d: r * 0.98 },
-      { y: 0.45 * H, x: hx, w: r * 1.06, d: r * 1.06 },
-      { y: 0.5 * H, x: hx * 0.95, w: r * 1.1, d: r * 1.06 }
-    ], { seg: 18 }), cloth);
-    const foot = add(fig, new CapsuleGeometry(c * 0.42, 0.11 * s, 4, 10), mat(colors.shoe, { roughness: 0.7 }), hx * 0.92, 0.02 * s, 0.035 * s);
+      { y: 0.3 * H, x: hx * 0.96, w: r * 0.6, d: r * 0.6 }
+    ], { seg: 18 }), skin, -kneeX, -kneeY, 0);
+    add(knee, new SphereGeometry(r * 0.6, 14, 10), skin, 0, 0, 0);
+    const foot = add(knee, new CapsuleGeometry(c * 0.42, 0.11 * s, 4, 10), mat(colors.shoe, { roughness: 0.7 }), hx * 0.92 - kneeX, 0.02 * s - kneeY, 0.035 * s);
     foot.rotation.x = Math.PI / 2;
+    anim.hips[sd] = hip; anim.knees[sd] = knee;
   });
+  anim.seatDrop = 0.205 * H;
+  anim.seat = { y: 0.13 * H, r: 0.2 * H, z: -0.06 * H };
+  addProps(anim, { head: head, headR: headR, kind: 'human', skin: look.skin, mat: mat, add: add, upper: upper, fig: fig, glow: colors.glow });
   fig.userData.mats = mats;
   fig.userData.anim = anim;
   return fig;
@@ -339,7 +356,7 @@ function buildCreature(p, look, colors) {
   const pink = mat('#ff9fb8', { roughness: 0.6, metalness: 0 });
   const glowHex = colors.glow;
   const glow = mat(glowHex, { emissive: new Color(glowHex), emissiveIntensity: 0.9, metalness: 0 });
-  const anim = { eyes: [], breath: [], ears: [], head: null, upper: null, baseEye: R.eyeOpen, creature: true };
+  const anim = { eyes: [], breath: [], ears: [], arms: {}, hips: {}, knees: {}, head: null, upper: null, baseEye: R.eyeOpen, creature: true, S: C.scale, unit: C.scale * 1.0, headR: C.headR };
 
   const S = C.scale;
   const slump = R.slouch || 0;
@@ -347,10 +364,11 @@ function buildCreature(p, look, colors) {
   const legX = C.bellyR * 0.5;
   // legs + feet
   [-1, 1].forEach((sd) => {
-    const leg = add(fig, new CapsuleGeometry(C.legR, legH * 0.6, 6, 14), body, sd * legX, legH * 0.55, 0);
-    leg.scale.set(1, 1, 1);
-    const foot = add(fig, new SphereGeometry(C.legR * 1.15, 16, 10), kind === 'robot' ? dark : light, sd * legX, C.legR * 0.55, C.legR * 0.45);
+    const hip = new Group(); hip.position.set(sd * legX, legH, 0); fig.add(hip);
+    add(hip, new CapsuleGeometry(C.legR, legH * 0.6, 6, 14), body, 0, legH * 0.55 - legH, 0);
+    const foot = add(hip, new SphereGeometry(C.legR * 1.15, 16, 10), kind === 'robot' ? dark : light, 0, C.legR * 0.55 - legH, C.legR * 0.45);
     foot.scale.set(1, 0.6, 1.35);
+    anim.hips[sd] = hip;
   });
   // body pivot (slump forward from the hips)
   const upper = new Group();
@@ -386,6 +404,7 @@ function buildCreature(p, look, colors) {
     upper.add(arm);
     add(arm, new CapsuleGeometry(C.armR, C.armLen * 0.7, 6, 12), body, 0, -C.armLen * 0.5, 0);
     add(arm, new SphereGeometry(C.armR * 1.1, 12, 10), kind === 'robot' ? dark : light, 0, -C.armLen * 0.95, 0);
+    anim.arms[sd] = { g: arm, handY: -C.armLen * 0.95, len: C.armLen };
   });
   // head
   const head = new Group();
@@ -427,6 +446,14 @@ function buildCreature(p, look, colors) {
   const mouth = add(head, new TorusGeometry(hr * 0.16, hr * 0.03, 6, 16, mouthArc), kind === 'robot' ? glow : dark, 0, -hr * (kind === 'robot' ? 0.22 : 0.36), kind === 'robot' ? hr * 0.88 : hr * (kind === 'bunny' ? 0.9 : 1.0));
   mouth.rotation.z = R.mood === 'tired' ? Math.PI / 2 - mouthArc / 2 : -Math.PI / 2 - mouthArc / 2;
   if (R.mood === 'tired') mouth.position.y -= hr * 0.12;
+  anim.mouth = mouth;
+  const mz = kind === 'robot' ? hr * 0.88 : hr * (kind === 'bunny' ? 0.9 : 1.0);
+  const mo = add(head, new SphereGeometry(hr * 0.12, 12, 10), kind === 'robot' ? glow : mat('#4a1a26', { roughness: 0.5, metalness: 0 }), 0, -hr * 0.36, mz - hr * 0.02);
+  mo.scale.set(1, 0.85, 0.5);
+  anim.mouthO = mo;
+  anim.faceZ = faceZ; anim.mouthY = -hr * 0.36; anim.eyeY = hr * 0.08; anim.eyeX = hr * 0.38; anim.mouthZ = mz;
+  anim.seatDrop = legH * 0.75;
+  anim.seat = { y: legH * 0.12, r: bw * 1.25, z: -bw * 0.4 };
 
   // kind extras
   const perk = 1 - (R.earDroop || 0);
@@ -487,6 +514,7 @@ function buildCreature(p, look, colors) {
     const tail = new Group();
     tail.position.set(0, bodyH * 0.35, -bw * 0.8);
     upper.add(tail);
+    anim.tail = tail;
     const t1 = add(tail, new ConeGeometry(bw * 0.32, bw * 1.3, 14), body, 0, 0, -bw * 0.5);
     t1.rotation.x = -Math.PI / 2 - 0.25 + 0.35 * slump;
     for (let i = 0; i < 4; i++) {
@@ -498,8 +526,8 @@ function buildCreature(p, look, colors) {
     ant.position.set(0, hr * 0.85, 0);
     head.add(ant);
     add(ant, new CylinderGeometry(hr * 0.03, hr * 0.03, hr * 0.5, 8), dark, 0, hr * 0.25, 0);
-    const bulb = add(ant, new SphereGeometry(hr * 0.12, 14, 10), glow, 0, hr * 0.52, 0);
-    void bulb;
+    const bulb = add(ant, new SphereGeometry(hr * 0.12, 14, 10), mat(glowHex, { emissive: new Color(glowHex), emissiveIntensity: 0.9, metalness: 0 }), 0, hr * 0.52, 0);
+    anim.bulb = bulb;
     ant.userData.base = { z: 0, x: 0.9 * (1 - perk) };
     ant.rotation.x = ant.userData.base.x;
     ant.userData.side = 1;
@@ -509,9 +537,66 @@ function buildCreature(p, look, colors) {
       earC.rotation.z = Math.PI / 2;
     });
   }
+  addProps(anim, { head: head, headR: hr, kind: kind, skin: look.color, mat: mat, add: add, upper: upper, fig: fig, glow: glowHex });
   fig.userData.mats = mats;
   fig.userData.anim = anim;
   return fig;
+}
+
+/* Small props the reactions and day states use. Built once per figure, hidden until needed. */
+function addProps(anim, o) {
+  const hr = o.headR, head = o.head, add = o.add, mat = o.mat;
+  const props = {};
+  // sweat drops on the forehead
+  const sweatM = mat('#8fd3ff', { roughness: 0.1, metalness: 0, transparent: true, opacity: 0.85 });
+  props.sweat = [[-0.5, 0.45], [0.55, 0.3], [0.15, 0.62]].map(function (q, i) {
+    const d = add(head, new SphereGeometry(hr * 0.07, 10, 8), sweatM, q[0] * hr, q[1] * hr, hr * 0.8);
+    d.scale.set(0.75, 1.2, 0.75);
+    d.visible = false;
+    d.userData.i = i;
+    return d;
+  });
+  // eye bags (poor sleep)
+  const bagM = mat(new Color(o.skin).multiplyScalar(0.72).getHex(), { roughness: 0.8, metalness: 0 });
+  props.bags = [-1, 1].map(function (sd) {
+    const b = add(head, new SphereGeometry(hr * 0.09, 10, 8), bagM, sd * anim.eyeX, anim.eyeY - hr * 0.13, anim.faceZ - hr * 0.02);
+    b.scale.set(1.3, 0.45, 0.5);
+    b.visible = false;
+    return b;
+  });
+  // things in the right hand
+  const R = anim.arms[1];
+  if (R) {
+    const hold = new Group();
+    hold.position.set(0, R.handY, hr * 0.12);
+    R.g.add(hold);
+    const bottle = new Group();
+    add(bottle, new CylinderGeometry(hr * 0.1, hr * 0.1, hr * 0.42, 14), mat('#7cc4ff', { roughness: 0.2, metalness: 0, transparent: true, opacity: 0.85 }), 0, 0, 0);
+    add(bottle, new CylinderGeometry(hr * 0.06, hr * 0.06, hr * 0.08, 10), mat('#f3eaff', { metalness: 0 }), 0, hr * 0.24, 0);
+    bottle.visible = false;
+    hold.add(bottle);
+    const snack = add(hold, new CylinderGeometry(hr * 0.16, hr * 0.16, hr * 0.06, 16), mat('#c98a4b', { roughness: 0.9, metalness: 0 }), 0, 0, 0);
+    snack.rotation.x = Math.PI / 2;
+    snack.visible = false;
+    props.bottle = bottle; props.snack = snack;
+  }
+  // sparkles for the cheer
+  const spM = mat('#ffe27a', { emissive: new Color('#ffd23f'), emissiveIntensity: 1.2, metalness: 0 });
+  props.sparkles = [0, 1, 2, 3, 4].map(function (i) {
+    const a = (i / 5) * Math.PI * 2;
+    const sp = add(head, new IcosahedronGeometry(hr * 0.09, 0), spM, Math.cos(a) * hr * 1.5, hr * (0.9 + 0.3 * Math.sin(a * 2)), Math.sin(a) * hr * 0.6);
+    sp.visible = false;
+    sp.userData.a = a;
+    return sp;
+  });
+  // dragon flame
+  if (o.kind === 'dragon') {
+    const fl = add(head, new ConeGeometry(hr * 0.16, hr * 0.7, 12), mat('#ff8a3d', { emissive: new Color('#ff6a1a'), emissiveIntensity: 1.3, metalness: 0, transparent: true, opacity: 0.9 }), 0, anim.mouthY - hr * 0.02, (anim.mouthZ || anim.faceZ) + hr * 0.38);
+    fl.rotation.x = -Math.PI / 2;
+    fl.visible = false;
+    props.flame = fl;
+  }
+  anim.props = props;
 }
 
 function buildFigure(p, look, colors) {
@@ -525,6 +610,323 @@ function disposeTree(obj) {
       (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (m.map) m.map.dispose(); m.dispose(); });
     }
   });
+}
+
+/* ---------- procedural animation ----------
+   A small state machine: a mood base pose (crossfaded when the mood/day changes), an idle layer
+   (eased breathing, weight shifts, natural blinks, smooth-noise head drift), one-shot clips
+   (fidgets every 6–12 s, reactions on demand) with fade-in/out envelopes, and spring-damper
+   secondary motion for ears/horns/wings/antenna/tail. Only transforms change per frame. */
+const ease = {
+  inOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+  out: (t) => 1 - Math.pow(1 - t, 3),
+  in: (t) => t * t * t,
+  back: (t) => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); }
+};
+/* keys: [[t, v, easeName?], ...] sorted by t in 0..1; value eased from the previous key. */
+function K(u, keys) {
+  if (u <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    const k = keys[i];
+    if (u <= k[0]) {
+      const p = keys[i - 1];
+      const f = (u - p[0]) / Math.max(1e-6, k[0] - p[0]);
+      return p[1] + (k[1] - p[1]) * (ease[k[2] || 'inOut'])(f);
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+function hash1(i) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return (x - Math.floor(x)) * 2 - 1; }
+function noise1(x) { const i = Math.floor(x), f = x - i; const u = f * f * (3 - 2 * f); return hash1(i) * (1 - u) + hash1(i + 1) * u; }
+function rand(a, b) { return a + Math.random() * (b - a); }
+function osc(u, n) { return Math.sin(u * Math.PI * 2 * n); }
+
+/* One-shot clips. Each returns channel offsets for normalized time u. Arms: raise = outward/up,
+   fwd = forward, for side R (1) / L (-1). Props: 0..1. */
+const CLIPS = {
+  lookAround: { dur: 3.2, f: (u) => ({ headY: K(u, [[0, 0], [0.25, 0.55], [0.45, 0.5], [0.7, -0.5], [0.85, -0.45], [1, 0]]), headX: K(u, [[0, 0], [0.3, -0.06], [0.7, -0.04], [1, 0]]) }) },
+  scratch: { dur: 2.4, f: (u) => { const w = K(u, [[0, 0], [0.25, 1, 'out'], [0.75, 1], [1, 0]]); return { rFwd: 2.5 * w, rRaise: -0.5 * w + 0.06 * w * osc(u, 7), headZ: -0.12 * w, headX: 0.06 * w, eyeClose: 0.25 * w }; } },
+  stretch: { dur: 2.6, f: (u) => { const w = K(u, [[0, 0], [0.35, 1, 'out'], [0.65, 1], [1, 0]]); return { rRaise: 2.6 * w, lRaise: 2.6 * w, leanX: -0.12 * w, rootY: 0.012 * w, squash: 0.04 * w, eyeClose: 0.5 * w, mouthOpen: 0.4 * K(u, [[0.3, 0], [0.5, 1], [0.7, 0]]) }; } },
+  yawn: { dur: 3.0, f: (u) => { const w = K(u, [[0, 0], [0.3, 1, 'out'], [0.7, 1], [1, 0]]); return { mouthOpen: K(u, [[0, 0], [0.35, 1], [0.7, 0.9], [0.9, 0]]), eyeClose: 0.85 * w, headX: -0.22 * w, rFwd: 1.8 * K(u, [[0.15, 0], [0.4, 1], [0.7, 1], [0.9, 0]]), rRaise: -0.3 * w, leanX: -0.05 * w }; } },
+  nod: { dur: 3.2, f: (u) => ({ headX: K(u, [[0, 0], [0.55, 0.45, 'in'], [0.62, -0.08, 'out'], [1, 0]]), eyeClose: K(u, [[0, 0], [0.5, 1], [0.6, 0], [1, 0]]), leanX: K(u, [[0, 0], [0.55, 0.08], [0.65, 0], [1, 0]]) }) },
+  rubBack: { dur: 2.8, f: (u) => { const w = K(u, [[0, 0], [0.25, 1, 'out'], [0.75, 1], [1, 0]]); return { rFwd: -0.9 * w, rRaise: 0.25 * w + 0.08 * w * osc(u, 5), leanX: 0.12 * w, leanZ: -0.06 * w, headX: -0.1 * w, eyeClose: 0.3 * w }; } },
+  sigh: { dur: 2.6, f: (u) => ({ headX: K(u, [[0, 0], [0.4, 0.3], [0.7, 0.3], [1, 0]]), leanX: K(u, [[0, 0], [0.4, 0.08], [1, 0]]), squash: K(u, [[0, 0], [0.4, -0.03], [1, 0]]), eyeClose: K(u, [[0, 0], [0.4, 0.5], [1, 0]]) }) },
+  /* hop with anticipation, stretch on launch, squash on landing */
+  hop: { dur: 1.3, f: (u) => ({ rootY: K(u, [[0, 0], [0.2, -0.02], [0.45, 0.075, 'out'], [0.65, 0, 'in'], [0.78, -0.012, 'out'], [1, 0]]), squash: K(u, [[0, 0], [0.2, -0.1], [0.3, 0.09, 'out'], [0.6, 0.02], [0.68, -0.12, 'out'], [0.85, 0.02], [1, 0]]), lRaise: K(u, [[0, 0], [0.35, 0.5], [0.7, 0.1], [1, 0]]), rRaise: K(u, [[0, 0], [0.35, 0.5], [0.7, 0.1], [1, 0]]) }) },
+  // ---- reactions
+  workout: { dur: 3.0, react: true, f: (u) => {
+    const st = K(u, [[0, 0], [0.2, 1, 'out'], [0.38, 1], [0.48, 0]]);
+    const wipe = K(u, [[0.42, 0], [0.55, 1, 'out'], [0.85, 1], [1, 0]]);
+    return { rRaise: 2.5 * st - 0.45 * wipe + 0.35 * wipe * osc(u, 4.5), lRaise: 2.5 * st, rFwd: 2.4 * wipe, leanX: -0.12 * st + 0.04 * wipe, rootY: 0.01 * st, squash: 0.05 * st, headX: -0.1 * st + 0.05 * wipe, headZ: -0.1 * wipe, eyeClose: 0.6 * st + 0.3 * wipe, mouthOpen: 0.5 * K(u, [[0.6, 0], [0.75, 0.8], [0.95, 0]]), sweat: K(u, [[0, 0], [0.1, 1], [0.85, 1], [1, 0]]) };
+  } },
+  meal: { dur: 2.4, react: true, f: (u) => {
+    const arm = K(u, [[0, 0], [0.2, 1, 'out'], [0.6, 1], [0.75, 0]]);
+    const chew = u > 0.2 && u < 0.7 ? Math.max(0, osc(u, 6)) : 0;
+    const lick = K(u, [[0.7, 0], [0.8, 1], [0.95, 1], [1, 0]]);
+    return { rFwd: 2.1 * arm, rRaise: -0.6 * arm, headX: 0.08 * arm, mouthOpen: 0.7 * chew + 0.35 * lick, headZ: 0.12 * lick * osc(u, 6), eyeClose: 0.45 * lick + 0.2 * arm, snack: arm, squash: 0.02 * chew };
+  } },
+  goal: { dur: 2.2, react: true, f: (u) => ({
+    rootY: K(u, [[0, 0], [0.15, -0.025], [0.38, 0.09, 'out'], [0.6, 0, 'in'], [0.7, -0.015, 'out'], [0.85, 0]]),
+    squash: K(u, [[0, 0], [0.15, -0.12], [0.25, 0.1, 'out'], [0.55, 0.02], [0.62, -0.13, 'out'], [0.8, 0.02], [1, 0]]),
+    rRaise: K(u, [[0, 0], [0.15, -0.2], [0.35, 2.9, 'back'], [0.85, 2.9], [1, 0]]) + 0.25 * K(u, [[0.4, 0], [0.5, 1], [0.6, 0], [0.7, 1], [0.8, 0]]),
+    lRaise: K(u, [[0, 0], [0.35, 0.7], [0.85, 0.6], [1, 0]]),
+    headX: K(u, [[0, 0], [0.35, -0.18], [0.85, -0.12], [1, 0]]),
+    mouthOpen: K(u, [[0.3, 0], [0.42, 1], [0.8, 0.8], [1, 0]]), eyeClose: K(u, [[0.3, 0], [0.42, 0.55], [0.85, 0.55], [1, 0]]),
+    sparkle: K(u, [[0.3, 0], [0.42, 1], [0.85, 1], [1, 0]]), flame: K(u, [[0.4, 0], [0.48, 1], [0.7, 1], [0.8, 0]]), glow: K(u, [[0.2, 0], [0.4, 1], [0.85, 1], [1, 0]]), wingFlap: K(u, [[0.2, 0], [0.4, 1], [0.8, 1], [1, 0]])
+  }) },
+  water: { dur: 2.4, react: true, f: (u) => {
+    const arm = K(u, [[0, 0], [0.22, 1, 'out'], [0.72, 1], [0.88, 0]]);
+    const sip = K(u, [[0.25, 0], [0.4, 1], [0.7, 1], [0.8, 0]]);
+    return { rFwd: 2.2 * arm, rRaise: -0.55 * arm, headX: -0.28 * sip, mouthOpen: 0.25 * sip, eyeClose: 0.5 * sip + 0.3 * K(u, [[0.8, 0], [0.9, 0.5], [1, 0]]), bottle: arm, squash: 0.03 * K(u, [[0.8, 0], [0.9, 1], [1, 0]]) };
+  } }
+};
+
+class Spring {
+  constructor(k, c) { this.k = k; this.c = c; this.x = 0; this.v = 0; }
+  step(dt, force) {
+    const n = Math.max(1, Math.ceil(dt / 0.016));
+    const h = dt / n;
+    for (let i = 0; i < n; i++) { this.v += (-this.k * this.x - this.c * this.v + force) * h; this.x += this.v * h; }
+    this.x = MathUtils.clamp(this.x, -0.7, 0.7);
+    return this.x;
+  }
+}
+
+class Animator {
+  constructor(still) {
+    this.still = still;
+    this.t = 0;
+    this.clips = [];
+    this.nextFidget = rand(4, 8);
+    this.nextBlink = rand(1.5, 4);
+    this.blinkT = -1; this.doubleBlink = false;
+    this.breath = 0;
+    this.shift = 0; this.shiftV = 0; this.shiftTarget = 0; this.nextShift = rand(2, 4);
+    this.base = { leanX: 0, headX: 0, headZ: 0, eye: 0, armDrop: 0, seat: 0, speed: 1 };
+    this.mood = { recovery: {}, day: {} };
+    this.springs = [];
+    this.tailSpring = new Spring(40, 5);
+    this.prevHead = { x: 0, z: 0 }; this.prevRootY = 0; this.prevRootV = 0;
+    this.look = { x: 0, y: 0, w: 0, until: 0 };
+  }
+  bind(anim, fig) {
+    this.a = anim; this.fig = fig;
+    while (this.springs.length < (anim.ears || []).length) this.springs.push({ x: new Spring(70, 6.5), z: new Spring(70, 6.5) });
+  }
+  setMood(recovery, day) { this.mood = { recovery: recovery || {}, day: day || {} }; }
+  play(name) {
+    const c = CLIPS[name];
+    if (!c) return 0;
+    // a reaction preempts whatever is playing: fade the others out quickly
+    this.clips.forEach((x) => { x.out = Math.min(x.out, this.t + 0.2); });
+    this.clips.push({ name, c, start: this.t, end: this.t + c.dur, out: this.t + c.dur });
+    if (c.react) this.nextFidget = this.t + c.dur + rand(6, 10);
+    return c.dur;
+  }
+  busy() { return this.clips.some((x) => this.t < x.out); }
+  pickFidget() {
+    const R = this.mood.recovery || {}, D = this.mood.day || {};
+    const pool = ['lookAround', 'lookAround', 'scratch', 'stretch'];
+    if (R.zone === 'green' && !this.base.seatTarget) pool.push('hop', 'hop', 'hop');
+    if (D.sleepy || R.zone === 'red') pool.push('yawn', 'yawn', 'nod');
+    if (D.sore) pool.push('rubBack', 'rubBack');
+    if (D.thirsty) pool.push('sigh', 'sigh');
+    if (this.base.seatTarget) { const i = pool.indexOf('stretch'); if (i >= 0) pool.splice(i, 1); }
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  lookAt(x, y, nowS) { this.look.x = x; this.look.y = y; this.look.until = nowS + 1.6; }
+  update(dtRaw, turnYaw) {
+    const a = this.a, fig = this.fig;
+    if (!a || !fig) return;
+    const R = this.mood.recovery || {}, D = this.mood.day || {};
+    const still = this.still;
+    // mood base pose, crossfaded (exponential approach)
+    const tgt = {
+      leanX: 0.05 * (D.sleepy ? 1 : 0) + 0.07 * (D.sore ? 1 : 0) + 0.04 * (D.thirsty ? 1 : 0),
+      headX: 0.08 * (D.sleepy ? 1 : 0) + 0.22 * (D.thirsty ? 1 : 0),
+      headZ: 0.08 * (D.thirsty ? 1 : 0),
+      eye: Math.max(D.sleepy ? 0.3 : 0, D.thirsty ? 0.15 : 0),
+      speed: R.zone === 'green' ? 1.12 : R.zone === 'red' ? 0.7 : 1,
+      seat: D.rest ? 1 : 0
+    };
+    tgt.speed *= D.sore ? 0.8 : 1;
+    tgt.speed *= D.sleepy ? 0.88 : 1;
+    this.base.seatTarget = tgt.seat;
+    const kf = still ? 1 : 1 - Math.exp(-dtRaw * 2.5);
+    Object.keys(tgt).forEach((k) => { this.base[k] += (tgt[k] - this.base[k]) * kf; });
+    const B = this.base;
+    const dt = dtRaw * B.speed;
+    this.t += dtRaw;
+    const t = this.t;
+
+    // channels
+    const ch = { rootY: 0, shiftX: 0, squash: 0, leanX: B.leanX, leanZ: 0, headX: B.headX, headY: 0, headZ: B.headZ, rRaise: 0, lRaise: 0, rFwd: 0, lFwd: 0, eyeClose: B.eye, mouthOpen: 0, sweat: 0, snack: 0, bottle: 0, sparkle: 0, flame: 0, glow: 0, wingFlap: 0 };
+
+    if (!still) {
+      // breathing: slower inhale ease-in-out, quicker exhale
+      const rate = (R.breathRate || 0.3) * (D.sleepy ? 0.85 : 1);
+      this.breath = (this.breath + dt * rate) % 1;
+      const ph = this.breath;
+      const br = ph < 0.45 ? ease.inOut(ph / 0.45) : 1 - ease.inOut((ph - 0.45) / 0.55);
+      ch.breath = br;
+      ch.leanX += -0.012 * br;
+      ch.headX += -0.01 * br;
+      ch.rRaise += 0.03 * br; ch.lRaise += 0.03 * br;
+      // weight shift between feet (critically damped toward a side picked every 2.5–5 s); sore = limp
+      if (t > this.nextShift) {
+        this.shiftTarget = this.shiftTarget > 0 ? -1 : 1;
+        if (D.sore) this.shiftTarget = this.shiftTarget > 0 ? 1 : -0.3;
+        this.nextShift = t + rand(2.5, 5) / B.speed;
+      }
+      const w0 = 3.2;
+      this.shiftV += (-2 * w0 * this.shiftV - w0 * w0 * (this.shift - this.shiftTarget)) * dt;
+      this.shift += this.shiftV * dt;
+      const sh = this.shift * (1 - B.seat);
+      ch.shiftX += 0.006 * sh;
+      ch.leanZ += -0.03 * sh;
+      ch.headZ += 0.025 * sh;
+      ch.rootY += -0.004 * Math.abs(sh) * (D.sore ? 2 : 1);
+      // smooth-noise head drift (not a sine)
+      ch.headY += 0.12 * noise1(t * 0.23 + 3.1);
+      ch.headX += 0.04 * noise1(t * 0.31 + 7.7);
+      // blinks: random 2–6 s, sometimes double
+      if (this.blinkT < 0 && t > this.nextBlink) { this.blinkT = 0; this.doubleBlink = Math.random() < 0.2; }
+      if (this.blinkT >= 0) {
+        this.blinkT += dtRaw;
+        const bd = D.sleepy ? 0.28 : 0.16;
+        const u = this.blinkT / bd;
+        ch.eyeClose = Math.max(ch.eyeClose, u < 0.5 ? ease.out(u * 2) : 1 - ease.inOut((u - 0.5) * 2));
+        if (u >= 1) {
+          if (this.doubleBlink) { this.doubleBlink = false; this.blinkT = -0.12; this.nextBlink = t + 0.08; }
+          else { this.blinkT = -1; this.nextBlink = t + rand(2, 6) * (D.sleepy ? 0.7 : 1); }
+        }
+      }
+      // fidgets every 6–12 s when nothing else plays
+      if (t > this.nextFidget && !this.busy()) { this.play(this.pickFidget()); this.nextFidget = t + rand(6, 12); }
+    }
+    // clips with envelopes (crossfade in 0.18 s, out 0.25 s)
+    this.clips = this.clips.filter((x) => t < x.out + 0.3);
+    this.clips.forEach((x) => {
+      const u = MathUtils.clamp((t - x.start) / x.c.dur, 0, 1);
+      const wIn = ease.out(MathUtils.clamp((t - x.start) / 0.18, 0, 1));
+      const wOut = t > x.out ? 1 - ease.inOut(MathUtils.clamp((t - x.out) / 0.25, 0, 1)) : 1;
+      const w = wIn * wOut * (still ? 0 : 1);
+      const o = x.c.f(u);
+      Object.keys(o).forEach((k) => {
+        const isProp = k === 'sweat' || k === 'snack' || k === 'bottle' || k === 'sparkle' || k === 'flame' || k === 'glow';
+        if (isProp) ch[k] = Math.max(ch[k], o[k] * (still ? wIn * wOut : w));
+        else ch[k] = (ch[k] || 0) + o[k] * w;
+      });
+    });
+    // look-at (full view: follows the finger), relative to the turntable yaw
+    if (!still) {
+      const on = t < this.look.until ? 1 : 0;
+      this.look.w += (on - this.look.w) * (1 - Math.exp(-dtRaw * 4));
+      if (this.look.w > 0.01) {
+        let yaw = this.look.x * 0.8 - (turnYaw || 0);
+        yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+        if (Math.abs(yaw) < 1.3) ch.headY += MathUtils.clamp(yaw, -0.6, 0.6) * this.look.w;
+        ch.headX += -this.look.y * 0.25 * this.look.w;
+      }
+    }
+    // seated on a rest day: no hop, legs folded
+    const seat = B.seat;
+    if (seat > 0.01) { ch.rootY = ch.rootY * (1 - seat) ; ch.squash *= (1 - seat * 0.7); }
+
+    // ---- apply to the rig (from rest transforms r0/p0/s0)
+    const S = a.S || 1;
+    const unit = a.creature ? S : (a.unit || 1.75) / 1.75;
+    fig.position.y = fig.userData.p0.y + ch.rootY * unit * (a.creature ? 1.4 : 1) - seat * (a.seatDrop || 0);
+    fig.position.x = fig.userData.p0.x + ch.shiftX * unit;
+    const sq = ch.squash * (a.creature ? 1 : 0.5);
+    fig.scale.set(1 - sq * 0.5, 1 + sq, 1 - sq * 0.5);
+    if (a.upper) {
+      a.upper.rotation.x = a.upper.userData.r0.x + ch.leanX;
+      a.upper.rotation.z = a.upper.userData.r0.z + ch.leanZ;
+    }
+    (a.breath || []).forEach((m) => {
+      const s0 = m.userData.s0, k = (a.creature ? 0.028 : 0.012) * (ch.breath || 0);
+      m.scale.set(s0.x * (1 + k), s0.y * (1 + k * 0.5), s0.z * (1 + k));
+    });
+    if (a.head) {
+      const r0 = a.head.userData.r0;
+      a.head.rotation.set(r0.x + ch.headX, r0.y + ch.headY, r0.z + ch.headZ);
+    }
+    [1, -1].forEach((sd) => {
+      const arm = a.arms && a.arms[sd];
+      if (!arm) return;
+      const raise = sd > 0 ? ch.rRaise : ch.lRaise;
+      let fwd = sd > 0 ? ch.rFwd : ch.lFwd;
+      // a human arm is long and has no elbow: bring "hand to face" down to face height instead of overhead
+      if (!a.creature && fwd > 1.5) fwd = 1.5 + (fwd - 1.5) * 0.45;
+      const r0 = arm.g.userData.r0;
+      arm.g.rotation.set(r0.x - fwd - seat * 0.25, r0.y, r0.z + sd * raise);
+    });
+    [1, -1].forEach((sd) => {
+      const hip = a.hips && a.hips[sd], knee = a.knees && a.knees[sd];
+      if (hip) hip.rotation.x = hip.userData.r0.x - seat * (a.creature ? 1.25 : 1.5) + (a.creature ? 0 : 0.04 * sd * this.shift * (1 - seat));
+      if (knee) knee.rotation.x = knee.userData.r0.x + seat * 1.5;
+    });
+    (a.eyes || []).forEach((e) => {
+      const open = Math.max(0.08, 1 - ch.eyeClose);
+      e.scale.y = e.userData.s0.y * open;
+    });
+    if (a.mouthO) {
+      const m = MathUtils.clamp(ch.mouthOpen, 0, 1);
+      a.mouthO.visible = m > 0.04;
+      const s0 = a.mouthO.userData.s0;
+      a.mouthO.scale.set(s0.x * (0.6 + 0.4 * m), s0.y * m * 1.2, s0.z);
+      if (a.mouth) a.mouth.visible = m < 0.5;
+    }
+    const P = a.props || {};
+    (P.sweat || []).forEach((d, i) => {
+      d.visible = ch.sweat > 0.02;
+      if (d.visible) {
+        const fall = ((t * 0.6 + i * 0.33) % 1);
+        d.position.y = d.userData.p0.y - fall * (a.headR || 0.1) * 0.5;
+        d.scale.copy(d.userData.s0).multiplyScalar(ch.sweat * (1 - fall * 0.5));
+      }
+    });
+    (P.bags || []).forEach((b) => { b.visible = !!D.sleepy; });
+    if (P.bottle) { P.bottle.visible = ch.bottle > 0.05; P.bottle.scale.setScalar(Math.max(0.001, ease.out(Math.min(1, ch.bottle * 1.4)))); }
+    if (P.snack) { P.snack.visible = ch.snack > 0.05; P.snack.scale.setScalar(Math.max(0.001, ease.out(Math.min(1, ch.snack * 1.4)))); }
+    (P.sparkles || []).forEach((sp, i) => {
+      sp.visible = ch.sparkle > 0.02;
+      if (sp.visible) {
+        const k = ch.sparkle * (0.7 + 0.3 * Math.sin(t * 9 + i * 2));
+        sp.scale.setScalar(k);
+        sp.rotation.set(t * 3 + i, t * 2, 0);
+        sp.position.y = sp.userData.p0.y + 0.03 * Math.sin(t * 4 + i) * (a.headR || 0.1) * 4;
+      }
+    });
+    if (P.flame) { P.flame.visible = ch.flame > 0.03; P.flame.scale.set(ch.flame, ch.flame * (0.8 + 0.3 * Math.sin(t * 30)), ch.flame); }
+    if (a.bulb) a.bulb.material.emissiveIntensity = 0.9 + 2.2 * ch.glow + (still ? 0 : 0.25 * Math.sin(t * 2));
+    if (a.glowMesh) a.glowMesh.material.emissiveIntensity = 0.9 + 1.5 * ch.glow;
+
+    // secondary motion: springs driven by head rotation velocity and root acceleration
+    const hv = { x: (ch.headX - this.prevHead.x) / Math.max(dtRaw, 1e-3), z: (ch.headZ + ch.leanZ - this.prevHead.z) / Math.max(dtRaw, 1e-3) };
+    this.prevHead = { x: ch.headX, z: ch.headZ + ch.leanZ };
+    const rv = (ch.rootY - this.prevRootY) / Math.max(dtRaw, 1e-3);
+    const ra = (rv - this.prevRootV) / Math.max(dtRaw, 1e-3);
+    this.prevRootY = ch.rootY; this.prevRootV = rv;
+    (a.ears || []).forEach((e, i) => {
+      const b = e.userData.base || { z: 0, x: 0 };
+      const sp = this.springs[i];
+      if (!sp) return;
+      const side = e.userData.side || 1;
+      const fx = still ? 0 : MathUtils.clamp(-hv.x * 6 + ra * 0.9, -40, 40);
+      const fz = still ? 0 : MathUtils.clamp(-hv.z * 6 * side + side * Math.abs(ra) * 0.15, -40, 40);
+      const ox = sp.x.step(dtRaw, fx), oz = sp.z.step(dtRaw, fz);
+      const flap = e.userData.wing ? side * 0.5 * ch.wingFlap * Math.sin(t * 22) : 0;
+      e.rotation.x = b.x + ox;
+      e.rotation.z = b.z + oz * (e.userData.wing ? 0.6 : 1) + flap;
+    });
+    if (a.tail) {
+      const off = this.tailSpring.step(dtRaw, still ? 0 : MathUtils.clamp(-ch.shiftX * 900 - ch.leanZ * 40, -30, 30));
+      a.tail.rotation.y = a.tail.userData.r0.y + off;
+      a.tail.rotation.x = a.tail.userData.r0.x + 0.3 * ch.squash;
+    }
+  }
 }
 
 function lerpParams(a, b, t) {
@@ -554,8 +956,10 @@ export function mount(container, init) {
   const accent = cssVar('--accent', '#d36bff');
   const zoneColor = (z) => z === 'green' ? cssVar('--hp-green', '#5ee08a') : z === 'yellow' ? cssVar('--hp-yellow', '#ffc46b') : z === 'red' ? cssVar('--hp-red', '#ff4d7a') : accent;
 
-  scene.add(new HemisphereLight(0xfff4ff, 0x2a1840, 1.15));
-  scene.add(new AmbientLight(0xffffff, 0.25));
+  const hemi = new HemisphereLight(0xfff4ff, 0x2a1840, 1.15);
+  scene.add(hemi);
+  const amb = new AmbientLight(0xffffff, 0.25);
+  scene.add(amb);
   const key = new DirectionalLight(0xffffff, 1.7);
   key.position.set(1.6, 3, 2.6);
   scene.add(key);
@@ -583,6 +987,7 @@ export function mount(container, init) {
     figure = buildFigure(params, look, { cloth: cssVar('--bg-soft', '#2a1840'), shoe: '#f3eaff', glow: zc });
     figure.traverse((o) => { o.userData.s0 = o.scale.clone(); o.userData.r0 = o.rotation.clone(); o.userData.p0 = o.position.clone(); });
     turntable.add(figure);
+    animator.bind(figure.userData.anim, figure); animator.setMood(params.recovery, day);
     if (haloZone !== params.recovery.zone) {
       haloZone = params.recovery.zone;
       rim.color.set(zc); rim2.color.set(zc);
@@ -598,14 +1003,17 @@ export function mount(container, init) {
     frameH = Math.max(0.5, box.max.y) * (look.kind && look.kind !== "human" ? 1.08 : 1);
     frameW = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), 0.7 * Math.abs(box.min.z), 0.7 * Math.abs(box.max.z)) * 2;
     halo.scale.setScalar(Math.max(frameH / 1.75, 0.55) * (look.kind && look.kind !== 'human' ? 1.6 : 1));
+    if (day && day.rest && seatKind !== null && seatKind !== look.kind) applyDay(); // beanbag sized for the new character
   }
 
   function frameCamera() {
-    const H = frameH;
+    // seated on a rest day the figure is lower: frame the shorter silhouette
+    const sa = seatW && figure && figure.userData.anim;
+    const H = sa ? Math.max(0.4, frameH - (sa.seatDrop || 0) * 0.85) : frameH;
     const half = Math.tan(MathUtils.degToRad(camera.fov / 2));
-    const margin = mode === 'hero' ? 1.08 : 1.14;
+    const margin = mode === 'hero' ? 1.12 : 1.14;
     const distH = (H * margin / 2) / half;
-    const distW = (frameW * margin / 2) / (half * Math.max(0.3, camera.aspect));
+    const distW = (Math.max(frameW, seatW) * margin / 2) / (half * Math.max(0.3, camera.aspect));
     const dist = Math.max(distH, distW);
     camera.position.set(0, H * 0.56, dist);
     camera.lookAt(new Vector3(0, H * 0.5, 0));
@@ -644,37 +1052,46 @@ export function mount(container, init) {
   el.addEventListener('pointerup', up);
   el.addEventListener('pointercancel', up);
 
-  // idle life: breathing, bobbing/bounce, blinking, ear wiggle — driven by the recovery mood
-  function animate(t) {
-    if (!figure) return;
-    const a = figure.userData.anim || {};
-    const R = shown.recovery;
-    const rate = R.breathRate || 0.3;
-    const br = Math.sin(t * Math.PI * 2 * rate);
-    const S = frameH / 1.75;
-    (a.breath || []).forEach((m) => {
-      const s0 = m.userData.s0;
-      const k = a.creature ? 0.03 : 0.012;
-      m.scale.set(s0.x * (1 + k * br), s0.y * (1 + k * 0.6 * br), s0.z * (1 + k * br));
-    });
-    if (a.upper) a.upper.rotation.x = a.upperBase + (a.creature ? 0.02 : 0.008) * br;
-    const bounce = R.bounce || 0;
-    const hop = bounce > 0 ? Math.abs(Math.sin(t * Math.PI * 1.3)) * bounce * 0.035 * S * (a.creature ? 1.5 : 0.6) : 0;
-    figure.position.y = hop + (1 - bounce) * 0.004 * S * br;
-    if (a.head) a.head.rotation.x = a.headBase + (R.slouch || 0) * 0.07 * Math.sin(t * 0.7) + 0.01 * br;
-    if (a.head && bounce > 0) a.head.rotation.z = 0.06 * bounce * Math.sin(t * Math.PI * 0.65);
-    (a.ears || []).forEach((e, i) => {
-      const b = e.userData.base || { z: 0, x: 0 };
-      const perky = 1 - (R.earDroop || 0);
-      if (e.userData.wing) e.rotation.z = b.z + e.userData.side * 0.18 * perky * Math.sin(t * 5 + i);
-      else e.rotation.z = b.z + e.userData.side * 0.07 * perky * Math.sin(t * 2.2 + i);
-      e.rotation.x = b.x + 0.04 * Math.sin(t * 0.9 + i);
-    });
-    // blink about every 3.5 s (skipped when the eyes are already sleepy)
-    const ph = (t % 3.7);
-    const blink = R.eyeOpen > 0.7 && ph < 0.12 ? 0.15 : 1;
-    (a.eyes || []).forEach((e) => { e.scale.y = e.userData.s0.y * blink; });
+  const animator = new Animator(reduced);
+  let day = {};
+  let seatMesh = null, seatW = 0, seatKind = null;
+  const TOD = {
+    morning: { sky: 0xfff0e0, ground: 0x3a2440, hemi: 1.0, key: 0xffd6ad, keyI: 1.5, amb: 0.25 },
+    midday: { sky: 0xffffff, ground: 0x2a1840, hemi: 1.25, key: 0xffffff, keyI: 1.8, amb: 0.3 },
+    sunset: { sky: 0xffc2a8, ground: 0x4a1e3a, hemi: 0.95, key: 0xff9a6a, keyI: 1.55, amb: 0.22 },
+    night: { sky: 0x9fb0ff, ground: 0x0c0a24, hemi: 0.6, key: 0xb6c6ff, keyI: 0.85, amb: 0.14 }
+  };
+  function applyDay() {
+    const L = TOD[day.tod] || TOD.midday;
+    hemi.color.set(L.sky); hemi.groundColor.set(L.ground); hemi.intensity = L.hemi;
+    key.color.set(L.key); key.intensity = L.keyI;
+    amb.intensity = L.amb;
+    if (day.tod === 'sunset') rim2.color.set('#ff7fb0');
+    animator.setMood(shown.recovery, day);
+    // rest day: a cozy beanbag to sit on
+    if (seatMesh) { turntable.remove(seatMesh); disposeTree(seatMesh); seatMesh = null; }
+    seatW = 0;
+    const a = figure && figure.userData.anim;
+    if (day.rest && a && a.seat) {
+      seatMesh = new Mesh(new SphereGeometry(a.seat.r, 28, 18), new MeshStandardMaterial({ color: new Color(cssVar('--accent', '#d36bff')).lerp(new Color('#3a2450'), 0.55), roughness: 0.95 }));
+      seatMesh.scale.set(1.25, 0.72, 1.15);
+      seatMesh.position.set(0, a.seat.y, a.seat.z);
+      turntable.add(seatMesh);
+      seatW = a.seat.r * 2.6;
+    }
+    seatKind = look.kind;
+    frameCamera();
+    dirty = true;
   }
+  function onLook(e) {
+    if (mode !== 'full') return;
+    const r = el.getBoundingClientRect();
+    if (!r.width) return;
+    animator.lookAt(((e.clientX - r.left) / r.width) * 2 - 1, ((e.clientY - r.top) / r.height) * 2 - 1, animator.t);
+    kick();
+  }
+  el.addEventListener('pointermove', onLook);
+  el.addEventListener('pointerdown', onLook);
 
   let raf = 0, prev = 0, alive = true, paused = false, visible = true;
   const t0 = performance.now();
@@ -690,7 +1107,7 @@ export function mount(container, init) {
     }
     if (needsLoop()) raf = requestAnimationFrame(loop);
   }
-  function needsLoop() { return !reduced || !!tween || dragging || Math.abs(vel) > 0.0005 || dirty; }
+  function needsLoop() { return !reduced || !!tween || dragging || Math.abs(vel) > 0.0005 || dirty || animator.busy(); }
   function kick() { if (!raf && wants()) { prev = performance.now() - 100; raf = requestAnimationFrame(loop); } }
   function step(now, dt) {
     if (tween) {
@@ -708,10 +1125,10 @@ export function mount(container, init) {
         else if (!reduced && now - lastTouch > 2500) { yaw += dt * 0.35; dirty = true; }
       }
     } else if (!reduced) {
-      yaw = 0.3 + 0.35 * Math.sin((now - t0) / 1000 * 0.35);
+      yaw = 0.3 + 0.38 * noise1((now - t0) / 1000 * 0.12 + 1.7);
       dirty = true;
     } else yaw = 0.3;
-    if (!reduced) { animate((now - t0) / 1000); dirty = true; }
+    if (!reduced || animator.busy() || dirty) { animator.update(dt || 0.016, turntable.rotation.y); dirty = true; }
     if (dirty && figure) {
       turntable.rotation.y = yaw;
       turntable.rotation.x = pitch;
@@ -724,7 +1141,13 @@ export function mount(container, init) {
   document.addEventListener('visibilitychange', onVis);
   const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { resize(); kick(); }) : null;
   const io = typeof IntersectionObserver !== 'undefined'
-    ? new IntersectionObserver((ents) => { visible = ents.some((x) => x.isIntersecting); if (visible) kick(); })
+    ? new IntersectionObserver((ents) => {
+      // only the current host counts: a stale entry for a removed slot must not pause the new one
+      const e = ents.filter((x) => x.target === host).pop();
+      if (!e) return;
+      visible = e.isIntersecting;
+      if (visible) kick();
+    })
     : null;
 
   function attach(container2, mode2) {
@@ -754,6 +1177,14 @@ export function mount(container, init) {
     get mode() { return mode; },
     attach: attach,
     setPaused(p) { paused = !!p; if (!paused) kick(); },
+    setDay(d) { day = d || {}; applyDay(); kick(); },
+    /* play a reaction now if the canvas is on screen; returns its length in seconds (0 = not shown) */
+    react(type) {
+      if (!wants()) return 0;
+      const d = animator.play(type);
+      dirty = true; kick();
+      return d;
+    },
     update(params, look2, opts) {
       const kindChanged = look2 && (look2.kind !== look.kind);
       if (look2) look = look2;
@@ -793,6 +1224,9 @@ export function mount(container, init) {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
+      el.removeEventListener('pointermove', onLook);
+      el.removeEventListener('pointerdown', onLook);
+      if (seatMesh) disposeTree(seatMesh);
       if (figure) disposeTree(figure);
       if (halo) disposeTree(halo);
       renderer.dispose();

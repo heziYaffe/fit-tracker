@@ -279,6 +279,110 @@
     };
   }
 
+  /* ---------- day state (beyond recovery), from real data only ---------- */
+  function israelHour(now) {
+    const d = now ? new Date(now) : new Date();
+    try {
+      const h = new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Asia/Jerusalem' }).format(d);
+      const n = parseInt(h, 10);
+      if (isFinite(n)) return n % 24;
+    } catch (e) { /* old engines */ }
+    return d.getHours();
+  }
+  /** morning 5–10, midday 10–16, sunset 16–19, night otherwise (Israel local hour). */
+  function timeOfDay(hour) {
+    const h = Number(hour);
+    if (h >= 5 && h < 10) return 'morning';
+    if (h >= 10 && h < 16) return 'midday';
+    if (h >= 16 && h < 19) return 'sunset';
+    return 'night';
+  }
+  const DAY_CHIPS = {
+    tired: 'עייף היום 🥱', sleepy: 'ישנת מעט 😴', sore: 'שרירים תפוסים מאתמול 💢',
+    thirsty: 'צמא קצת 💧', happy: 'מלא אנרגיה ⚡', neutral: 'רגוע 🙂', rest: 'יום מנוחה 🛋️'
+  };
+  /** Day state for today: each flag only when its data exists. `primary` names the main state.
+      Priority: red recovery > poor sleep > sore > thirsty > green recovery > rest day > neutral. */
+  function dayState(state, now) {
+    const E = root.FitEngine;
+    const at = now ? new Date(now) : new Date();
+    const hour = israelHour(at);
+    const today = E && E.todayISO ? E.todayISO(at) : '';
+    const out = { tod: timeOfDay(hour), hour: hour, sleepy: null, sore: null, thirsty: null, rest: false, recovery: null, primary: null, chip: '' };
+    if (!E || !state || !today) return out;
+    const snap = E.metricSnapshot ? E.metricSnapshot(state, today) : {};
+    const perf = num(snap.sleepPerformance) !== null ? Number(snap.sleepPerformance) : null;
+    const hours = num(snap.sleepHours) !== null ? Number(snap.sleepHours) : null;
+    if ((perf !== null && perf < 70) || (hours !== null && hours < 6)) out.sleepy = { perf: perf, hours: hours };
+    const y = E.metricSnapshot ? E.metricSnapshot(state, E.addDays(today, -1)) : {};
+    const strain = y && y.strain != null && isFinite(Number(y.strain)) ? Number(y.strain) : null;
+    if (strain !== null && strain >= 14) out.sore = { strain: strain };
+    if (hour >= 16 && E.nutritionOn) {
+      const n = E.nutritionOn(state, today);
+      const st = state.settings || {};
+      const target = E.waterTarget ? E.waterTarget(state) : 0;
+      if (n && n.water != null && n.water !== '' && target > 0) {
+        const cup = (root.FitConfig && root.FitConfig.WATER_CUP_ML) || 250;
+        const ml = st.waterInMl === false ? Number(n.water) * cup : Number(n.water);
+        const pct = ml / target;
+        if (isFinite(pct) && pct < 0.4) out.thirsty = { pct: round(pct, 2) };
+      }
+    }
+    const planned = E.isPlannedTrainingDay ? E.isPlannedTrainingDay(state, today) : false;
+    const hasPlan = (state.templates || []).some(function (t) { return t && (t.days || []).length; });
+    const done = E.workoutsOn ? E.workoutsOn(state, today).length : 0;
+    out.rest = hasPlan && !planned && done === 0;
+    const rec = snap.recoveryPct != null && snap.recoveryPct !== '' && isFinite(Number(snap.recoveryPct)) ? Number(snap.recoveryPct) : null;
+    out.recovery = rec;
+    const zone = rec === null ? null : rec >= 67 ? 'green' : rec >= 34 ? 'yellow' : 'red';
+    out.primary = zone === 'red' ? 'tired' : out.sleepy ? 'sleepy' : out.sore ? 'sore' : out.thirsty ? 'thirsty'
+      : zone === 'green' ? 'happy' : out.rest ? 'rest' : zone ? 'neutral' : null;
+    out.chip = out.primary ? DAY_CHIPS[out.primary] : '';
+    return out;
+  }
+
+  /* ---------- reactions to actions (pure queue + detection) ---------- */
+  const REACTIONS = ['goal', 'workout', 'meal', 'water'];
+  const REACTION_TTL_MS = 30 * 60 * 1000;
+  /** What the avatar can react to, read from the stored day. */
+  function actionSnapshot(state, day) {
+    const E = root.FitEngine;
+    if (!E || !state || !day) return null;
+    const n = E.nutritionOn(state, day) || {};
+    return {
+      day: day,
+      workouts: E.workoutsOn(state, day).length,
+      protein: Number(n.protein) || 0,
+      calories: Number(n.calories) || 0,
+      water: Number(n.water) || 0,
+      proteinHit: !!E.hitsProtein(state, day),
+      calHit: !!(E.hitsCalorie && E.hitsCalorie(state, day))
+    };
+  }
+  /** prev → next snapshot of the same day → reaction types (in play order). */
+  function detectReactions(prev, next) {
+    if (!prev || !next || prev.day !== next.day) return [];
+    const out = [];
+    if (next.workouts > prev.workouts) out.push('workout');
+    if (next.protein > prev.protein || next.calories > prev.calories) out.push('meal');
+    if ((next.proteinHit && !prev.proteinHit) || (next.calHit && !prev.calHit)) out.push('goal');
+    if (next.water > prev.water) out.push('water');
+    return out;
+  }
+  /** Add a reaction: drop expired, merge a repeat of the same type, keep at most 3. */
+  function enqueueReaction(list, type, nowMs) {
+    if (REACTIONS.indexOf(type) < 0) return (list || []).slice();
+    const live = (list || []).filter(function (r) { return r && nowMs - r.at < REACTION_TTL_MS && r.type !== type; });
+    live.push({ type: type, at: nowMs });
+    return live.slice(-3);
+  }
+  /** Next reaction to play ({type, rest}) — oldest first, expired ones skipped. */
+  function nextReaction(list, nowMs) {
+    const live = (list || []).filter(function (r) { return r && nowMs - r.at < REACTION_TTL_MS; });
+    if (!live.length) return { type: null, rest: [] };
+    return { type: live[0].type, rest: live.slice(1) };
+  }
+
   /** Chibi creature proportions from the same body parameters (meters, before the creature's own style). */
   function creatureShape(p) {
     const ref = bodyParams({ sex: p.sex, values: {} });
@@ -391,6 +495,7 @@
   }
 
   const FitAvatarModel = {
+    israelHour, timeOfDay, dayState, DAY_CHIPS, REACTIONS, actionSnapshot, detectReactions, enqueueReaction, nextReaction,
     KINDS, CREATURE_COLORS, WEIGHT_EXP, STYLE_GAIN, scaleWithWeight, moodFor, creatureShape,
     SKIN_TONES, HAIR_STYLES, HAIR_COLORS, BEARDS, FIELDS, FIELD_LABELS, SEX_DEFAULTS, RANGES,
     REGIONS, REGION_LABELS, MAX_GAIN, MAX_VOLUME,

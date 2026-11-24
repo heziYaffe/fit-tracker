@@ -115,12 +115,14 @@
     const snap = readSnap();
     const art = snap && snap.k === k && snap.url ? '<img src="' + esc(snap.url) + '" alt="" />' : fallbackArt(d.params, look);
     const r = d.params.recovery;
-    const mood = moodText(r);
+    const day = M.dayState(s, new Date());
+    const chip = day.chip || moodText(r);
+    const pct = r.pct != null && (!day.primary || day.primary === 'tired' || day.primary === 'happy' || day.primary === 'neutral') ? ' · ' + ltr(Math.round(r.pct) + '%') : '';
     return '<section class="av-hero zone-' + (r.zone || 'none') + '">' +
-      '<button type="button" class="av-hero-stage" id="av-hero-slot" data-avatar="open" data-k="' + k + '" aria-label="פתיחת הדמות בתלת־ממד">' +
+      '<button type="button" class="av-hero-stage tod-' + day.tod + '" id="av-hero-slot" data-avatar="open" data-k="' + k + '" aria-label="פתיחת הדמות בתלת־ממד">' +
       '<span class="av-fallback">' + art + '</span>' + zzz(r) + '</button>' +
       '<div class="av-hero-text">' + (helloHtml || '') +
-      (mood ? '<button type="button" class="av-mood" data-avatar="open">' + esc(kindOf(cfg.kind).emoji) + ' ' + esc(mood) + ' · ' + ltr(Math.round(r.pct) + '%') + '</button>' : '') +
+      (chip ? '<button type="button" class="av-mood" data-avatar="open">' + esc(chip) + pct + '</button>' : '') +
       '</div></section>';
   }
   // kept for older callers: the avatar now lives in the hero, so the lower card is gone
@@ -159,6 +161,7 @@
         view.engine.update(params, look, { instant: !!instant });
       }
       slot.classList.add('live');
+      if (view.engine.setDay) view.engine.setDay(mode === 'hero' || view.mode !== 'then' ? M.dayState(st(), new Date()) : { tod: M.dayState(st(), new Date()).tod });
       return view.engine;
     }).catch(function () { view.failed = true; return null; });
   }
@@ -180,6 +183,7 @@
       if (!slot.isConnected) return;
       placeEngine(slot, d.params, look, 'hero', !changed).then(function (eng) {
         if (!eng) return;
+        setTimeout(playQueued, 700);
         const snap = readSnap();
         if (!snap || snap.k !== k) setTimeout(function () { if (view.engine && view.engine.host === slot) writeSnap(k, view.engine.snapshot(220)); }, 600);
       });
@@ -188,7 +192,60 @@
     else if (root.requestIdleCallback) root.requestIdleCallback(go, { timeout: 1500 });
     else setTimeout(go, 300);
   }
+  /* ---------- reactions: detect user actions from store changes, queue, play on the visible avatar ---------- */
+  const RQ_KEY = 'fit-avatar-reactions';
+  let lastSnap = null, lastInput = 0, playing = false;
+  function readQ() { try { return JSON.parse(sessionStorage.getItem(RQ_KEY) || '[]'); } catch (e) { return []; } }
+  function writeQ(q) { try { sessionStorage.setItem(RQ_KEY, JSON.stringify(q)); } catch (e) { /* ignore */ } }
+  ['pointerdown', 'keydown', 'touchstart'].forEach(function (t) {
+    document.addEventListener(t, function () { lastInput = Date.now(); }, { capture: true, passive: true });
+  });
+  function onStore() {
+    const s = st();
+    if (!cfgOf(s)) { lastSnap = M.actionSnapshot(s, today()); return; }
+    const next = M.actionSnapshot(s, today());
+    const types = M.detectReactions(lastSnap, next);
+    lastSnap = next;
+    // only react to things the user just did here (not to a background cloud sync)
+    if (!types.length || Date.now() - lastInput > 20000) return;
+    let q = readQ();
+    types.forEach(function (t) { q = M.enqueueReaction(q, t, Date.now()); });
+    writeQ(q);
+    setTimeout(playQueued, 350);
+  }
+  function playQueued() {
+    if (playing || !view.engine || !view.engine.react) return;
+    const host = view.engine.host;
+    const onHero = host && host.id === 'av-hero-slot' && host.isConnected;
+    const onView = view.kind === 'view' && host && host.isConnected;
+    if (!onHero && !onView) return;
+    const nx = M.nextReaction(readQ(), Date.now());
+    if (!nx.type) { writeQ([]); return; }
+    const dur = view.engine.react(nx.type);
+    if (!(dur > 0)) return;
+    writeQ(nx.rest);
+    playing = true;
+    setTimeout(function () { playing = false; playQueued(); }, dur * 1000 + 450);
+  }
+  // a queued reaction plays when the hero scrolls back into view or the app comes back
+  let scrollT = 0;
+  root.addEventListener('scroll', function () {
+    if (scrollT || !readQ().length) return;
+    scrollT = setTimeout(function () { scrollT = 0; playQueued(); }, 250);
+  }, { passive: true });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(playQueued, 600); });
+  // keep time-of-day light and day state fresh
+  setInterval(function () {
+    if (!view.engine || !view.engine.setDay || document.hidden) return;
+    if (view.kind === 'view' && view.mode === 'then') return;
+    view.engine.setDay(M.dayState(st(), new Date()));
+  }, 5 * 60 * 1000);
+
   function watchHome() {
+    if (root.FitStore && root.FitStore.subscribe && M.actionSnapshot) {
+      lastSnap = M.actionSnapshot(st(), today());
+      root.FitStore.subscribe(onStore);
+    }
     const main = document.getElementById('main');
     if (!main || typeof MutationObserver === 'undefined') return;
     let queued = false;
@@ -236,6 +293,7 @@
   }
   function mountStage(stage, params, look) {
     const tok = view.token;
+    stage.classList.add('tod-' + M.dayState(st(), new Date()).tod);
     stage.innerHTML = '<span class="av-fallback">' + fallbackArt(params, look) + '</span>' + zzz(params.recovery);
     return placeEngine(stage, params, look, 'full', true).then(function (eng) {
       if (tok !== view.token) return null;
@@ -312,6 +370,17 @@
     html += '<div class="card"><h3>התאוששות</h3><p class="hp-legend">' +
       (rec ? esc(rec) + '. הדמות עומדת זקופה ביום ירוק, ומתכופפת מעט ביום אדום. גם צבע ההילה משתנה.' : 'אין היום נתון התאוששות, אז הדמות בתנוחה רגילה.') +
       '</p></div>';
+    if (view.mode === 'now') {
+      const dy = M.dayState(s, new Date());
+      const bits = [];
+      if (dy.sleepy) bits.push('ישנת מעט' + (dy.sleepy.hours != null ? ' (' + fmt(dy.sleepy.hours) + ' שע׳)' : dy.sleepy.perf != null ? ' (' + Math.round(dy.sleepy.perf) + '% שינה)' : '') + ': פיהוקים ושקיות מתחת לעיניים.');
+      if (dy.sore) bits.push('מאמץ ' + fmt(dy.sore.strain) + ' אתמול: תנועה איטית, צליעה קלה ויד על הגב.');
+      if (dy.thirsty) bits.push('שתית ' + Math.round(dy.thirsty.pct * 100) + '% מיעד המים: הראש קצת נבול.');
+      if (dy.rest) bits.push('יום מנוחה לפי התוכנית: הדמות נחה על פוף.');
+      html += '<div class="card"><h3>מצב היום</h3><p class="hp-legend">' +
+        (bits.length ? bits.map(esc).join('<br>') : 'אין היום סימנים מיוחדים משינה, מאמץ או שתייה.') +
+        '</p><p class="hp-legend">הדמות מגיבה גם למה שאתה עושה: מתמתחת ומזיעה אחרי אימון, לועסת אחרי ארוחה, שותה אחרי מים ומריעה כשמגיעים ליעד.</p></div>';
+    }
     const box = view.el.querySelector('#av-info');
     if (box) box.innerHTML = html;
     return cur;
@@ -323,7 +392,11 @@
     view.el.querySelectorAll('[data-avatar="mode"]').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === view.mode); });
     const cur = renderInfo();
     setZzz(view.el.querySelector('#av-stage'), cur.params.recovery);
-    if (view.engine) view.engine.update(cur.params, lookOf(cfgOf(st())), { dur: 600 });
+    if (view.engine) {
+      view.engine.update(cur.params, lookOf(cfgOf(st())), { dur: 600 });
+      const dn = M.dayState(st(), new Date());
+      view.engine.setDay(view.mode === 'then' ? { tod: dn.tod } : dn);
+    }
   }
 
   // ---------- build sheet ----------
@@ -502,5 +575,5 @@
     if (ev.key === 'Escape' && view.el) closeScreen();
   });
 
-  root.FitAvatar = { homeHero: homeHero, homeCard: homeCard, settingsCard: settingsCard, open: openView, build: openBuilder, close: closeScreen, silhouette: silhouette, syncHero: syncHero };
+  root.FitAvatar = { homeHero: homeHero, homeCard: homeCard, settingsCard: settingsCard, open: openView, build: openBuilder, close: closeScreen, silhouette: silhouette, syncHero: syncHero, _engine: function () { return view.engine; } };
 })(typeof window !== 'undefined' ? window : globalThis);
