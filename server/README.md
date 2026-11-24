@@ -159,3 +159,20 @@ See `server/cloudflare-worker/`. Copy `wrangler.toml.example`, set secrets with 
 | Cycle strain | `metrics.strain` |
 | Sleep duration / performance | `metrics.sleepHours` plus a sleep-performance note |
 | Workout | a workout with `source: "whoop"` (cardio / sport name) |
+
+### 7. AI (Gemini) — optional
+
+הפונקציה `llm` היא שער יחיד ל-Gemini עם תקרת תקציב. המפתח נשמר רק כסוד בשרת.
+
+```bash
+# once: create the usage table
+#   run server/supabase/llm.sql in the SQL editor
+supabase secrets set GEMINI_API_KEY=... LLM_ALLOWED_USERS=<auth user id> LLM_MONTHLY_CAP_USD=10 LLM_DAILY_CALLS=100
+supabase functions deploy llm --no-verify-jwt
+```
+
+Routes: `GET /usage`, `POST /food`, `POST /menu`, `POST /plan` (Bearer = the user's Supabase access token).
+Every call is logged in `public.llm_usage` (tokens × list price). Before each call the
+function refuses when the month (Asia/Jerusalem) reached the cap or the day reached the call
+limit. Gemini 429/503/timeouts fall through a model chain with one short back-off; on failure the
+app keeps its rule-based behaviour.

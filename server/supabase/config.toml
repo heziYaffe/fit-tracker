@@ -3,3 +3,6 @@ project_id = "wnqlaajfqimkaibcnsti"
 
 [functions.whoop]
 verify_jwt = false
+
+[functions.llm]
+verify_jwt = false

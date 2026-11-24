@@ -672,7 +672,8 @@
     onForeground: onForeground,
     init: init,
     refreshSession: refreshSession,
-    ensureFreshAccess: ensureFreshAccess
+    ensureFreshAccess: ensureFreshAccess,
+    authedFetch: authedFetch
   };
 
   hydrateSession();

@@ -1120,15 +1120,20 @@
   // takes over automatically and falls back to the rules on any failure.
   function wizBuild() {
     const w = ui.wiz;
-    const prefs = { protein: w.protein, calories: w.calories, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes, seed: w.seed, goal: w.goal };
+    const prefs = { protein: w.protein, calories: w.calories, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes, seed: w.seed, goal: w.goal,
+      note: w.note || '', change: w.change || '', current: w.change ? w.prevMenu : null };
+    w.aiReply = '';
     if (!root.FitFood.hasMenuProvider()) { w.menu = root.FitFood.buildMenu(prefs); return; }
     w.menu = null;
     w.loading = true;
     const token = (w.token = (w.token || 0) + 1);
-    root.FitFood.buildMenuAsync(prefs).then(function (menu) {
+    root.FitFood.buildMenuAsync(prefs, { timeoutMs: 48000 }).then(function (menu) {
       if (ui.wiz !== w || w.token !== token) return;
-      w.menu = menu;
+      w.aiReply = root.FitAI ? root.FitAI.lastMenuReply() : '';
+      // A failed AI change keeps the menu you had instead of a new rule-based one.
+      w.menu = (prefs.change && !w.aiReply && w.prevMenu) ? w.prevMenu : menu;
       w.loading = false;
+      w.change = '';
       render();
     });
   }
@@ -1170,7 +1175,10 @@
             const off = w.dislikes.indexOf(f.id) >= 0;
             return '<button type="button" class="chip' + (off ? ' active strike' : '') + '" data-action="wiz-dislike" data-val="' + f.id + '">' + esc(f.name) + '</button>';
           }).join('') + '</div></div>';
-        }).join('') + '</section>';
+        }).join('') + '</section>' +
+        (root.FitAI && root.FitAI.available()
+          ? '<label class="field"><span>במילים שלך (לא חובה)</span><textarea id="wiz-note" rows="2" placeholder="למשל: אין לי זמן לבשל בבוקר, אוהב עוף ואורז">' + esc(w.note || '') + '</textarea></label>'
+          : '');
     } else if (!w.menu) {
       if (!w.loading) wizBuild();
       body = w.menu ? '' : '<section class="card"><p>בונה הצעה…</p></section>';
@@ -1188,7 +1196,12 @@
                 ' <button type="button" class="linkish" data-action="wiz-swap" data-mi="' + mi + '" data-fi="' + fi + '">החלפה</button></div></div>';
             }).join('') + '</div></div>';
         }).join('') +
-        '<button type="button" class="btn wide" data-action="wiz-again">הצעה אחרת</button>';
+        '<button type="button" class="btn wide" data-action="wiz-again">הצעה אחרת</button>' +
+        (root.FitAI && root.FitAI.available()
+          ? ((w.aiReply ? '<p class="hp-legend" style="margin-top:10px">✨ ' + esc(w.aiReply) + '</p>' : '') +
+            '<label class="field" style="margin-top:10px"><span>מה לשנות? (AI)</span><textarea id="wiz-change" rows="2" placeholder="למשל: בלי קוטג׳, ארוחת ערב קלה יותר"></textarea></label>' +
+            '<button type="button" class="btn wide" data-action="wiz-ai-change">עדכן את התפריט</button>')
+          : '');
     }
     const next = w.step < 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">המשך</button>'
       : (w.step === 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">בנה לי תפריט</button>'
@@ -1203,6 +1216,8 @@
     if (!w) return;
     const p = document.getElementById('wiz-protein');
     const c = document.getElementById('wiz-calories');
+    const nt = document.getElementById('wiz-note');
+    if (nt) w.note = String(nt.value || '').slice(0, 500);
     if (p && Number(p.value) > 0) w.protein = Math.round(Number(p.value));
     if (c && Number(c.value) > 0) {
       if (Math.round(Number(c.value)) !== w.calories) w.calAuto = false;
@@ -2081,7 +2096,16 @@
           : '<p class="hp-legend">קודם התחברו לחשבון, ואז אפשר לחבר את Whoop.</p>') +
         '</section>');
 
-    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + notifyCard + accountCard + whoopCard +
+    const aiCard = root.FitAI ? ('<section class="card"><h2>AI (Gemini)</h2>' +
+      '<p>' + esc(root.FitAI.usageLine()) + '</p>' +
+      '<p class="hp-legend">' + (root.FitAI.available()
+        ? 'עוזר בזיהוי אוכל שכתבת חופשי, בבניית תפריט ובבניית תוכנית אימונים. תקרה קשיחה של $10 בחודש (לפי מחיר רשמי; במסלול החינמי של Google בפועל $0). אם מגיעים לתקרה או שהשירות עמוס, האפליקציה ממשיכה בלי AI.'
+        : 'זמין אחרי התחברות לחשבון. בלי AI הכול ממשיך לעבוד כרגיל.') + '</p></section>') : '';
+    if (root.FitAI && root.FitAI.available() && !ui.aiUsageFetched) {
+      ui.aiUsageFetched = true;
+      root.FitAI.refreshUsage().then(function () { if (ui.tab === 'settings') render(); });
+    }
+    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + notifyCard + accountCard + whoopCard + aiCard +
       '<section class="card">' +
       '<label class="field"><span>שם תצוגה</span>' +
       '<input type="text" data-action="setting" data-key="displayName" value="' + esc(set.displayName || '') + '" /></label>' +
@@ -2155,7 +2179,8 @@
       }).join('');
     }
     return '<div class="section-title"><h2>תבניות אימון</h2>' +
-      '<button type="button" class="linkish" data-action="new-template">+ חדשה</button></div>' + body;
+      '<button type="button" class="linkish" data-action="new-template">+ חדשה</button></div>' +
+      '<button type="button" class="btn wide" data-action="ai-plan-open" style="margin-bottom:10px">✨ בניית תוכנית עם AI</button>' + body;
   }
 
   function renderTemplateEditor() {
@@ -2696,7 +2721,8 @@
       '<button type="button" class="btn ghost" data-action="open-start">חזרה</button></div>' +
       (rows ? '<div class="list">' + rows + '</div>' : '<p class="hp-legend">אין תבניות עדיין. אפשר להתחיל אימון חופשי או לבנות תבנית.</p>') +
       '<button type="button" class="btn wide" data-action="start-live" style="margin-top:12px">אימון חופשי</button>' +
-      '<button type="button" class="btn wide" data-action="new-template" style="margin-top:8px">בניית תבנית חדשה</button></div>';
+      '<button type="button" class="btn wide" data-action="new-template" style="margin-top:8px">בניית תבנית חדשה</button>' +
+      '<button type="button" class="btn wide" data-action="ai-plan-open" style="margin-top:8px">✨ תוכנית עם AI</button></div>';
   }
 
   function renderStartPreview() {
@@ -2860,6 +2886,7 @@
     else if (type === 'whoop-detail') overlay.innerHTML = renderWhoopDetailSheet();
     else if (type === 'fit-detail') overlay.innerHTML = renderFitDetailSheet();
     else if (type === 'live-swap') overlay.innerHTML = renderSwapExerciseSheet();
+    else if (type === 'ai-plan' && root.FitAI) overlay.innerHTML = root.FitAI.renderPlanSheet(state());
     else overlay.innerHTML = '';
     bindSheetDrag(overlay);
     if (type === 'cardio-log') startCardioClock();
@@ -3765,6 +3792,8 @@
     const action = btn.dataset.action;
     const s = state();
 
+    if (action === 'ai-plan-open') { if (ui.modal) ui.modal = null; openModal('ai-plan'); return; }
+    if (root.FitAI && root.FitAI.handlePlanAction(action, btn, { state: state, render: render, toast: toast, closeModal: closeModal })) return;
     if (action === 'tab') {
       if (btn.dataset.tab === 'nutrition' && ui.homeDate) ui.nutritionDate = ui.homeDate;
       setTab(btn.dataset.tab);
@@ -4597,6 +4626,16 @@
       return;
     }
     if (action === 'wiz-again') { ui.wiz.seed += 1; wizBuild(); render(); return; }
+    if (action === 'wiz-ai-change') {
+      const ta = document.getElementById('wiz-change');
+      const txt = ta ? String(ta.value || '').trim() : '';
+      if (!txt) { toast('כתוב מה לשנות'); return; }
+      ui.wiz.change = txt.slice(0, 500);
+      ui.wiz.prevMenu = ui.wiz.menu;
+      wizBuild();
+      render();
+      return;
+    }
     if (action === 'wiz-swap') {
       ui.swapMeal = { wiz: true, mi: Number(btn.dataset.mi), fi: Number(btn.dataset.fi) };
       openModal('swap-food');
