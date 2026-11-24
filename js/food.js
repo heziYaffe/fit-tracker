@@ -774,6 +774,29 @@
   }
 
   // prefs: { protein, calories, meals: 3|4|5, excludes: [ids], dislikes: [foodIds], seed }
+  // A plain dish title from a meal's foods when the AI did not name it (rule
+  // menus, old saved menus, after a swap): "חזה עוף עם אורז וסלט ירקות".
+  function shortName(food) {
+    return String(food.name || '').replace(/\s*\d+(\.\d+)?%/, '').replace(/^אבקת חלבון$/, 'שייק חלבון').trim();
+  }
+  function withVav(w) { return 'ו' + w; }
+  function dishName(foods) {
+    const list = (foods || []).map(function (f) {
+      const food = f && (byId[f.dbId] || null);
+      return food ? { food: food, role: f.role || (food.roles || [])[0] || '' } : null;
+    }).filter(Boolean);
+    if (!list.length) return '';
+    const pick = function (roles) { const x = list.find(function (it) { return roles.indexOf(it.role) >= 0; }); return x ? shortName(x.food) : ''; };
+    const prot = pick(['mp', 'bp', 'sp']);
+    const carb = pick(['mc', 'bc']);
+    const veg = pick(['veg']);
+    const fruit = pick(['fruit', 'nut']);
+    if (prot && carb) return prot + ' עם ' + carb + (veg ? ' ' + withVav(veg) : '');
+    if (prot && (veg || fruit)) return prot + ' ' + withVav(veg || fruit);
+    const names = list.slice(0, 2).map(function (it) { return shortName(it.food); });
+    return names.length === 2 ? names[0] + ' ' + withVav(names[1]) : names[0];
+  }
+
   function buildMenu(prefs) {
     prefs = prefs || {};
     const meals = choiceMenuFoods(prefs);
@@ -781,7 +804,8 @@
     return {
       name: 'התפריט שלי',
       meals: meals.map(function (m) {
-        return { name: m.name, time: m.time, foods: m.items.map(function (it) { return toMenuFood(it.food, it.grams, it.role); }) };
+        const foods = m.items.map(function (it) { return toMenuFood(it.food, it.grams, it.role); });
+        return { name: m.name, time: m.time, dish: dishName(foods), prep: '', foods: foods };
       })
     };
   }
@@ -904,6 +928,7 @@
     const replaced = [];
     const meals = ((spec && spec.meals) || []).map(function (m, i) {
       const items = [];
+      const replacedBefore = replaced.length;
       ((m && m.foods) || []).forEach(function (f) {
         if (!f) return;
         let food = byId[f.dbId] || null;
@@ -921,7 +946,14 @@
         const g = Number(f.grams) > 0 ? snap(food, Number(f.grams)) : food.b;
         items.push({ food: food, role: role || ((food.roles || [])[0] || ''), grams: g });
       });
-      return { name: String((m && m.name) || ('ארוחה ' + (i + 1))), time: (m && m.time) || '', items: items };
+      // The AI's dish title/prep only if every food it named is still there
+      // and the title does not mention something blocked.
+      const keepText = replaced.length === replacedBefore && !mentionsBlocked(m && m.dish, prefs) && !mentionsBlocked(m && m.prep, prefs);
+      return {
+        name: String((m && m.name) || ('ארוחה ' + (i + 1))), time: (m && m.time) || '', items: items,
+        dish: keepText ? String((m && m.dish) || '').trim().slice(0, 50) : '',
+        prep: keepText ? String((m && m.prep) || '').trim().slice(0, 140) : ''
+      };
     }).filter(function (m) { return m.items.length; });
     if (!meals.length) return null;
     fitPortions(meals, prefs);
@@ -929,9 +961,25 @@
       name: 'התפריט שלי',
       replaced: replaced,
       meals: meals.map(function (m) {
-        return { name: m.name, time: m.time, foods: m.items.map(function (it) { return toMenuFood(it.food, it.grams, it.role); }) };
+        const foods = m.items.map(function (it) { return toMenuFood(it.food, it.grams, it.role); });
+        return { name: m.name, time: m.time, dish: m.dish || dishName(foods), prep: m.prep, foods: foods };
       })
     };
+  }
+
+  // Does free text name a blocked food? (head word of the food's name/aliases)
+  function mentionsBlocked(text, prefs) {
+    const t = bare(text || '');
+    if (!t) return false;
+    const blocked = blockedIds(prefs);
+    return Object.keys(blocked).some(function (id) {
+      const f = byId[id];
+      if (!f) return false;
+      return [f.name].concat(f.al || []).some(function (a) {
+        const head = bare(a).replace(/\s*\d+%?$/, '').trim();
+        return head.length >= 3 && wordIn(t, head);
+      });
+    });
   }
   const ROLE_NAMES = { bp: 1, bc: 1, mp: 1, mc: 1, veg: 1, fat: 1, sp: 1, fruit: 1, nut: 1 };
 
@@ -940,9 +988,16 @@
     prefs = prefs || {};
     const provider = opts.provider || menuProvider;
     if (!provider) return Promise.resolve(buildMenu(prefs));
+    // When the AI fails the basic menu is still returned, but marked, so the
+    // screen can say so and offer «נסה שוב» instead of passing it off as AI.
+    function basic(err) {
+      const m = buildMenu(prefs);
+      m.fallback = { reason: (err && err.message) || 'ה-AI לא החזיר תפריט', code: (err && err.code) || 'empty' };
+      return m;
+    }
     return withTimeout(Promise.resolve(provider(prefs, { catalog: catalog(prefs), slots: slotsFor(prefs) })), opts.timeoutMs || 20000)
-      .then(function (spec) { return menuFromSpec(spec, prefs) || buildMenu(prefs); })
-      .catch(function () { return buildMenu(prefs); });
+      .then(function (spec) { return menuFromSpec(spec, prefs) || basic(null); })
+      .catch(basic);
   }
 
   const FitFood = {
@@ -954,7 +1009,7 @@
     EXCLUDE_OPTIONS: EXCLUDE_OPTIONS, choosable: choosable, unitGrams: unitGrams,
     parseFoodText: parseFoodText, setTextProvider: setTextProvider, resolveSpec: resolveSpec,
     buildMenuAsync: buildMenuAsync, setMenuProvider: setMenuProvider, menuFromSpec: menuFromSpec, catalog: catalog,
-    slotsFor: slotsFor, blockedIds: blockedIds, extractDislikes: extractDislikes, termIds: termIds,
+    slotsFor: slotsFor, blockedIds: blockedIds, dishName: dishName, mentionsBlocked: mentionsBlocked, extractDislikes: extractDislikes, termIds: termIds,
     COOK: COOK, cookInfo: cookInfo, cookAlt: cookAlt, cookStateOf: cookStateOf,
     hasTextProvider: function () { return !!textProvider; }, hasMenuProvider: function () { return !!menuProvider; }
   };

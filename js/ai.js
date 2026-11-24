@@ -117,10 +117,10 @@
       catalog: (ctx && ctx.catalog) || [],
       current: prefs.current ? compactMenu(prefs.current) : null
     };
-    return call('menu', body, { timeoutMs: 45000 }).then(function (r) {
+    return call('menu', body, { timeoutMs: 28000 }).then(function (r) {
       lastMenuReply = (r && r.reply) || '';
       return r;
-    }, function (e) { notice(e); throw e; });
+    }, function (e) { throw e; }); // the menu screen shows its own failure card
   }
   function excludeLabels(ids) {
     const opts = (root.FitFood && root.FitFood.EXCLUDE_OPTIONS) || [];

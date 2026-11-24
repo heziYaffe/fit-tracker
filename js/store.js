@@ -116,6 +116,8 @@
       id: m.id || uid(),
       name: m.name || '',
       time: m.time || '',
+      dish: m.dish ? String(m.dish).slice(0, 60) : '',
+      prep: m.prep ? String(m.prep).slice(0, 160) : '',
       foods: (m.foods || []).map(normalizeMenuFood),
       status: m.status || 'pending'
     };
@@ -971,6 +973,11 @@
     meal.foods = (meal.foods || []).map(function (f) {
       return f.id === foodId ? normalizeMenuFood(Object.assign({}, f, nextFood, { id: f.id })) : f;
     });
+    // the dish title/prep described the old food; rename from what is there now
+    if (meal.dish) {
+      meal.dish = (root.FitFood && root.FitFood.dishName) ? root.FitFood.dishName(meal.foods) : '';
+      meal.prep = '';
+    }
     commit();
     return meal;
   }

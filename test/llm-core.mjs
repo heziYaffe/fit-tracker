@@ -53,6 +53,15 @@ assert(v.meals[0].foods.length === 1 && v.meals[0].foods[0].dbId === "egg", "ser
 const legacy = buildRequest("menu", { prefs: { protein: 150, calories: 2200, meals: 3 }, catalog }, "gemini-3.8-flash");
 assert(/ערב 19:30/.test(legacy.contents[0].parts[0].text), "default slots when an older app sends none");
 
+// v46: fast model first, dish + prep per meal
+assert(TASKS.menu.models[0] === "gemini-flash-lite-latest" && TASKS.menu.models.indexOf("gemini-3.8-flash") < 0, "menu leads with flash-lite");
+assert(TASKS.menu.deadlineMs <= 25000 && TASKS.menu.attemptMs <= 10000, "menu fails fast");
+const mealProps = mr.generationConfig.responseSchema.properties.meals.items;
+assert(mealProps.properties.dish && mealProps.properties.prep && mealProps.required.indexOf("dish") >= 0, "dish + prep required");
+assert(/dish = שם מנה/.test(sys), "prompt asks for a dish name");
+v = validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "08:00", dish: " שקשוקה ", prep: "א".repeat(300), foods: [{ dbId: "egg", grams: 100 }] }] }, mIn);
+assert(v.meals[0].dish === "שקשוקה" && v.meals[0].prep.length === 140, "dish/prep clipped");
+
 v = validateOutput("plan", { reply: "שאלה?", plan: { name: "", days: [] } });
 assert(v.plan === null && v.reply === "שאלה?", "question-only reply allowed");
 v = validateOutput("plan", { reply: "ok", plan: { name: "p", days: [{ name: "A", weekday: 9, type: "weird", exercises: [{ name: "סקוואט", sets: 40, repsMin: 8, repsMax: 5 }] }] } });

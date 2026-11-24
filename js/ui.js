@@ -1346,7 +1346,9 @@
     ui.wiz = {
       step: 1, goal: p.goal || 'keep', protein: E.proteinTarget(s), calories: cal, calAuto: !Number(s.settings.dailyCalorieTarget), kg: kg || 0,
       meals: p.meals || 4, excludes: (p.excludes || []).slice(), dislikes: (p.dislikes || []).slice(),
-      dislikeTerms: (p.dislikeTerms || []).slice(), seed: 0, menu: null
+      dislikeTerms: (p.dislikeTerms || []).slice(), seed: 0, menu: null,
+      // Saved preferences → one summary screen instead of 4 steps.
+      quick: !!s.settings.menuPrefs, note: ''
     };
     ui.tab = 'nutrition';
     render();
@@ -1360,28 +1362,112 @@
     const prefs = { protein: w.protein, calories: w.calories, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes, seed: w.seed, goal: w.goal,
       dislikeTerms: w.dislikeTerms || [], note: w.note || '', change: w.change || '', current: w.change ? w.prevMenu : null };
     w.aiReply = '';
+    w.aiFail = null;
     if (!root.FitFood.hasMenuProvider()) { w.menu = root.FitFood.buildMenu(prefs); return; }
-    w.menu = null;
+    const isChange = !!prefs.change;
+    if (!isChange) w.menu = null;
     w.loading = true;
+    w.loadingStart = Date.now();
     const token = (w.token = (w.token || 0) + 1);
-    root.FitFood.buildMenuAsync(prefs, { timeoutMs: 48000 }).then(function (menu) {
+    root.FitFood.buildMenuAsync(prefs, { timeoutMs: 30000 }).then(function (menu) {
       if (ui.wiz !== w || w.token !== token) return;
-      w.aiReply = root.FitAI ? root.FitAI.lastMenuReply() : '';
-      // A failed AI change keeps the menu you had instead of a new rule-based one.
-      w.menu = (prefs.change && !w.aiReply && w.prevMenu) ? w.prevMenu : menu;
       w.loading = false;
+      if (menu && menu.fallback) {
+        // Say it plainly; never pass the basic menu off as the AI's.
+        w.aiFail = { change: isChange ? prefs.change : '', basic: isChange ? null : menu, reason: menu.fallback.reason || '' };
+        if (isChange) w.menu = w.prevMenu;
+        render();
+        return;
+      }
+      w.aiReply = root.FitAI ? root.FitAI.lastMenuReply() : '';
+      w.menu = menu;
       w.change = '';
+      if (ui.mealOpen) Object.keys(ui.mealOpen).forEach(function (k) { if (k[0] === 'w') delete ui.mealOpen[k]; });
       render();
     });
+  }
+
+  // One meal: header, the dish name as a button, and (when open) the
+  // ingredients with quantities, macros and per-item actions.
+  function mealDishCard(meal, key, opts) {
+    opts = opts || {};
+    const F = root.FitFood;
+    const mt = Store.mealTotals(meal);
+    const dish = meal.dish || (F && F.dishName ? F.dishName(meal.foods) : '');
+    const open = !dish || !!(ui.mealOpen && ui.mealOpen[key]);
+    const foods = (meal.foods || []).map(function (f, fi) {
+      const q = f.qty && f.qty !== 1 ? f.qty : 1;
+      return '<div class="meal-food"><div>' + esc(f.name) + (q !== 1 ? ' ×' + q : '') + cookAltHtml(f, q) + '</div>' +
+        '<div class="meal-food-side">' + Math.round((f.protein || 0) * q) + ' חל׳ · ' + Math.round((f.calories || 0) * q) + ' קק״ל' +
+        (opts.itemAction ? ' ' + opts.itemAction(f, fi) : '') + '</div></div>';
+    }).join('');
+    const head = '<div class="meal-head"><div><strong>' + esc(meal.name) + '</strong>' +
+      (meal.time ? '<div class="kicker">' + esc(meal.time) + '</div>' : '') + '</div>' +
+      '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div>';
+    const dishBtn = dish
+      ? '<button type="button" class="meal-dish' + (open ? ' open' : '') + '" data-action="meal-toggle" data-key="' + esc(key) + '" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+        '<span class="meal-dish-name">' + esc(dish) + '</span>' +
+        (meal.prep ? '<span class="meal-dish-prep">' + esc(meal.prep) + '</span>' : '') +
+        '<span class="meal-dish-more">' + (open ? 'הסתרת מרכיבים' : 'מרכיבים וכמויות') + ' <span class="chev" aria-hidden="true">‹</span></span></button>'
+      : '';
+    return '<div class="meal-card ' + (opts.cls || '') + '">' + head + dishBtn +
+      (open ? '<div class="meal-foods">' + foods + '</div>' : '') + (opts.footer || '') + '</div>';
+  }
+
+  function wizLoadingHtml(w) {
+    const n = w.meals || 4;
+    let cards = '';
+    for (let i = 0; i < n; i++) cards += '<div class="meal-card skel"><div class="skel-line w40"></div><div class="skel-line w70"></div><div class="skel-line w55"></div></div>';
+    return '<section class="card wiz-wait"><p><span class="spin" aria-hidden="true"></span> ' + (w.change ? 'מעדכן את התפריט…' : 'בונה תפריט…') + '</p>' +
+      '<p class="hp-legend">בדרך כלל כמה שניות.</p></section>' + (w.change ? '' : cards);
+  }
+
+  function wizFailHtml(w) {
+    const f = w.aiFail;
+    return '<section class="card wiz-fail" role="alert"><h2>ה-AI לא הצליח ' + (f.change ? 'לעדכן את התפריט' : 'לבנות תפריט') + ' כרגע</h2>' +
+      '<p class="hp-legend">' + esc((f.reason && f.reason.length < 90 ? f.reason + ' ' : 'השירות של Google עמוס. ') + 'בדרך כלל זה עובר תוך דקה.') + '</p>' +
+      '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
+      '<button type="button" class="btn primary" data-action="wiz-retry">נסה שוב</button>' +
+      (f.basic ? '<button type="button" class="btn" data-action="wiz-basic">הצעה בסיסית בלי AI</button>'
+        : '<button type="button" class="btn" data-action="wiz-fail-close">השאר כמו שהיה</button>') +
+      '</div></section>';
+  }
+
+  // Returning users: everything on one card, «בנה» right away.
+  function renderWizSummary(w) {
+    const F = root.FitFood;
+    const goals = [['cut', 'חיטוב'], ['keep', 'שמירה'], ['bulk', 'מסה']];
+    const blocked = [];
+    (w.excludes || []).forEach(function (id) { const o = F.EXCLUDE_OPTIONS.find(function (x) { return x.id === id; }); if (o) blocked.push(o.label); });
+    (w.dislikes || []).forEach(function (id) { const f = F.DB.find(function (x) { return x.id === id; }); if (f) blocked.push(f.name); });
+    (w.dislikeTerms || []).forEach(function (t) { if (blocked.indexOf(t) < 0) blocked.push(t); });
+    return '<section class="card wiz-summary">' +
+      '<div class="field"><span class="kicker">מטרה</span><div class="chips">' + goals.map(function (g) {
+        return '<button type="button" class="chip' + (w.goal === g[0] ? ' active' : '') + '" data-action="wiz-goal" data-val="' + g[0] + '">' + g[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="wiz-two">' +
+      '<label class="field"><span>חלבון (ג׳)</span><input type="number" id="wiz-protein" inputmode="numeric" value="' + esc(w.protein) + '" /></label>' +
+      '<label class="field"><span>קלוריות</span><input type="number" id="wiz-calories" inputmode="numeric" value="' + esc(w.calories) + '" /></label></div>' +
+      '<div class="field"><span class="kicker">ארוחות ביום</span><div class="chips">' + [3, 4, 5].map(function (n) {
+        return '<button type="button" class="chip' + (w.meals === n ? ' active' : '') + '" data-action="wiz-meals" data-val="' + n + '">' + n + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><span class="kicker">לא בתפריט</span><p class="wiz-blocked">' + (blocked.length ? esc(blocked.join(', ')) : 'אין הגבלות') +
+      ' <button type="button" class="linkish" data-action="wiz-edit-prefs">שינוי</button></p></div>' +
+      (root.FitAI && root.FitAI.available()
+        ? '<label class="field"><span>משהו מיוחד הפעם? (לא חובה)</span><textarea id="wiz-note" rows="2" placeholder="למשל: אין לי זמן לבשל בבוקר">' + esc(w.note || '') + '</textarea></label>'
+        : '') +
+      '</section>';
   }
 
   function renderWizard() {
     const w = ui.wiz;
     const F = root.FitFood;
-    const dots = '<p class="kicker">שלב ' + w.step + ' מתוך 4</p>';
+    const dots = w.quick ? '' : '<p class="kicker">שלב ' + w.step + ' מתוך 4</p>';
     const back = w.step > 1 ? '<button type="button" class="btn" data-action="wiz-back">חזרה</button>' : '';
     let body = '';
-    if (w.step === 1) {
+    if (w.quick && w.step === 1) {
+      body = renderWizSummary(w);
+    } else if (w.step === 1) {
       const goals = [['cut', 'חיטוב'], ['keep', 'שמירה'], ['bulk', 'מסה']];
       body = '<section class="card"><h2>מה המטרה?</h2><div class="chips">' + goals.map(function (g) {
         return '<button type="button" class="chip' + (w.goal === g[0] ? ' active' : '') + '" data-action="wiz-goal" data-val="' + g[0] + '">' + g[1] + '</button>';
@@ -1417,22 +1503,19 @@
           ? '<label class="field"><span>במילים שלך (לא חובה)</span><textarea id="wiz-note" rows="2" placeholder="למשל: אין לי זמן לבשל בבוקר, אוהב עוף ואורז">' + esc(w.note || '') + '</textarea></label>'
           : '');
     } else if (!w.menu) {
-      if (!w.loading) wizBuild();
-      body = w.menu ? '' : '<section class="card"><p>בונה הצעה…</p></section>';
+      if (!w.loading && !w.aiFail) wizBuild();
+      body = w.menu ? '' : (w.aiFail ? wizFailHtml(w) : wizLoadingHtml(w));
     }
     if (w.step === 4 && w.menu) {
       const tot = Store.menuTotals(w.menu);
       body = '<p class="plan-progress">חלבון ' + Math.round(tot.protein) + ' מתוך ' + w.protein + ' ג׳ · ' + Math.round(tot.calories) + ' מתוך ' + w.calories + ' קק״ל</p>' +
         wizBlockedLine(w) +
-        '<p class="hp-legend">לא מתאים משהו? «החלפה» ליד כל פריט מציעה חלופות עם ערכים דומים.</p>' +
+        '<p class="hp-legend">לחיצה על מנה מציגה מרכיבים וכמויות; «החלפה» ליד פריט מציעה חלופה עם ערכים דומים.</p>' +
+        (w.loading ? wizLoadingHtml(w) : '') + (w.aiFail ? wizFailHtml(w) : '') +
         w.menu.meals.map(function (meal, mi) {
-          const mt = Store.mealTotals(meal);
-          return '<div class="meal-card"><div class="meal-head"><div><strong>' + esc(meal.name) + '</strong><div class="kicker">' + esc(meal.time || '') + '</div></div>' +
-            '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div><div class="meal-foods">' +
-            meal.foods.map(function (f, fi) {
-              return '<div class="meal-food"><div>' + esc(f.name) + cookAltHtml(f) + '</div><div>' + Math.round(f.protein) + ' חל׳ · ' + Math.round(f.calories) + ' קק״ל' +
-                ' <button type="button" class="linkish" data-action="wiz-swap" data-mi="' + mi + '" data-fi="' + fi + '">החלפה</button></div></div>';
-            }).join('') + '</div></div>';
+          return mealDishCard(meal, 'w' + mi, {
+            itemAction: function (f, fi) { return '<button type="button" class="linkish" data-action="wiz-swap" data-mi="' + mi + '" data-fi="' + fi + '">החלפה</button>'; }
+          });
         }).join('') +
         '<button type="button" class="btn wide" data-action="wiz-again">הצעה אחרת</button>' +
         (root.FitAI && root.FitAI.available()
@@ -1441,10 +1524,14 @@
             '<button type="button" class="btn wide" data-action="wiz-ai-change">עדכן את התפריט</button>')
           : '');
     }
-    const next = w.step < 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">המשך</button>'
+    const next = (w.quick && w.step === 1) ? '<button type="button" class="btn primary wide" data-action="wiz-next">בנה</button>'
+      : (w.quick && w.step === 3) ? '<button type="button" class="btn primary wide" data-action="wiz-prefs-done">שמירה</button>'
+      : (w.step === 4 && !w.menu) ? ''
+      : w.step < 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">המשך</button>'
       : (w.step === 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">בנה לי תפריט</button>'
         : '<button type="button" class="btn primary wide" data-action="wiz-save">שמירה כתפריט שלי</button>');
-    return pageHead('<div><p class="kicker">בונים תפריט יחד</p><h1>' + ['', 'יעדים', 'ארוחות', 'העדפות', 'התפריט שלך'][w.step] + '</h1></div>',
+    const title = (w.quick && w.step === 1) ? 'תפריט חדש' : ['', 'יעדים', 'ארוחות', 'העדפות', 'התפריט שלך'][w.step];
+    return pageHead('<div><p class="kicker">בונים תפריט יחד</p><h1>' + title + '</h1></div>',
       '<button type="button" class="btn" data-action="wiz-cancel">ביטול</button>', { noGear: true }) +
       dots + body + '<div class="live-actions">' + back + next + '</div>';
   }
@@ -2608,25 +2695,19 @@
     const nut = E.nutritionOn(s, date) || { protein: 0 };
     const pTarget = E.proteinTarget(s);
     const cards = (day.meals || []).map(function (meal) {
-      const mt = Store.mealTotals(meal);
       const st = meal.status || 'pending';
-      const foods = (meal.foods || []).map(function (f) {
-        return '<div class="meal-food"><div>' + esc(f.name) + (f.qty && f.qty !== 1 ? ' ×' + f.qty : '') + cookAltHtml(f, f.qty) + '</div>' +
-          '<div>' + Math.round((f.protein || 0) * (f.qty || 1)) + 'ג׳' +
-          (st === 'pending' ? ' <button type="button" class="linkish" data-action="swap-food" data-date="' + date + '" data-mid="' + esc(meal.id) + '" data-fid="' + esc(f.id) + '">החלפה</button>' : '') +
-          '</div></div>';
-      }).join('');
-      return '<div class="meal-card ' + st + '">' +
-        '<div class="meal-head"><div><strong>' + esc(meal.name) + '</strong>' +
-        (meal.time ? '<div class="kicker">' + esc(meal.time) + '</div>' : '') + '</div>' +
-        '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div>' +
-        '<div class="meal-foods">' + foods + '</div>' +
-        (st === 'pending'
-          ? '<div class="live-actions"><button type="button" class="btn primary" data-action="eat-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">אכלתי כמתוכנן</button>' +
-            '<button type="button" class="btn" data-action="skip-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">דילוג</button></div>'
-          : '<div class="live-actions"><p class="kicker">' + (st === 'eaten' ? 'נאכלה ✓' : 'דולגה') + '</p>' +
-            '<button type="button" class="linkish" data-action="undo-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">ביטול</button></div>') +
-        '</div>';
+      const footer = st === 'pending'
+        ? '<div class="live-actions"><button type="button" class="btn primary" data-action="eat-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">אכלתי כמתוכנן</button>' +
+          '<button type="button" class="btn" data-action="skip-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">דילוג</button></div>'
+        : '<div class="live-actions"><p class="kicker">' + (st === 'eaten' ? 'נאכלה ✓' : 'דולגה') + '</p>' +
+          '<button type="button" class="linkish" data-action="undo-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">ביטול</button></div>';
+      return mealDishCard(meal, 'd' + date + '-' + meal.id, {
+        cls: st,
+        footer: footer,
+        itemAction: st === 'pending' ? function (f) {
+          return '<button type="button" class="linkish" data-action="swap-food" data-date="' + date + '" data-mid="' + esc(meal.id) + '" data-fid="' + esc(f.id) + '">החלפה</button>';
+        } : null
+      });
     }).join('');
     return header +
       '<p class="plan-progress">ארוחות ' + ltr(eaten + ' / ' + total) +
@@ -4941,9 +5022,42 @@
     // ---------- menu wizard ----------
     if (action === 'wiz-start') { closeModal(); startWizard(); return; }
     if (action === 'wiz-cancel') { ui.wiz = null; render(); return; }
-    if (action === 'wiz-back') { wizCollect(); ui.wiz.step = Math.max(1, ui.wiz.step - 1); render(); return; }
+    if (action === 'wiz-back') {
+      wizCollect();
+      // the quick flow has only the summary behind the result / preference editor
+      ui.wiz.step = ui.wiz.quick ? 1 : Math.max(1, ui.wiz.step - 1);
+      ui.wiz.aiFail = null;
+      render();
+      return;
+    }
+    if (action === 'wiz-edit-prefs') { wizCollect(); ui.wiz.step = 3; render(); try { window.scrollTo(0, 0); } catch (e) { /* ignore */ } return; }
+    if (action === 'wiz-prefs-done') { wizCollect(); ui.wiz.step = 1; render(); return; }
+    if (action === 'meal-toggle') {
+      ui.mealOpen = ui.mealOpen || {};
+      ui.mealOpen[btn.dataset.key] = !ui.mealOpen[btn.dataset.key];
+      haptic(8);
+      render();
+      return;
+    }
+    if (action === 'wiz-retry') {
+      const w = ui.wiz;
+      if (!w || !w.aiFail) return;
+      if (w.aiFail.change) { w.change = w.aiFail.change; w.prevMenu = w.menu; }
+      w.aiFail = null;
+      wizBuild();
+      render();
+      return;
+    }
+    if (action === 'wiz-basic') {
+      const w = ui.wiz;
+      if (w && w.aiFail && w.aiFail.basic) { w.menu = w.aiFail.basic; delete w.menu.fallback; w.aiFail = null; w.aiReply = ''; }
+      render();
+      return;
+    }
+    if (action === 'wiz-fail-close') { if (ui.wiz) { ui.wiz.aiFail = null; ui.wiz.change = ''; } render(); return; }
     if (action === 'wiz-next') {
       wizCollect();
+      if (ui.wiz.quick && ui.wiz.step === 1) ui.wiz.step = 3;
       ui.wiz.step = Math.min(4, ui.wiz.step + 1);
       if (ui.wiz.step === 4) wizBuild();
       render();
@@ -4958,8 +5072,9 @@
       render();
       return;
     }
-    if (action === 'wiz-meals') { ui.wiz.meals = Number(btn.dataset.val); render(); return; }
+    if (action === 'wiz-meals') { wizCollect(); ui.wiz.meals = Number(btn.dataset.val); render(); return; }
     if (action === 'wiz-excl' || action === 'wiz-dislike') {
+      wizCollect();
       const arr = action === 'wiz-excl' ? ui.wiz.excludes : ui.wiz.dislikes;
       const v = btn.dataset.val;
       const i = arr.indexOf(v);
@@ -5012,7 +5127,12 @@
       const alt = sm && sm.alts && sm.alts[Number(btn.dataset.idx)];
       if (alt && sm.wiz && ui.wiz && ui.wiz.menu) {
         const meal = ui.wiz.menu.meals[sm.mi];
-        if (meal) meal.foods[sm.fi] = Object.assign({}, alt);
+        if (meal) {
+          meal.foods[sm.fi] = Object.assign({}, alt);
+          // the AI's dish title described the old food
+          meal.dish = root.FitFood.dishName ? root.FitFood.dishName(meal.foods) : '';
+          meal.prep = '';
+        }
         toast('הוחלף');
       } else if (alt && sm) {
         Store.replaceDayMealFood(sm.date, sm.mealId, sm.foodId, alt);

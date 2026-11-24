@@ -9,6 +9,8 @@ export const PRICES: Record<string, { in: number; out: number }> = {
   "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
   "gemini-flash-latest": { in: 1.5, out: 7.5 },
   "gemini-3.1-flash-lite": { in: 0.25, out: 1.5 },
+  "gemini-3.1-flash-lite-preview": { in: 0.25, out: 1.5 },
+  "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
   "gemini-flash-lite-latest": { in: 0.3, out: 2.5 },
 };
 
@@ -51,6 +53,8 @@ const MENU_SCHEMA = S("OBJECT", {
         properties: {
           name: S("STRING"),
           time: S("STRING", { description: "HH:MM" }),
+          dish: S("STRING", { description: "שם המנה בעברית" }),
+          prep: S("STRING", { description: "שורה אחת: איך מכינים" }),
           foods: S("ARRAY", {
             items: S("OBJECT", {
               properties: { dbId: S("STRING"), grams: S("NUMBER"), role: S("STRING") },
@@ -105,7 +109,9 @@ const PLAN_SCHEMA = S("OBJECT", {
 type Task = { models: string[]; attemptMs: number; deadlineMs: number; maxOut: number; thinking: string };
 export const TASKS: Record<string, Task> = {
   food: { models: ["gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3-flash-preview"], attemptMs: 5000, deadlineMs: 11000, maxOut: 1200, thinking: "minimal" },
-  menu: { models: ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3-flash-preview"], attemptMs: 14000, deadlineMs: 40000, maxOut: 6000, thinking: "low" },
+  // flash-lite answers a menu in ~3 s; gemini-3.8-flash never finished in 14 s
+  // on the free tier, so it is no longer in the chain.
+  menu: { models: ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], attemptMs: 9000, deadlineMs: 24000, maxOut: 4000, thinking: "low" },
   plan: { models: ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3-flash-preview"], attemptMs: 18000, deadlineMs: 55000, maxOut: 8000, thinking: "low" },
 };
 
@@ -176,6 +182,7 @@ function menuPrompt(input: Record<string, unknown>) {
       "6. אותו מקור חלבון עיקרי לא חוזר ביותר מארוחה אחת; לא אותו מאכל פעמיים באותה ארוחה.\n" +
       "יעדים: התקרב ליעד היומי ולחלוקה לארוחות (±10%); האפליקציה מכווננת גרמים בסוף, אז העיקר לבחור מאכלים שמאפשרים להגיע לחלבון בלי לחרוג בקלוריות.\n" +
       "העדפות (רכות, לפי הסדר): מה שהמשתמש כתב במילים שלו; אוכל ישראלי יומיומי מהסופר; הכנה עד 15 דקות; בוקר וערב חלביים/ביצים וצהריים בשרי או דג; גיוון בין הארוחות.\n" +
+      "לכל ארוחה: dish = שם מנה טבעי בעברית כמו שאומרים בבית (למשל 'שקשוקה עם לחם מלא', 'קערת עוף, אורז וברוקולי', 'יוגורט חלבון עם בננה'), שמתאר רק את המאכלים שבחרת; prep = שורה אחת קצרה איך מכינים (בלי כמויות).\n" +
       "role = התפקיד של המאכל מהקטלוג. reply: משפט-שניים חמים בעברית מה בנית ולמה, בלי מספרים.",
     user: "יעד יומי: " + kcal + " קק״ל, " + prot + " ג׳ חלבון. מטרה: " + goal + "." +
       (excl ? "\nהגבלות: " + excl + " (כבר הוסרו מהקטלוג)." : "") +
@@ -198,6 +205,8 @@ function menuSchema(input: Record<string, unknown>) {
           properties: {
             name: S("STRING"),
             time: S("STRING", { description: "HH:MM" }),
+            dish: S("STRING", { description: "שם מנה קצר וטבעי בעברית, 2-6 מילים" }),
+            prep: S("STRING", { description: "שורה אחת, עד 14 מילים: איך מכינים" }),
             foods: S("ARRAY", {
               items: S("OBJECT", {
                 properties: {
@@ -209,7 +218,7 @@ function menuSchema(input: Record<string, unknown>) {
               }),
             }),
           },
-          required: ["name", "time", "foods"],
+          required: ["name", "time", "dish", "prep", "foods"],
         }),
       }),
     },
@@ -288,6 +297,8 @@ export function validateOutput(task: string, out: unknown, input?: Record<string
     const meals = arr(o.meals, 8).map((m: Record<string, unknown>) => ({
       name: clip(m && m.name, 30),
       time: /^\d{1,2}:\d{2}$/.test(String(m && m.time)) ? String(m.time) : "",
+      dish: clip(m && m.dish, 50).trim(),
+      prep: clip(m && m.prep, 140).trim(),
       foods: arr(m && m.foods, 12).map((f: Record<string, unknown>) => ({
         dbId: clip(f && f.dbId, 40), grams: num(f && f.grams, 0, 1500, 0), role: clip(f && f.role, 10),
       })).filter((f) => f.dbId && (!allowedIds || allowedIds.has(f.dbId))),

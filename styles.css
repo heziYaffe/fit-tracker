@@ -2413,3 +2413,29 @@ html.av-lock, html.av-lock body { overflow: hidden; }
   .av-hero-stage:active { transform: none; }
   .av-zzz i { animation: none; opacity: 0.8; }
 }
+
+/* v46 — menu meals as dishes (tap for ingredients), wait + failure states, one-screen wizard */
+.meal-dish {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%;
+  text-align: right; background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 14px;
+  padding: 10px 12px; color: inherit; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.meal-dish:active { transform: scale(0.985); }
+.meal-dish-name { font-weight: 700; font-size: 1.02rem; line-height: 1.3; }
+.meal-dish-prep { color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.35; }
+.meal-dish-more { color: var(--accent); font-size: var(--fs-xs); font-weight: 600; margin-top: 2px; }
+.meal-dish-more .chev { display: inline-block; transition: transform .18s ease; transform: rotate(90deg); }
+.meal-dish.open .meal-dish-more .chev { transform: rotate(-90deg); }
+.meal-food-side { white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.wiz-wait p:first-child { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: v46spin .8s linear infinite; display: inline-block; }
+@keyframes v46spin { to { transform: rotate(360deg); } }
+.meal-card.skel { display: flex; flex-direction: column; gap: 8px; }
+.skel-line { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--line) 0%, color-mix(in srgb, var(--line) 40%, transparent) 50%, var(--line) 100%); background-size: 200% 100%; animation: v46skel 1.4s linear infinite; }
+@keyframes v46skel { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.skel-line.w40 { width: 40%; } .skel-line.w55 { width: 55%; } .skel-line.w70 { width: 70%; }
+.wiz-fail { border-color: color-mix(in srgb, var(--ring-red, #ff6b6b) 45%, transparent); }
+.wiz-fail h2 { font-size: 1.02rem; }
+.wiz-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wiz-blocked { margin: 2px 0 0; line-height: 1.5; }
