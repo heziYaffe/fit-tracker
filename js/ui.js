@@ -32,7 +32,10 @@
     suppressCeleb: false,
     animHome: false,
     homeDate: null,
-    swapMeal: null
+    swapMeal: null,
+    cardio: null,
+    cardioTimer: 0,
+    cardioWake: null
   };
 
   function esc(s) {
@@ -52,6 +55,11 @@
 
   function typeLabel(workout) {
     if (!workout) return '';
+    if (workout.type === 'cardio') {
+      if (workout.customType) return workout.customType;
+      const act = E.cardioActivityById && workout.activityId ? E.cardioActivityById(workout.activityId) : null;
+      return (act && act.label) || 'קרדיו';
+    }
     if (workout.type === 'custom' && workout.customType) return workout.customType;
     const found = C.WORKOUT_TYPES.find(function (t) { return t.id === workout.type; });
     return found ? found.label : (workout.customType || workout.type || '');
@@ -985,6 +993,8 @@
         }).join('');
         const meta = [];
         if (w.duration) meta.push(w.duration + ' דק׳');
+        if (w.distanceKm) meta.push(w.distanceKm + ' ק״מ');
+        if (w.avgHr) meta.push(w.avgHr + ' bpm');
         parts.push(
           '<div class="list-item workout-card">' +
           '<button type="button" class="workout-main" data-action="edit-workout" data-id="' + esc(w.id) + '">' +
@@ -2148,6 +2158,226 @@
       '<details class="card" style="margin-top:8px"><summary>החלפת תפריט או עריכה</summary>' + renderMenuList() + '</details>';
   }
 
+  const CARDIO_SESSION_KEY = 'hazi-fit-cardio-session';
+
+  function loadCardioSession() {
+    if (ui.cardio) return ui.cardio;
+    try {
+      if (typeof sessionStorage === 'undefined') return null;
+      const raw = sessionStorage.getItem(CARDIO_SESSION_KEY);
+      if (raw) ui.cardio = JSON.parse(raw);
+    } catch (err) { /* ignore */ }
+    return ui.cardio || null;
+  }
+
+  function persistCardio() {
+    try {
+      if (typeof sessionStorage === 'undefined') return;
+      if (ui.cardio) sessionStorage.setItem(CARDIO_SESSION_KEY, JSON.stringify(ui.cardio));
+      else sessionStorage.removeItem(CARDIO_SESSION_KEY);
+    } catch (err) { /* ignore */ }
+  }
+
+  function stopCardioClock() {
+    if (ui.cardioTimer) {
+      clearInterval(ui.cardioTimer);
+      ui.cardioTimer = 0;
+    }
+  }
+
+  function releaseCardioWake() {
+    if (ui.cardioWake && ui.cardioWake.release) {
+      try { ui.cardioWake.release(); } catch (err) { /* ignore */ }
+    }
+    ui.cardioWake = null;
+  }
+
+  function requestCardioWake() {
+    releaseCardioWake();
+    if (!navigator.wakeLock || !navigator.wakeLock.request) return;
+    navigator.wakeLock.request('screen').then(function (lock) { ui.cardioWake = lock; }).catch(function () {});
+  }
+
+  function startCardioClock() {
+    stopCardioClock();
+    if (!ui.cardio || !ui.cardio.running) return;
+    ui.cardioTimer = setInterval(function () {
+      const el = document.getElementById('cardio-timer');
+      if (!el || !ui.cardio) return;
+      el.textContent = E.formatCardioClock(E.cardioElapsedMs(ui.cardio, Date.now()));
+    }, 250);
+  }
+
+  function clearCardio() {
+    stopCardioClock();
+    releaseCardioWake();
+    ui.cardio = null;
+    persistCardio();
+  }
+
+  function cardioIsOpen() {
+    const sess = loadCardioSession();
+    if (!sess) return false;
+    return !!(sess.running || (Number(sess.elapsedMs) > 0) || (Number(sess.durationMin) > 0));
+  }
+
+  function cardioResumeBar() {
+    if (!cardioIsOpen()) return '';
+    const sess = ui.cardio;
+    const act = E.cardioActivityById && sess.activityId ? E.cardioActivityById(sess.activityId) : null;
+    const name = sess.label || (act && act.label) || 'אירובי';
+    const clock = E.formatCardioClock(E.cardioElapsedMs(sess, Date.now()));
+    return '<button type="button" class="btn primary wide" data-action="resume-cardio" style="margin-bottom:12px">חזרה ל' + esc(name) + ' · ' + ltr(clock) + '</button>';
+  }
+
+  function openCardioLog(activityId) {
+    loadCardioSession();
+    const act = (E.cardioActivityById && E.cardioActivityById(activityId)) || { id: 'other', label: 'אחר' };
+    if (!ui.cardio || ui.cardio.activityId !== act.id) {
+      ui.cardio = {
+        activityId: act.id,
+        label: act.id === 'other' ? '' : act.label,
+        running: false,
+        startedAt: null,
+        elapsedMs: 0,
+        durationMin: '',
+        durationEdited: false,
+        distanceKm: '',
+        avgHr: '',
+        rpe: '',
+        notes: '',
+        date: E.todayISO()
+      };
+    }
+    persistCardio();
+    openModal('cardio-log', { activityId: act.id });
+  }
+
+  function toggleCardioTimer() {
+    loadCardioSession();
+    if (!ui.cardio) return;
+    if (ui.cardio.running) {
+      ui.cardio.elapsedMs = E.cardioElapsedMs(ui.cardio, Date.now());
+      ui.cardio.running = false;
+      ui.cardio.startedAt = null;
+      if (!ui.cardio.durationEdited) {
+        const mins = E.cardioDurationMin(Object.assign({}, ui.cardio, { durationMin: '' }), Date.now());
+        if (mins > 0) ui.cardio.durationMin = mins;
+      }
+      stopCardioClock();
+      releaseCardioWake();
+    } else {
+      ui.cardio.running = true;
+      ui.cardio.startedAt = Date.now();
+      startCardioClock();
+      requestCardioWake();
+    }
+    persistCardio();
+    render();
+  }
+
+  function syncCardioField(el) {
+    loadCardioSession();
+    if (!ui.cardio || !el || !el.dataset.cardio) return;
+    const key = el.dataset.cardio;
+    if (key === 'durationMin') {
+      ui.cardio.durationMin = el.value;
+      ui.cardio.durationEdited = true;
+    } else {
+      ui.cardio[key] = el.value;
+    }
+    persistCardio();
+  }
+
+  function saveCardioSession() {
+    loadCardioSession();
+    if (!ui.cardio) { toast('אין אימון אירובי'); return; }
+    if (ui.cardio.running) {
+      ui.cardio.elapsedMs = E.cardioElapsedMs(ui.cardio, Date.now());
+      ui.cardio.running = false;
+      ui.cardio.startedAt = null;
+    }
+    const built = E.buildCardioWorkout(ui.cardio, Date.now());
+    if (!built.ok) {
+      toast('צריך משך או להפעיל את השעון');
+      render();
+      return;
+    }
+    Store.addWorkout(built.workout);
+    const label = built.workout.customType || 'אירובי';
+    const mins = built.workout.duration;
+    clearCardio();
+    closeModal();
+    toast(label + ' נשמר · ' + mins + ' דק׳');
+    haptic(16);
+  }
+
+  function renderStartKindSheet() {
+    return '<div class="sheet" role="dialog" aria-label="התחלת אימון"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>התחלת אימון</h2>' +
+      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+      cardioResumeBar() +
+      '<div class="kind-pick">' +
+      '<button type="button" class="kind-btn" data-action="start-kind" data-kind="strength">' +
+      '<div class="title">כוח</div><div class="sub">האימונים ששמרת</div></button>' +
+      '<button type="button" class="kind-btn" data-action="start-kind" data-kind="cardio">' +
+      '<div class="title">אירובי</div><div class="sub">ריצה, הליכה ועוד</div></button>' +
+      '</div></div>';
+  }
+
+  function renderCardioPickSheet() {
+    const list = E.sortCardioActivities ? E.sortCardioActivities(state().workouts || []) : ((C.CARDIO_ACTIVITIES || []).map(function (a) {
+      return { id: a.id, label: a.label, count: 0 };
+    }));
+    const rows = list.map(function (act) {
+      const sub = act.count ? (act.count === 1 ? 'פעם אחת' : (act.count + ' פעמים')) : '';
+      return '<button type="button" class="list-item" data-action="pick-cardio" data-id="' + esc(act.id) + '">' +
+        '<div class="title">' + esc(act.label) + '</div>' +
+        (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') +
+        '</button>';
+    }).join('');
+    return '<div class="sheet" role="dialog" aria-label="אימון אירובי"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>אימון אירובי</h2>' +
+      '<button type="button" class="btn ghost" data-action="open-start">חזרה</button></div>' +
+      cardioResumeBar() +
+      '<div class="list">' + rows + '</div></div>';
+  }
+
+  function renderCardioLogSheet() {
+    loadCardioSession();
+    const sess = ui.cardio || {};
+    const act = (E.cardioActivityById && E.cardioActivityById(sess.activityId)) || { id: 'other', label: 'אחר' };
+    const title = act.id === 'other' ? (sess.label || 'אירובי') : (act.label || 'אירובי');
+    const clock = E.formatCardioClock(E.cardioElapsedMs(sess, Date.now()));
+    const running = !!sess.running;
+    const toggle = running ? 'עצירה' : (Number(sess.elapsedMs) > 0 ? 'המשך' : 'התחלה');
+    const otherField = act.id === 'other'
+      ? ('<label class="field"><span>שם הפעילות</span>' +
+        '<input type="text" data-cardio="label" value="' + esc(sess.label || '') + '" placeholder="למשל קיקבוקס" /></label>')
+      : '';
+    return '<div class="sheet" role="dialog" aria-label="' + esc(title) + '"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>' + esc(title) + '</h2>' +
+      '<button type="button" class="btn ghost" data-action="start-kind" data-kind="cardio">חזרה</button></div>' +
+      otherField +
+      '<div class="cardio-clock">' +
+      '<div id="cardio-timer" class="clock" dir="ltr">' + clock + '</div>' +
+      '<div class="cardio-clock-actions">' +
+      '<button type="button" class="btn ' + (running ? '' : 'primary') + ' wide" data-action="cardio-toggle">' + toggle + '</button>' +
+      '</div></div>' +
+      '<p class="hp-legend">המשך נשמר לפי השעון. אפשר גם למלא ידנית.</p>' +
+      '<label class="field"><span>משך (דקות)</span>' +
+      '<input type="number" min="1" step="1" inputmode="numeric" data-cardio="durationMin" value="' + esc(sess.durationMin || '') + '" placeholder="לפי השעון" /></label>' +
+      '<label class="field"><span>מרחק (ק״מ) · רשות</span>' +
+      '<input type="number" min="0" step="0.1" inputmode="decimal" data-cardio="distanceKm" value="' + esc(sess.distanceKm || '') + '" /></label>' +
+      '<label class="field"><span>דופק ממוצע · רשות</span>' +
+      '<input type="number" min="0" step="1" inputmode="numeric" data-cardio="avgHr" value="' + esc(sess.avgHr || '') + '" /></label>' +
+      '<label class="field"><span>RPE (1–10) · רשות</span>' +
+      '<input type="number" min="1" max="10" step="1" inputmode="numeric" data-cardio="rpe" value="' + esc(sess.rpe || '') + '" /></label>' +
+      '<label class="field"><span>הערות · רשות</span>' +
+      '<textarea data-cardio="notes" placeholder="איך הרגשתם…">' + esc(sess.notes || '') + '</textarea></label>' +
+      '<button type="button" class="btn primary wide" data-action="save-cardio" style="margin-top:12px">שמירה</button></div>';
+  }
+
   function renderStartSheet() {
     const list = Store.listTemplates();
     const today = new Date().getDay();
@@ -2159,9 +2389,9 @@
         '<div class="title">' + esc(tpl.name) + (isRec ? ' · היום' : '') + '</div>' +
         '<div class="sub">' + n + ' תרגילים</div></button>';
     }).join('');
-    return '<div class="sheet" role="dialog" aria-label="התחלת אימון"><div class="sheet-handle"></div>' +
-      '<div class="sheet-head"><h2>התחלת אימון</h2>' +
-      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+    return '<div class="sheet" role="dialog" aria-label="אימון כוח"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>אימון כוח</h2>' +
+      '<button type="button" class="btn ghost" data-action="open-start">חזרה</button></div>' +
       (rows ? '<div class="list">' + rows + '</div>' : '<p class="hp-legend">אין תבניות עדיין. אפשר להתחיל אימון חופשי או לבנות תבנית.</p>') +
       '<button type="button" class="btn wide" data-action="start-live" style="margin-top:12px">אימון חופשי</button>' +
       '<button type="button" class="btn wide" data-action="new-template" style="margin-top:8px">בניית תבנית חדשה</button></div>';
@@ -2291,7 +2521,10 @@
     else if (type === 'confirm') overlay.innerHTML = renderConfirm();
     else if (type === 'badge') overlay.innerHTML = renderBadgeDialog();
     else if (type === 'food') overlay.innerHTML = renderFoodSheet();
+    else if (type === 'start-kind') overlay.innerHTML = renderStartKindSheet();
     else if (type === 'start') overlay.innerHTML = renderStartSheet();
+    else if (type === 'start-cardio') overlay.innerHTML = renderCardioPickSheet();
+    else if (type === 'cardio-log') overlay.innerHTML = renderCardioLogSheet();
     else if (type === 'start-preview') overlay.innerHTML = renderStartPreview();
     else if (type === 'levelup') overlay.innerHTML = renderLevelUp();
     else if (type === 'unlock') overlay.innerHTML = renderUnlock();
@@ -2301,6 +2534,7 @@
     else if (type === 'live-swap') overlay.innerHTML = renderSwapExerciseSheet();
     else overlay.innerHTML = '';
     bindSheetDrag(overlay);
+    if (type === 'cardio-log') startCardioClock();
   }
 
   function workoutDraft() {
@@ -3371,11 +3605,27 @@
     }
 
     if (action === 'open-start') {
-      const list = Store.listTemplates();
-      if (!list.length) { openLive(); return; }
+      openModal('start-kind');
+      return;
+    }
+    if (action === 'start-kind') {
+      if (btn.dataset.kind === 'cardio') { openModal('start-cardio'); return; }
       openModal('start');
       return;
     }
+    if (action === 'pick-cardio') {
+      openCardioLog(btn.dataset.id);
+      return;
+    }
+    if (action === 'resume-cardio') {
+      loadCardioSession();
+      if (ui.cardio && ui.cardio.activityId) {
+        openModal('cardio-log', { activityId: ui.cardio.activityId });
+      }
+      return;
+    }
+    if (action === 'cardio-toggle') { toggleCardioTimer(); return; }
+    if (action === 'save-cardio') { saveCardioSession(); return; }
     if (action === 'start-live' || action === 'resume-live') { closeModal(); openLive(); return; }
     if (action === 'start-template') {
       const tpl = Store.getTemplate(btn.dataset.id);
@@ -4349,6 +4599,7 @@
       }
     } catch (err) { /* ignore */ }
     ui.nutritionDate = E.todayISO();
+    loadCardioSession();
     parseHash();
     snapshotXP();
 
@@ -4400,6 +4651,13 @@
       });
     }
     Store.subscribe(function () { maybeCelebrate(); render(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible' && ui.cardio && ui.cardio.running) {
+        requestCardioWake();
+        const el = document.getElementById('cardio-timer');
+        if (el) el.textContent = E.formatCardioClock(E.cardioElapsedMs(ui.cardio, Date.now()));
+      }
+    });
     document.addEventListener('click', onClick);
     document.addEventListener('submit', function (ev) {
       const form = ev.target && ev.target.id === 'sync-auth-form' ? ev.target : (ev.target && ev.target.closest ? ev.target.closest('#sync-auth-form') : null);
@@ -4411,6 +4669,7 @@
     document.addEventListener('change', onChange);
     document.addEventListener('input', function (ev) {
       const el = ev.target;
+      if (el && el.dataset.cardio) { syncCardioField(el); return; }
       if (el && (el.dataset.draft || el.dataset.ex != null)) syncDraftFromInput(el);
       if (el && el.dataset.exk === 'name') updateExAutocomplete(el);
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);

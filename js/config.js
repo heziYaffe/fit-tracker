@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '31';
+  const APP_VERSION = '32';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },
@@ -20,6 +20,21 @@
     { id: 'cardio', label: 'קרדיו' },
     { id: 'full', label: 'כל הגוף' },
     { id: 'custom', label: 'אחר' }
+  ];
+
+  /** Default cardio picker order (most common first). Usage/recency can float items up. */
+  const CARDIO_ACTIVITIES = [
+    { id: 'run', label: 'ריצה' },
+    { id: 'walk', label: 'הליכה' },
+    { id: 'bike', label: 'אופניים' },
+    { id: 'bike-indoor', label: 'אופניים נייחות' },
+    { id: 'elliptical', label: 'אליפטיקל' },
+    { id: 'row', label: 'חתירה' },
+    { id: 'swim', label: 'שחייה' },
+    { id: 'stairs', label: 'מדרגות' },
+    { id: 'jump-rope', label: 'קפיצה בחבל' },
+    { id: 'hiit', label: 'HIIT' },
+    { id: 'other', label: 'אחר' }
   ];
 
   /**
@@ -263,6 +278,7 @@
     THEME_KEY,
     APP_VERSION,
     WORKOUT_TYPES,
+    CARDIO_ACTIVITIES,
     XP_RULES,
     LEVELS,
     METRIC_SOURCES,

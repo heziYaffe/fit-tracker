@@ -1580,6 +1580,163 @@
   }
 
 
+
+  const WHOOP_CARDIO_SPORTS = {
+    running: 'run',
+    walking: 'walk',
+    cycling: 'bike',
+    indoor_cycling: 'bike-indoor',
+    cycling_indoor: 'bike-indoor',
+    swimming: 'swim',
+    rowing: 'row',
+    rower: 'row',
+    elliptical: 'elliptical',
+    hiit: 'hiit',
+    high_intensity_interval_training: 'hiit',
+    jump_rope: 'jump-rope',
+    jumprope: 'jump-rope',
+    stairmaster: 'stairs',
+    stair_climber: 'stairs',
+    stairs: 'stairs'
+  };
+
+  function cardioCatalog() {
+    return (C.CARDIO_ACTIVITIES || []).slice();
+  }
+
+  function cardioActivityById(id) {
+    const key = String(id || '');
+    return cardioCatalog().find(function (a) { return a.id === key; }) || null;
+  }
+
+  function daysBetween(fromISO, toISO) {
+    if (!fromISO || !toISO) return null;
+    const a = parseISO(fromISO);
+    const b = parseISO(toISO);
+    if (!a || !b || isNaN(a.getTime()) || isNaN(b.getTime())) return null;
+    return Math.round((b.getTime() - a.getTime()) / 86400000);
+  }
+
+  function inferCardioActivityId(workout) {
+    if (!workout) return '';
+    if (workout.activityId && cardioActivityById(workout.activityId)) return workout.activityId;
+    const catalog = cardioCatalog();
+    const raw = normName(workout.customType || '');
+    if (raw) {
+      const folded = foldName(raw);
+      const byLabel = catalog.find(function (a) { return foldName(a.label) === folded || a.id === folded; });
+      if (byLabel) return byLabel.id;
+    }
+    const sport = String(workout.customType || workout.type || '').toLowerCase().replace(/[\s-]+/g, '_');
+    if (WHOOP_CARDIO_SPORTS[sport]) return WHOOP_CARDIO_SPORTS[sport];
+    if (workout.type === 'cardio') return 'other';
+    return '';
+  }
+
+  function cardioUsageMap(workouts) {
+    const map = {};
+    (workouts || []).forEach(function (w) {
+      const id = inferCardioActivityId(w);
+      if (!id) return;
+      if (!map[id]) map[id] = { id: id, count: 0, lastDate: '' };
+      map[id].count += 1;
+      if (!map[id].lastDate || (w.date && w.date > map[id].lastDate)) map[id].lastDate = w.date || '';
+    });
+    return map;
+  }
+
+  /** Recent use gives a small boost; frequency is the main signal. Unused items keep catalog order. */
+  function cardioRecencyBoost(lastDate, today) {
+    const days = daysBetween(lastDate, today);
+    if (days == null || days < 0) return 0;
+    if (days === 0) return 3;
+    if (days <= 7) return 2;
+    if (days <= 30) return 1;
+    return 0;
+  }
+
+  function cardioScore(usage, today) {
+    const count = usage && usage.count ? usage.count : 0;
+    const last = usage && usage.lastDate ? usage.lastDate : '';
+    return count * 3 + cardioRecencyBoost(last, today);
+  }
+
+  function sortCardioActivities(workouts, now) {
+    const today = todayISO(now);
+    const usage = cardioUsageMap(workouts);
+    const list = cardioCatalog();
+    return list.map(function (act, index) {
+      const u = usage[act.id] || { id: act.id, count: 0, lastDate: '' };
+      return {
+        id: act.id,
+        label: act.label,
+        index: index,
+        count: u.count,
+        lastDate: u.lastDate,
+        score: cardioScore(u, today)
+      };
+    }).sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.index - b.index;
+    });
+  }
+
+  function cardioElapsedMs(session, now) {
+    if (!session) return 0;
+    const base = Number(session.elapsedMs) || 0;
+    if (!session.running || !session.startedAt) return Math.max(0, base);
+    const t = now == null ? Date.now() : (now instanceof Date ? now.getTime() : Number(now));
+    return Math.max(0, base + Math.max(0, t - Number(session.startedAt)));
+  }
+
+  function formatCardioClock(ms) {
+    const s = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(r).padStart(2, '0');
+    return h > 0 ? (h + ':' + mm + ':' + ss) : (mm + ':' + ss);
+  }
+
+  function cardioDurationMin(session, now) {
+    if (!session) return 0;
+    if (session.durationMin != null && session.durationMin !== '') {
+      const n = Number(session.durationMin);
+      if (Number.isFinite(n) && n > 0) return Math.round(n);
+    }
+    const ms = cardioElapsedMs(session, now);
+    if (ms <= 0) return 0;
+    return Math.max(1, Math.round(ms / 60000));
+  }
+
+  function buildCardioWorkout(session, now) {
+    session = session || {};
+    const act = cardioActivityById(session.activityId) || { id: 'other', label: 'אחר' };
+    let label = normName(session.label || '');
+    if (act.id === 'other') label = label || act.label;
+    else label = act.label;
+    const minutes = cardioDurationMin(session, now);
+    if (!(minutes > 0)) return { ok: false, error: 'no-duration' };
+    const row = {
+      date: session.date || todayISO(now),
+      type: 'cardio',
+      customType: label,
+      activityId: act.id,
+      duration: minutes,
+      notes: session.notes || '',
+      exercises: [],
+      source: 'manual'
+    };
+    const dist = Number(session.distanceKm);
+    if (Number.isFinite(dist) && dist > 0) row.distanceKm = Math.round(dist * 100) / 100;
+    const hr = Number(session.avgHr);
+    if (Number.isFinite(hr) && hr > 0) row.avgHr = Math.round(hr);
+    const rpe = Number(session.rpe);
+    if (Number.isFinite(rpe) && rpe > 0) row.rpe = Math.round(rpe);
+    return { ok: true, workout: row };
+  }
+
   const FitEngine = {
     todayISO: todayISO,
     parseISO: parseISO,
@@ -1647,7 +1804,18 @@
     suggestFromHistory: suggestFromHistory,
     setIsPR: setIsPR,
     lookupMuscles: lookupMuscles,
-    weekMuscleLoad: weekMuscleLoad
+    weekMuscleLoad: weekMuscleLoad,
+    cardioCatalog: cardioCatalog,
+    cardioActivityById: cardioActivityById,
+    inferCardioActivityId: inferCardioActivityId,
+    cardioUsageMap: cardioUsageMap,
+    cardioRecencyBoost: cardioRecencyBoost,
+    cardioScore: cardioScore,
+    sortCardioActivities: sortCardioActivities,
+    cardioElapsedMs: cardioElapsedMs,
+    formatCardioClock: formatCardioClock,
+    cardioDurationMin: cardioDurationMin,
+    buildCardioWorkout: buildCardioWorkout
   };
 
   root.FitEngine = FitEngine;

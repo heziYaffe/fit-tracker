@@ -1946,3 +1946,29 @@ button.linkish.add-rest {
 .trend-delta.bad { color: #ff7a7a; }
 .trend-delta.neutral, .trend-delta.muted { color: var(--text-muted); }
 .trend-card.sparse { opacity: 0.85; }
+
+/* Start-kind picker and simple cardio logger */
+.kind-pick { display: grid; gap: 10px; }
+.kind-btn {
+  display: block;
+  width: 100%;
+  text-align: start;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px 16px;
+  min-height: 76px;
+  color: var(--text);
+}
+.kind-btn .title { font-size: 1.2rem; font-weight: 800; }
+.kind-btn .sub { color: var(--text-muted); margin-top: 4px; font-size: 0.88rem; }
+.kind-btn:active { transform: scale(0.98); }
+.cardio-clock { text-align: center; margin: 4px 0 16px; }
+.cardio-clock .clock {
+  font-size: 3rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+.cardio-clock-actions { margin-top: 14px; }
