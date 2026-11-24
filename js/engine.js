@@ -488,6 +488,68 @@
     return 'red';
   }
 
+  /** Fixed CSS vars — never use --accent, so the recovery theme cannot retint rings. */
+  const RING_COLOR = {
+    empty: 'var(--ring-empty)',
+    red: 'var(--ring-red)',
+    orange: 'var(--ring-orange)',
+    amber: 'var(--ring-amber)',
+    greenSoft: 'var(--ring-green-soft)',
+    green: 'var(--ring-green)',
+    strainLow: 'var(--ring-strain-low)',
+    strainMid: 'var(--ring-strain-mid)',
+    strainHigh: 'var(--ring-strain-high)'
+  };
+
+  function sleepRingZone(pct) {
+    const n = asNum(pct);
+    if (n === null) return 'empty';
+    if (n < 50) return 'red';
+    if (n < 70) return 'orange';
+    if (n < 85) return 'amber';
+    return 'green';
+  }
+
+  function strainRingZone(strain) {
+    const n = asNum(strain);
+    if (n === null) return 'empty';
+    if (n < 10) return 'strainLow';
+    if (n < 14) return 'strainMid';
+    return 'strainHigh';
+  }
+
+  function targetRingZone(ratio) {
+    const n = asNum(ratio);
+    if (n === null) return 'empty';
+    if (n < 0.4) return 'red';
+    if (n < 0.7) return 'amber';
+    if (n < 0.9) return 'greenSoft';
+    return 'green';
+  }
+
+  function ringZone(kind, value, opts) {
+    opts = opts || {};
+    if (opts.empty) return 'empty';
+    const n = asNum(value);
+    if (n === null) return 'empty';
+    if (kind === 'recovery') return recoveryZone(n) === 'yellow' ? 'amber' : (recoveryZone(n) || 'empty');
+    if (kind === 'sleepHours') return 'empty';
+    if (kind === 'sleep') {
+      if (opts.unit === 'שע׳') return 'empty';
+      return sleepRingZone(n);
+    }
+    if (kind === 'strain') return strainRingZone(n);
+    if (kind === 'consistency' || kind === 'nutrition' || kind === 'protein' || kind === 'calories' || kind === 'water' || kind === 'workout') {
+      const ratio = (opts.percent || opts.unit === '%') ? n / 100 : n;
+      return targetRingZone(ratio);
+    }
+    return 'empty';
+  }
+
+  function ringColor(kind, value, opts) {
+    return RING_COLOR[ringZone(kind, value, opts)] || RING_COLOR.empty;
+  }
+
   function homeInsight(state, iso) {
     const m = metricSnapshot(state, iso);
     const workouts = workoutsOn(state, iso) || [];
@@ -1952,7 +2014,7 @@
   const METRIC_INFO = {
     sleep: {
       title: 'שינה',
-      body: 'ביצועי שינה של Whoop מודדים כמה ישנתם ביחס לצורך השינה שלכם. 100% אומר שמילאתם את הצורך. מעל 85% נחשב טוב.'
+      body: 'ביצועי שינה של Whoop מודדים כמה ישנתם ביחס לצורך השינה שלכם. 100% אומר שמילאתם את הצורך. מתחת ל־70% זה נמוך, 70–84% בינוני, ומעל 85% נחשב טוב.'
     },
     recovery: {
       title: 'התאוששות',
@@ -1972,7 +2034,7 @@
     },
     consistency: {
       title: 'עקביות',
-      body: 'מדד של 14 יום: חצי לפי מספר האימונים מול היעד השבועי, וחצי לפי ימים שבהם עמדתם ביעד החלבון. 70% ומעלה זה רצף יציב.'
+      body: 'מדד של 14 יום: חצי לפי מספר האימונים מול היעד השבועי, וחצי לפי ימים שבהם עמדתם ביעד החלבון. מתחת ל־40% זה נמוך, 70% ומעלה זה רצף יציב, ומ־90% ליד היעד.'
     },
     nutrition: {
       title: 'תזונה',
@@ -2597,6 +2659,12 @@
     metricSnapshot: metricSnapshot,
     formatHoursClock: formatHoursClock,
     recoveryZone: recoveryZone,
+    sleepRingZone: sleepRingZone,
+    strainRingZone: strainRingZone,
+    targetRingZone: targetRingZone,
+    ringZone: ringZone,
+    ringColor: ringColor,
+    RING_COLOR: RING_COLOR,
     homeInsight: homeInsight,
     levelFromTotalXP: levelFromTotalXP,
     computeXP: computeXP,

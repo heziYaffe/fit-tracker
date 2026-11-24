@@ -621,10 +621,22 @@
   }
 
   function recoveryColor(zone) {
-    if (zone === 'green') return 'var(--whoop-green)';
-    if (zone === 'yellow') return 'var(--whoop-yellow)';
-    if (zone === 'red') return 'var(--whoop-red)';
-    return 'var(--text-dim)';
+    if (E.RING_COLOR) {
+      if (zone === 'green') return E.RING_COLOR.green;
+      if (zone === 'yellow') return E.RING_COLOR.amber;
+      if (zone === 'red') return E.RING_COLOR.red;
+      return E.RING_COLOR.empty;
+    }
+    if (zone === 'green') return 'var(--ring-green, var(--whoop-green))';
+    if (zone === 'yellow') return 'var(--ring-amber, var(--whoop-yellow))';
+    if (zone === 'red') return 'var(--ring-red, var(--whoop-red))';
+    return 'var(--ring-empty, var(--text-dim))';
+  }
+
+  function ringColorFor(kind, value, empty, opts) {
+    if (empty) return (E.RING_COLOR && E.RING_COLOR.empty) || 'var(--ring-empty, var(--text-dim))';
+    if (E.ringColor) return E.ringColor(kind, value, opts || {});
+    return 'var(--ring-empty, var(--text-dim))';
   }
 
   function whoopSportLabel(name) {
@@ -775,43 +787,43 @@
         compact: true, label: 'שינה', action: 'open-whoop-ring', kind: 'sleep',
         empty: !hasSleep, pct: hasSleep ? Number(sleepP) / 100 : 0,
         value: hasSleep ? esc(fmtPct(sleepP)) : '—',
-        color: 'var(--whoop-sleep)'
+        color: ringColorFor('sleep', sleepP, !hasSleep)
       }) +
       scoreRing({
         compact: true, label: 'התאוששות', action: 'open-whoop-ring', kind: 'recovery',
         empty: !hasRec, pct: hasRec ? Number(rec) / 100 : 0,
         value: hasRec ? esc(fmtPct(rec)) : '—',
-        color: recoveryColor(zone)
+        color: ringColorFor('recovery', rec, !hasRec)
       }) +
       scoreRing({
         compact: true, label: 'מאמץ', action: 'open-whoop-ring', kind: 'strain',
         empty: !hasStrain, pct: hasStrain ? Number(strain) / 21 : 0,
         value: hasStrain ? esc(fmtStrain(strain)) : '—',
-        color: 'var(--whoop-strain)'
+        color: ringColorFor('strain', strain, !hasStrain)
       }) +
       scoreRing({
         compact: true, label: 'עקביות', action: 'open-fit-ring', kind: 'consistency',
         empty: !(cons && cons.hasData), pct: consPct,
         value: (cons && cons.hasData) ? esc(Math.round(cons.combined * 100) + '%') : '—',
-        color: 'var(--accent)'
+        color: ringColorFor('consistency', consPct, !(cons && cons.hasData))
       }) +
       scoreRing({
         compact: true, label: cTarget ? 'תזונה' : 'חלבון', action: 'open-fit-ring', kind: 'nutrition',
         empty: nutEmpty, pct: nutPct,
         value: nutEmpty ? '—' : esc(nutVal),
-        color: 'var(--protein)'
+        color: ringColorFor('nutrition', nutPct, nutEmpty)
       }) +
       scoreRing({
         compact: true, label: 'מים', action: 'open-fit-ring', kind: 'water',
         empty: !water, pct: waterPct,
         value: water ? esc((E.formatLiters ? E.formatLiters(water) : String(water))) : '—',
-        color: 'var(--water)'
+        color: ringColorFor('water', waterPct, !water)
       }) +
       scoreRing({
         compact: true, label: 'אימון', action: 'open-fit-ring', kind: 'workout',
         empty: !week.done, pct: week.pct,
         value: week.done ? esc(week.done + '/' + week.target) : '—',
-        color: 'var(--accent-2)'
+        color: ringColorFor('workout', week.pct, !week.done)
       }) +
       '</div>';
 
@@ -865,6 +877,29 @@
     return rounded + (unit ? '\u00a0' + unit : '');
   }
 
+  function detailValueStyle(kind, stats, s) {
+    if (!stats || stats.current == null) return '';
+    var color = '';
+    if (kind === 'recovery' || kind === 'strain') color = ringColorFor(kind, stats.current, false);
+    else if (kind === 'sleep' || kind === 'sleepHours') color = ringColorFor(kind, stats.current, false, { unit: stats.unit });
+    else if (kind === 'consistency') color = ringColorFor('consistency', stats.current, false, { unit: stats.unit || '%' });
+    else if (kind === 'protein' || kind === 'nutrition') {
+      const t = E.proteinTarget ? E.proteinTarget(s) : 0;
+      if (t > 0) color = ringColorFor('protein', Number(stats.current) / t, false);
+    } else if (kind === 'calories') {
+      const t = Number(s && s.settings && s.settings.dailyCalorieTarget) || 0;
+      if (t > 0) color = ringColorFor('calories', Number(stats.current) / t, false);
+    } else if (kind === 'water') {
+      const t = E.waterTarget ? E.waterTarget(s) : 0;
+      if (t > 0) color = ringColorFor('water', Number(stats.current) / t, false);
+    } else if (kind === 'workout') {
+      const t = Number(s && s.settings && s.settings.weeklyWorkoutTarget) || 0;
+      if (t > 0) color = ringColorFor('workout', Number(stats.current) / t, false);
+    }
+    if (!color || color.indexOf('ring-empty') >= 0) return '';
+    return ' style="color:' + color + '"';
+  }
+
   function stockDeltaHtml(stats) {
     if (!stats || stats.delta == null) return '<span class="stock-delta muted">אין מספיק נתונים להשוואה</span>';
     const up = stats.delta > 0;
@@ -912,7 +947,7 @@
       '</h2>' +
       '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
       '<p class="kicker">' + esc(E.formatDayLong ? E.formatDayLong(infoDay) : infoDay) + '</p>' +
-      '<div class="stock-hero"><div class="stock-value">' + esc(formatWidgetNumber(kind, stats.current, stats.unit)) + '</div>' +
+      '<div class="stock-hero"><div class="stock-value"' + detailValueStyle(kind, stats, s) + '>' + esc(formatWidgetNumber(kind, stats.current, stats.unit)) + '</div>' +
       stockDeltaHtml(stats) + '</div>' +
       '<div class="chips widget-range">' + chips + '</div>' +
       '<div id="widget-chart"></div>' +

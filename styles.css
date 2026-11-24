@@ -72,6 +72,15 @@
   --whoop-yellow: #e6c24a;
   --whoop-red: #ff5a73;
   --whoop-track: rgba(255, 255, 255, 0.10);
+  --ring-red: #ff4d62;
+  --ring-orange: #ff8c2a;
+  --ring-amber: #f0c020;
+  --ring-green-soft: #9ee36a;
+  --ring-green: #1ed76a;
+  --ring-empty: #6e6278;
+  --ring-strain-low: #8ec8ff;
+  --ring-strain-mid: #2f9bff;
+  --ring-strain-high: #1a6fff;
 }
 
 
@@ -119,6 +128,19 @@ html[data-theme="light"] {
   --hm-work: #7a28c8;
   --hm-protein: #a03ad0;
   --hm-both: #9b2fe0;
+}
+
+
+html[data-theme="light"] {
+  --ring-red: #e03a52;
+  --ring-orange: #e07010;
+  --ring-amber: #c49200;
+  --ring-green-soft: #4f9e2a;
+  --ring-green: #0b8f42;
+  --ring-empty: #8a7a98;
+  --ring-strain-low: #4a9ee0;
+  --ring-strain-mid: #1a7ae0;
+  --ring-strain-high: #0d4fc4;
 }
 
 @property --accent { syntax: "<color>"; inherits: true; initial-value: #d36bff; }
