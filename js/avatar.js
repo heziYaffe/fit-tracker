@@ -1,12 +1,14 @@
-/* פיט — personal 3D avatar: home card, build sheet and full 3D view.
-   three.js (vendored, tree-shaken) + js/avatar3d.js load only when the 3D view opens. */
+/* פיט — personal 3D avatar: home hero, build sheet and full 3D view.
+   One WebGL renderer for the whole app: the same canvas moves between the home hero, the builder
+   preview and the full view. three.js (vendored, tree-shaken) + js/avatar3d.js load lazily. */
 (function (root) {
   'use strict';
   if (typeof document === 'undefined') return;
   const M = root.FitAvatarModel;
-  const SNAP_KEY = 'fit-avatar-snap-v1';
+  const SNAP_KEY = 'fit-avatar-snap-v2';
   const THEN_DAYS = 30;
-  const view = { el: null, engine: null, mode: 'now', kind: null, draft: null, loading: null, token: 0 };
+  const view = { el: null, engine: null, mode: 'now', kind: null, draft: null, loading: null, token: 0, heroKey: '', failed: false };
+  const reducedMotion = !!(root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   function E() { return root.FitEngine; }
   function S() { return root.FitStore; }
@@ -18,9 +20,14 @@
   }
   function today() { return E().todayISO(); }
   function cfgOf(s) { return M.normalizeConfig(s && s.settings && s.settings.avatar); }
-  function hexOf(list, id) { const x = list.find(function (i) { return i.id === id; }); return x ? x.hex : list[0].hex; }
+  function hexOf(list, id) { const x = (list || []).find(function (i) { return i.id === id; }); return x ? x.hex : (list && list[0] ? list[0].hex : '#cccccc'); }
+  function kindOf(id) { return M.KINDS.find(function (k) { return k.id === id; }) || M.KINDS[0]; }
   function lookOf(cfg) {
-    return { skin: hexOf(M.SKIN_TONES, cfg.skin), hair: cfg.hair, hairColor: hexOf(M.HAIR_COLORS, cfg.hairColor), beard: cfg.beard };
+    return {
+      kind: cfg.kind || 'human',
+      color: hexOf(M.CREATURE_COLORS[cfg.kind], cfg.color),
+      skin: hexOf(M.SKIN_TONES, cfg.skin), hair: cfg.hair, hairColor: hexOf(M.HAIR_COLORS, cfg.hairColor), beard: cfg.beard
+    };
   }
   function fmt(n) { return String(Math.round(n * 10) / 10); }
   function ltr(t) { return '<bdi dir="ltr">' + esc(t) + '</bdi>'; }
@@ -38,7 +45,7 @@
   function readSnap() { try { return JSON.parse(localStorage.getItem(SNAP_KEY) || 'null'); } catch (e) { return null; } }
   function writeSnap(k, url) { try { if (url) localStorage.setItem(SNAP_KEY, JSON.stringify({ k: k, url: url })); } catch (e) { /* quota */ } }
 
-  /* Cheap flat front silhouette for the home card when there is no fresh 3D snapshot. */
+  /* Cheap flat front silhouette, used before the 3D loads or when WebGL is unavailable. */
   function silhouette(p, look) {
     const H = p.height, T = p.torso, L = p.limbs;
     const k = 200 / (H * 1.08);
@@ -77,46 +84,123 @@
     return 'התאוששות ' + Math.round(r.pct) + '% · ' + word;
   }
 
-  function homeCard(s) {
-    if (!M || !s) return '';
+
+  function fallbackArt(params, look) {
+    if (look.kind && look.kind !== 'human') return '<span class="av-emoji" aria-hidden="true">' + kindOf(look.kind).emoji + '</span>';
+    return silhouette(params, look);
+  }
+  function moodText(r) {
+    if (r.pct == null) return '';
+    return r.zone === 'green' ? 'מלא אנרגיה' : r.zone === 'yellow' ? 'בסדר, קצת עייף' : 'עייף היום';
+  }
+  function zzz(r) {
+    return r && r.zzz ? '<span class="av-zzz' + (reducedMotion ? ' still' : '') + '" aria-hidden="true"><i>z</i><i>z</i><i>Z</i></span>' : '';
+  }
+
+  /* ---------- home hero (top of home, wraps the greeting) ---------- */
+  function homeHero(s, helloHtml) {
+    if (!M || !s) return helloHtml || '';
     const cfg = cfgOf(s);
     if (!cfg) {
       const p = M.bodyParams({ sex: 'm', values: {} });
-      return '<section class="card av-card av-empty" data-avatar="build" role="button" tabindex="0" aria-label="בניית הדמות שלי">' +
-        '<div class="av-thumb">' + silhouette(p, { skin: 'var(--text-dim)', hairColor: 'var(--text-dim)', hair: 'short' }) + '</div>' +
-        '<div class="av-meta"><p class="kicker">חדש</p><h2>הדמות שלי בתלת־ממד</h2>' +
-        '<p class="hp-legend">דמות שמשתנה לפי המשקל, ההיקפים, הכוח וההתאוששות שלך.</p>' +
-        '<span class="btn tiny primary">בנו את הדמות</span></div></section>';
+      return '<section class="av-hero av-hero-empty">' +
+        '<button type="button" class="av-hero-stage" data-avatar="build" aria-label="בניית הדמות שלי">' +
+        silhouette(p, { skin: 'var(--text-dim)', hairColor: 'var(--text-dim)', hair: 'short' }) + '</button>' +
+        '<div class="av-hero-text">' + (helloHtml || '') +
+        '<button type="button" class="btn tiny primary" data-avatar="build">בנו את הדמות שלכם</button></div></section>';
     }
     const d = dataFor(s, cfg, today());
     const look = lookOf(cfg);
-    const snap = readSnap();
     const k = hashOf({ p: d.params, l: look });
-    const thumb = snap && snap.k === k && snap.url
-      ? '<img src="' + esc(snap.url) + '" alt="" />'
-      : silhouette(d.params, look);
-    const v = d.inp.values, src = d.inp.sources;
-    const bits = [];
-    if (src.weight !== 'default') bits.push(ltr(fmt(v.weight)) + ' ק״ג');
-    if (src.waist !== 'default') bits.push('מותן ' + ltr(fmt(v.waist)));
-    const rec = recoveryText(d.params.recovery);
-    return '<section class="card av-card zone-' + (d.params.recovery.zone || 'none') + '" data-avatar="open" role="button" tabindex="0" aria-label="פתיחת הדמות בתלת־ממד">' +
-      '<div class="av-thumb">' + thumb + '</div>' +
-      '<div class="av-meta"><p class="kicker">הדמות שלי</p>' +
-      '<h2>' + (bits.length ? bits.join(' · ') : 'לפי ערכי הבסיס') + '</h2>' +
-      (rec ? '<p class="hp-legend">' + esc(rec) + '</p>' : '') +
-      '<span class="av-open">לסיבוב בתלת־ממד ›</span></div></section>';
+    const snap = readSnap();
+    const art = snap && snap.k === k && snap.url ? '<img src="' + esc(snap.url) + '" alt="" />' : fallbackArt(d.params, look);
+    const r = d.params.recovery;
+    const mood = moodText(r);
+    return '<section class="av-hero zone-' + (r.zone || 'none') + '">' +
+      '<button type="button" class="av-hero-stage" id="av-hero-slot" data-avatar="open" data-k="' + k + '" aria-label="פתיחת הדמות בתלת־ממד">' +
+      '<span class="av-fallback">' + art + '</span>' + zzz(r) + '</button>' +
+      '<div class="av-hero-text">' + (helloHtml || '') +
+      (mood ? '<button type="button" class="av-mood" data-avatar="open">' + esc(kindOf(cfg.kind).emoji) + ' ' + esc(mood) + ' · ' + ltr(Math.round(r.pct) + '%') + '</button>' : '') +
+      '</div></section>';
   }
+  // kept for older callers: the avatar now lives in the hero, so the lower card is gone
+  function homeCard() { return ''; }
 
   function settingsCard(s) {
     if (!M) return '';
     const has = !!cfgOf(s);
     return '<section class="card"><h2>הדמות שלי</h2>' +
-      '<div class="setting"><div class="grow"><div>דמות תלת־ממד</div><div class="desc">מין, מראה, גובה והיקפים. הדמות מתעדכנת לפי המדידות שלך.</div></div>' +
+      '<div class="setting"><div class="grow"><div>דמות תלת־ממד</div><div class="desc">בן אדם, דרקון, ארנב, דובי או רובוט. הדמות מתעדכנת לפי המדידות וההתאוששות שלך.</div></div>' +
       '<button type="button" class="btn tiny" data-avatar="build">' + (has ? 'עריכה' : 'בנייה') + '</button></div>' +
       (has ? '<div class="setting"><div class="grow"><div>תצוגה</div></div><button type="button" class="btn tiny" data-avatar="open">פתיחה</button></div>' : '') +
       '</section>';
   }
+
+  /* ---------- engine (one renderer) ---------- */
+  function loadEngine() {
+    if (!view.loading) {
+      const url = new URL('js/avatar3d.js', document.baseURI).href;
+      view.loading = import(url).catch(function (e) { view.loading = null; throw e; });
+    }
+    return view.loading;
+  }
+  function webglOk() {
+    try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch (e) { return false; }
+  }
+  /* Put the single canvas into `slot`. Resolves to the engine, or null (fallback art stays). */
+  function placeEngine(slot, params, look, mode, instant) {
+    if (view.failed || !webglOk()) { view.failed = true; return Promise.resolve(null); }
+    return loadEngine().then(function (mod) {
+      if (!slot.isConnected) return null;
+      if (!view.engine) view.engine = mod.mount(slot, { params: params, look: look, mode: mode });
+      else {
+        if (view.engine.host !== slot || view.engine.mode !== mode) view.engine.attach(slot, mode);
+        view.engine.setPaused(false);
+        view.engine.update(params, look, { instant: !!instant });
+      }
+      slot.classList.add('live');
+      return view.engine;
+    }).catch(function () { view.failed = true; return null; });
+  }
+
+  /* After every home render: move the live canvas into the new hero slot (or pause it). */
+  function syncHero() {
+    if (view.el) return; // a full screen owns the canvas
+    const slot = document.getElementById('av-hero-slot');
+    if (!slot) { if (view.engine) view.engine.setPaused(true); return; }
+    const s = st();
+    const cfg = cfgOf(s);
+    if (!cfg) return;
+    const d = dataFor(s, cfg, today());
+    const look = lookOf(cfg);
+    const k = slot.getAttribute('data-k');
+    const changed = k !== view.heroKey;
+    view.heroKey = k;
+    const go = function () {
+      if (!slot.isConnected) return;
+      placeEngine(slot, d.params, look, 'hero', !changed).then(function (eng) {
+        if (!eng) return;
+        const snap = readSnap();
+        if (!snap || snap.k !== k) setTimeout(function () { if (view.engine && view.engine.host === slot) writeSnap(k, view.engine.snapshot(220)); }, 600);
+      });
+    };
+    if (view.engine) go();
+    else if (root.requestIdleCallback) root.requestIdleCallback(go, { timeout: 1500 });
+    else setTimeout(go, 300);
+  }
+  function watchHome() {
+    const main = document.getElementById('main');
+    if (!main || typeof MutationObserver === 'undefined') return;
+    let queued = false;
+    new MutationObserver(function () {
+      if (queued) return;
+      queued = true;
+      Promise.resolve().then(function () { queued = false; syncHero(); });
+    }).observe(main, { childList: true });
+    syncHero();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(watchHome, 0); });
+  else setTimeout(watchHome, 0);
 
   // ---------- screen shell ----------
   function openScreen(kind, html) {
@@ -134,46 +218,41 @@
   }
   function closeScreen(silent) {
     view.token++;
-    if (view.engine) {
+    if (view.engine && view.kind === 'view' && view.snapKey && view.nowParams) {
       try {
-        if (view.kind === 'view' && view.snapKey && view.nowParams) {
-          if (view.mode !== 'now') view.engine.update(view.nowParams.params, view.nowParams.look);
-          writeSnap(view.snapKey, view.engine.snapshot(200));
-        }
+        if (view.mode !== 'now') view.engine.update(view.nowParams.params, view.nowParams.look, { instant: true });
+        writeSnap(view.snapKey, view.engine.snapshot(220));
       } catch (e) { /* ignore */ }
-      view.engine.dispose();
-      view.engine = null;
     }
+    if (view.engine) view.engine.setPaused(true);
     if (view.el && view.el.parentNode) view.el.parentNode.removeChild(view.el);
-    view.el = null; view.kind = null; view.snapKey = null; view.nowParams = null;
+    const was = !!view.el;
+    view.el = null; view.kind = null; view.snapKey = null; view.nowParams = null; view.heroKey = '';
     document.documentElement.classList.remove('av-lock');
-    if (!silent && root.FitUI && root.FitUI.render) root.FitUI.render();
-  }
-
-  function loadEngine() {
-    if (!view.loading) {
-      const url = new URL('js/avatar3d.js', document.baseURI).href;
-      view.loading = import(url).catch(function (e) { view.loading = null; throw e; });
+    if (!silent && was) {
+      if (root.FitUI && root.FitUI.render) root.FitUI.render();
+      syncHero();
     }
-    return view.loading;
   }
-  function webglOk() {
-    try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch (e) { return false; }
-  }
-
   function mountStage(stage, params, look) {
     const tok = view.token;
-    if (!webglOk()) { stage.innerHTML = '<p class="av-stage-msg">המכשיר לא תומך בתלת־ממד. מוצגת דמות שטוחה.</p>' + silhouette(params, look); return Promise.resolve(null); }
-    return loadEngine().then(function (mod) {
-      if (tok !== view.token || !stage.isConnected) return null;
-      stage.innerHTML = '';
-      view.engine = mod.mount(stage, { params: params, look: look });
-      return view.engine;
-    }).catch(function () {
+    stage.innerHTML = '<span class="av-fallback">' + fallbackArt(params, look) + '</span>' + zzz(params.recovery);
+    return placeEngine(stage, params, look, 'full', true).then(function (eng) {
       if (tok !== view.token) return null;
-      stage.innerHTML = '<p class="av-stage-msg">לא הצלחנו לטעון את התלת־ממד. מוצגת דמות שטוחה.</p>' + silhouette(params, look);
-      return null;
+      if (!eng) {
+        const msg = document.createElement('p');
+        msg.className = 'av-stage-msg';
+        msg.textContent = 'התלת־ממד לא זמין במכשיר הזה. מוצגת דמות שטוחה.';
+        stage.appendChild(msg);
+      }
+      return eng;
     });
+  }
+  function setZzz(stage, r) {
+    if (!stage) return;
+    const old = stage.querySelector('.av-zzz');
+    if (old) old.remove();
+    if (r && r.zzz) stage.insertAdjacentHTML('beforeend', zzz(r));
   }
 
   // ---------- full 3D view ----------
@@ -185,7 +264,7 @@
     const el = openScreen('view',
       '<header class="av-top"><button type="button" class="av-x" data-avatar="close" aria-label="סגירה">×</button>' +
       '<h2>הדמות שלי</h2><button type="button" class="btn tiny" data-avatar="build">עריכה</button></header>' +
-      '<div class="av-stage" id="av-stage"><p class="av-stage-msg">טוען תלת־ממד…</p></div>' +
+      '<div class="av-stage" id="av-stage"></div>' +
       '<div class="av-seg" role="tablist"><button type="button" class="chip active" data-avatar="mode" data-mode="now">היום</button>' +
       '<button type="button" class="chip" data-avatar="mode" data-mode="then">לפני ' + THEN_DAYS + ' יום</button></div>' +
       '<div class="av-info" id="av-info"></div>');
@@ -243,33 +322,45 @@
     view.mode = mode === 'then' ? 'then' : 'now';
     view.el.querySelectorAll('[data-avatar="mode"]').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === view.mode); });
     const cur = renderInfo();
-    if (view.engine) view.engine.update(cur.params, lookOf(cfgOf(st())));
+    setZzz(view.el.querySelector('#av-stage'), cur.params.recovery);
+    if (view.engine) view.engine.update(cur.params, lookOf(cfgOf(st())), { dur: 600 });
   }
 
   // ---------- build sheet ----------
+  const SLIDERS = {
+    height: { min: 140, max: 210, step: 1, unit: 'ס״מ' },
+    weight: { min: 40, max: 160, step: 0.5, unit: 'ק״ג' },
+    chest: { min: 70, max: 140, step: 0.5, unit: 'ס״מ' },
+    waist: { min: 55, max: 140, step: 0.5, unit: 'ס״מ' },
+    hips: { min: 70, max: 140, step: 0.5, unit: 'ס״מ' },
+    arm: { min: 20, max: 50, step: 0.5, unit: 'ס״מ' },
+    thigh: { min: 35, max: 80, step: 0.5, unit: 'ס״מ' }
+  };
   function openBuilder() {
     const s = st();
     view.draft = M.prefillConfig(s, s.settings && s.settings.avatar);
     view.prefilled = {};
+    view.link = true;
+    view.linkFrom = null;
     const raw = (s.settings && s.settings.avatar && s.settings.avatar.base) || {};
     ['weight'].concat(M.FIELDS).forEach(function (k) { if ((raw[k] === '' || raw[k] == null) && view.draft.base[k] !== '') view.prefilled[k] = true; });
     const el = openScreen('build',
       '<header class="av-top"><button type="button" class="av-x" data-avatar="close" aria-label="סגירה">×</button>' +
       '<h2>בניית הדמות</h2><button type="button" class="btn tiny primary" data-avatar="save">שמירה</button></header>' +
-      '<div class="av-stage small" id="av-stage"><p class="av-stage-msg">טוען תלת־ממד…</p></div>' +
+      '<div class="av-kinds" id="av-kinds"></div>' +
+      '<div class="av-stage small" id="av-stage"></div>' +
       '<form class="av-form" id="av-form" onsubmit="return false"></form>');
     renderForm();
-    const p = previewParams();
-    mountStage(el.querySelector('#av-stage'), p, lookOf(view.draft));
+    mountStage(el.querySelector('#av-stage'), previewParams(), lookOf(view.draft));
   }
 
+  /* The preview uses ONLY the builder values (never stored measurements), plus today's strength/recovery. */
   function previewParams() {
     const d = view.draft;
     const values = {};
     ['height', 'weight'].concat(M.FIELDS).forEach(function (k) { if (d.base[k] !== '') values[k] = d.base[k]; });
-    // the preview shows today's strength/recovery too, so the look matches the real view
     const live = M.gatherInputs(st(), d, today());
-    return M.bodyParams({ sex: d.sex, values: values, strength: live.strength, recoveryPct: live.recoveryPct });
+    return M.bodyParams({ kind: d.kind, sex: d.sex, values: values, strength: live.strength, recoveryPct: live.recoveryPct });
   }
 
   function chips(name, list, cur) {
@@ -282,36 +373,66 @@
       return '<button type="button" class="av-sw' + (x.id === cur ? ' active' : '') + '" style="background:' + x.hex + '" data-avatar="pick" data-field="' + name + '" data-val="' + x.id + '" aria-label="' + esc(x.label) + '"></button>';
     }).join('') + '</div>';
   }
+  function sliderVal(k) {
+    const d = view.draft;
+    return d.base[k] !== '' ? Number(d.base[k]) : M.SEX_DEFAULTS[d.sex][k];
+  }
+  function sliderOut(k) {
+    const d = view.draft;
+    return d.base[k] === '' ? 'ממוצע' : fmt(d.base[k]) + ' ' + SLIDERS[k].unit;
+  }
   function renderForm() {
     const f = view.el && view.el.querySelector('#av-form');
+    const kinds = view.el && view.el.querySelector('#av-kinds');
     if (!f) return;
     const d = view.draft;
-    const num = function (k, label, unit, hint) {
-      const ph = M.SEX_DEFAULTS[d.sex][k];
-      return '<label class="av-num"><span>' + esc(label) + '</span><input type="number" inputmode="decimal" step="0.5" data-avatar-num="' + k + '" value="' + esc(d.base[k]) + '" placeholder="' + ph + '" />' +
-        '<i>' + unit + '</i>' + (view.prefilled[k] ? '<small>מולא מהמדידה האחרונה</small>' : hint ? '<small>' + esc(hint) + '</small>' : '') + '</label>';
+    const human = d.kind === 'human';
+    if (kinds) {
+      kinds.innerHTML = M.KINDS.map(function (k) {
+        return '<button type="button" class="av-kind' + (k.id === d.kind ? ' active' : '') + '" data-avatar="pick" data-field="kind" data-val="' + k.id + '">' +
+          '<span>' + k.emoji + '</span>' + esc(k.label) + '</button>';
+      }).join('');
+    }
+    const slider = function (k, label, hint) {
+      const c = SLIDERS[k];
+      const note = view.prefilled[k] ? 'מולא מהמדידה האחרונה' : hint || '';
+      return '<label class="av-slider"><span class="av-sl-top"><span>' + esc(label) + '</span><output data-avatar-out="' + k + '">' + esc(sliderOut(k)) + '</output></span>' +
+        '<input type="range" min="' + c.min + '" max="' + c.max + '" step="' + c.step + '" value="' + sliderVal(k) + '" data-avatar-num="' + k + '" dir="ltr" />' +
+        (note ? '<small>' + esc(note) + '</small>' : '') + '</label>';
     };
     f.innerHTML =
       '<div class="card"><h3>מראה</h3>' +
-      '<div class="av-row"><span>מין</span>' + chips('sex', [{ id: 'm', label: 'גבר' }, { id: 'f', label: 'אישה' }], d.sex) + '</div>' +
-      '<div class="av-row"><span>גוון עור</span>' + swatches('skin', M.SKIN_TONES, d.skin) + '</div>' +
-      '<div class="av-row"><span>שיער</span>' + chips('hair', M.HAIR_STYLES, d.hair) + '</div>' +
-      '<div class="av-row"><span>צבע שיער</span>' + swatches('hairColor', M.HAIR_COLORS, d.hairColor) + '</div>' +
-      (d.sex === 'm' ? '<div class="av-row"><span>זקן</span>' + chips('beard', M.BEARDS, d.beard) + '</div>' : '') +
+      '<div class="av-row"><span>מבנה גוף</span>' + chips('sex', [{ id: 'm', label: 'גבר' }, { id: 'f', label: 'אישה' }], d.sex) + '</div>' +
+      (human
+        ? '<div class="av-row"><span>גוון עור</span>' + swatches('skin', M.SKIN_TONES, d.skin) + '</div>' +
+          '<div class="av-row"><span>שיער</span>' + chips('hair', M.HAIR_STYLES, d.hair) + '</div>' +
+          '<div class="av-row"><span>צבע שיער</span>' + swatches('hairColor', M.HAIR_COLORS, d.hairColor) + '</div>' +
+          (d.sex === 'm' ? '<div class="av-row"><span>זקן</span>' + chips('beard', M.BEARDS, d.beard) + '</div>' : '')
+        : '<div class="av-row"><span>צבע</span>' + swatches('color', M.CREATURE_COLORS[d.kind], d.color) + '</div>') +
       '</div>' +
-      '<div class="card"><h3>מידות בסיס</h3><p class="hp-legend">מדידות חדשות שתוסיפו בהמשך יעדכנו את הדמות לבד. שדה ריק = ערך ממוצע.</p>' +
-      '<div class="av-nums">' +
-      num('height', 'גובה', 'ס״מ') + num('weight', 'משקל', 'ק״ג') + num('chest', 'חזה', 'ס״מ') + num('waist', 'מותן', 'ס״מ', 'בגובה הטבור') +
-      num('hips', 'ירכיים', 'ס״מ') + num('arm', 'יד', 'ס״מ', 'זרוע, בנקודה הרחבה') + num('thigh', 'ירך', 'ס״מ') +
-      '</div></div>';
+      '<div class="card"><h3>מידות</h3><p class="hp-legend">הזיזו והדמות משתנה מיד. מדידות חדשות שתוסיפו בהמשך יעדכנו אותה לבד.</p>' +
+      slider('height', 'גובה') + slider('weight', 'משקל') +
+      '<label class="av-link"><input type="checkbox" data-avatar-link' + (view.link ? ' checked' : '') + ' /> ההיקפים זזים יחד עם המשקל</label>' +
+      slider('chest', 'חזה') + slider('waist', 'מותן', 'בגובה הטבור') + slider('hips', 'ירכיים') +
+      slider('arm', 'יד', 'זרוע, בנקודה הרחבה') + slider('thigh', 'ירך') +
+      '</div>';
+  }
+  function setSliderUI(k) {
+    if (!view.el) return;
+    const out = view.el.querySelector('[data-avatar-out="' + k + '"]');
+    if (out) out.textContent = sliderOut(k);
+    const inp = view.el.querySelector('[data-avatar-num="' + k + '"]');
+    if (inp && document.activeElement !== inp) inp.value = sliderVal(k);
   }
 
-  let previewTimer = 0;
-  function refreshPreview() {
-    clearTimeout(previewTimer);
-    previewTimer = setTimeout(function () {
-      if (view.engine && view.kind === 'build') view.engine.update(previewParams(), lookOf(view.draft));
-    }, 120);
+  let previewRaf = 0;
+  function refreshPreview(dur) {
+    if (previewRaf) return;
+    previewRaf = requestAnimationFrame(function () {
+      previewRaf = 0;
+      if (view.engine && view.kind === 'build') view.engine.update(previewParams(), lookOf(view.draft), { dur: dur || 220 });
+      setZzz(view.el && view.el.querySelector('#av-stage'), previewParams().recovery);
+    });
   }
 
   function saveBuilder() {
@@ -335,31 +456,51 @@
     else if (a === 'save') { ev.preventDefault(); saveBuilder(); }
     else if (a === 'pick' && view.draft) {
       ev.preventDefault();
-      view.draft[t.dataset.field] = t.dataset.val;
-      if (t.dataset.field === 'sex') {
+      const field = t.dataset.field;
+      view.draft[field] = t.dataset.val;
+      if (field === 'sex') {
         if (view.draft.sex === 'f') view.draft.beard = 'none';
         if (view.draft.sex === 'f' && view.draft.hair === 'short') view.draft.hair = 'long';
       }
+      if (field === 'kind') {
+        const pal = M.CREATURE_COLORS[view.draft.kind] || [];
+        if (pal.length && !pal.some(function (c) { return c.id === view.draft.color; })) view.draft.color = pal[0].id;
+      }
+      const sc = view.el ? view.el.scrollTop : 0;
       renderForm();
-      refreshPreview();
+      if (view.el) view.el.scrollTop = sc;
+      refreshPreview(field === 'kind' ? 1 : 260);
     }
   });
-  document.addEventListener('input', function (ev) {
+  function onSlide(ev, done) {
     const t = ev.target;
     if (!t || !t.getAttribute || !view.draft) return;
+    if (t.hasAttribute('data-avatar-link')) { view.link = !!t.checked; return; }
     const k = t.getAttribute('data-avatar-num');
     if (!k) return;
     const n = Number(t.value);
-    view.draft.base[k] = t.value === '' || !(n > 0) ? '' : Math.max(M.RANGES[k][0], Math.min(M.RANGES[k][1], n));
+    if (!(n > 0)) return;
+    const val = Math.max(M.RANGES[k][0], Math.min(M.RANGES[k][1], n));
+    if (k === 'weight' && view.link) {
+      if (!view.linkFrom) {
+        const from = {};
+        M.FIELDS.forEach(function (f) { from[f] = sliderVal(f); });
+        view.linkFrom = { base: from, weight: sliderVal('weight') };
+      }
+      const scaled = M.scaleWithWeight(view.linkFrom.base, view.linkFrom.weight, val);
+      M.FIELDS.forEach(function (f) { view.draft.base[f] = scaled[f]; view.prefilled[f] = false; setSliderUI(f); });
+    }
+    view.draft.base[k] = val;
+    view.prefilled[k] = false;
+    setSliderUI(k);
+    if (done) view.linkFrom = null;
     refreshPreview();
-  });
+  }
+  document.addEventListener('input', function (ev) { onSlide(ev, false); });
+  document.addEventListener('change', function (ev) { onSlide(ev, true); });
   document.addEventListener('keydown', function (ev) {
     if (ev.key === 'Escape' && view.el) closeScreen();
-    if ((ev.key === 'Enter' || ev.key === ' ') && ev.target && ev.target.classList && ev.target.classList.contains('av-card')) {
-      ev.preventDefault();
-      ev.target.click();
-    }
   });
 
-  root.FitAvatar = { homeCard: homeCard, settingsCard: settingsCard, open: openView, build: openBuilder, close: closeScreen, silhouette: silhouette };
+  root.FitAvatar = { homeHero: homeHero, homeCard: homeCard, settingsCard: settingsCard, open: openView, build: openBuilder, close: closeScreen, silhouette: silhouette, syncHero: syncHero };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -35,6 +35,25 @@
     { id: 'short', label: 'קצר' },
     { id: 'full', label: 'מלא' }
   ];
+  /* Character types. Non-human ones are chibi creatures built from the same body parameters. */
+  const KINDS = [
+    { id: 'human', label: 'בן אדם', emoji: '🧍' },
+    { id: 'dragon', label: 'דרקון', emoji: '🐉' },
+    { id: 'bunny', label: 'ארנב', emoji: '🐰' },
+    { id: 'bear', label: 'דובי', emoji: '🐻' },
+    { id: 'robot', label: 'רובוט', emoji: '🤖' }
+  ];
+  const CREATURE_COLORS = {
+    dragon: [{ id: 'mint', label: 'מנטה', hex: '#7fd8a6' }, { id: 'lilac', label: 'לילך', hex: '#b79cff' }, { id: 'coral', label: 'אלמוג', hex: '#ff8f7a' }, { id: 'sky', label: 'תכלת', hex: '#7cc4ff' }],
+    bunny: [{ id: 'snow', label: 'לבן', hex: '#f4f0f2' }, { id: 'cream', label: 'שמנת', hex: '#ecd9bd' }, { id: 'gray', label: 'אפור', hex: '#a9a6b2' }, { id: 'pink', label: 'ורוד', hex: '#f5bfd3' }],
+    bear: [{ id: 'brown', label: 'חום', hex: '#9a6a46' }, { id: 'honey', label: 'דבש', hex: '#d9a35b' }, { id: 'polar', label: 'קוטב', hex: '#eeeae4' }, { id: 'cocoa', label: 'קקאו', hex: '#5e4033' }],
+    robot: [{ id: 'silver', label: 'כסף', hex: '#c3c8d4' }, { id: 'teal', label: 'טורקיז', hex: '#4cc3c0' }, { id: 'orange', label: 'כתום', hex: '#ff9f4a' }, { id: 'violet', label: 'סגול', hex: '#a57bff' }]
+  };
+  /* How strongly each circumference follows a weight change when it was measured at another weight.
+     Roughly girth ∝ mass^e; the waist carries most of the change. */
+  const WEIGHT_EXP = { chest: 0.45, waist: 0.8, hips: 0.55, arm: 0.5, thigh: 0.5 };
+  /* Stylized look: girth differences from the neutral body are exaggerated so changes are visible. */
+  const STYLE_GAIN = 1.4;
   const FIELDS = ['chest', 'waist', 'hips', 'arm', 'thigh'];
   const FIELD_LABELS = { weight: 'משקל', height: 'גובה', chest: 'חזה', waist: 'מותן', hips: 'ירכיים', arm: 'יד', thigh: 'ירך' };
 
@@ -81,8 +100,12 @@
       const n = num(cfg.base && cfg.base[k]);
       base[k] = n === null ? '' : clamp(n, RANGES[k][0], RANGES[k][1]);
     });
+    const kind = pick(KINDS, cfg.kind, 'human');
+    const palette = CREATURE_COLORS[kind] || [];
     return {
-      v: 1,
+      v: 2,
+      kind: kind,
+      color: palette.length ? pick(palette, cfg.color, palette[0].id) : '',
       sex: sex,
       skin: pick(SKIN_TONES, cfg.skin, 's2'),
       hair: pick(HAIR_STYLES, cfg.hair, sex === 'f' ? 'long' : 'short'),
@@ -185,6 +208,17 @@
     choose('height', null);
     choose('weight', latestOnOrBefore(state && state.weights, 'weight', date));
     FIELDS.forEach(function (k) { choose(k, latestOnOrBefore(state && state.measures, k, date)); });
+    // A circumference measured at another weight follows the newer weight (marked "scaled", never "measured").
+    if (sources.weight !== 'default') {
+      FIELDS.forEach(function (k) {
+        if (sources[k] === 'default' || !dates[k] || !dates.weight || dates[k] >= dates.weight) return;
+        let ref = latestOnOrBefore(state && state.weights, 'weight', dates[k]);
+        if (!ref && sources[k] === 'base' && num(cfg.base.weight) !== null) ref = { value: num(cfg.base.weight) };
+        if (!ref || !(ref.value > 0) || ref.value === values.weight) return;
+        values[k] = round(values[k] * Math.pow(values.weight / ref.value, WEIGHT_EXP[k]), 1);
+        sources[k] = 'scaled';
+      });
+    }
     let recoveryPct = null;
     const E = root.FitEngine;
     if (E && E.metricSnapshot && state && date) {
@@ -194,6 +228,7 @@
     const st = strengthGains(state, date);
     return {
       date: date || '',
+      kind: cfg.kind,
       sex: cfg.sex,
       values: values,
       sources: sources,
@@ -212,6 +247,56 @@
     return { w: a, d: a * k };
   }
 
+  /** Builder: moving the weight slider moves the circumferences with it (from the values at drag start). */
+  function scaleWithWeight(base, fromWeight, toWeight) {
+    const out = Object.assign({}, base);
+    const a = num(fromWeight), b = num(toWeight);
+    if (a === null || b === null) return out;
+    FIELDS.forEach(function (k) {
+      const v = num(base[k]);
+      if (v === null) return;
+      out[k] = round(clamp(v * Math.pow(b / a, WEIGHT_EXP[k]), RANGES[k][0], RANGES[k][1]), 1);
+    });
+    return out;
+  }
+
+  /** Recovery → mood/animation. null recovery = calm neutral (never pretend to know). */
+  function moodFor(pct) {
+    const rec = pct == null || !isFinite(Number(pct)) ? null : clamp(Number(pct), 0, 100);
+    const zone = rec === null ? null : rec >= 67 ? 'green' : rec >= 34 ? 'yellow' : 'red';
+    const tired = rec === null ? 0 : clamp((70 - rec) / 60, 0, 1);
+    const fresh = rec === null ? 0 : clamp((rec - 60) / 35, 0, 1);
+    return {
+      pct: rec,
+      zone: zone,
+      mood: zone === 'green' ? 'happy' : zone === 'red' ? 'tired' : 'neutral',
+      slouch: round(tired, 3),
+      eyeOpen: round(1 - 0.6 * tired, 3),
+      earDroop: round(tired, 3),
+      bounce: round(fresh, 3),
+      breathRate: round(0.22 + 0.13 * fresh - 0.08 * tired + 0.08, 3), // breaths per second
+      zzz: zone === 'red'
+    };
+  }
+
+  /** Chibi creature proportions from the same body parameters (meters, before the creature's own style). */
+  function creatureShape(p) {
+    const ref = bodyParams({ sex: p.sex, values: {} });
+    const sc = p.height / 1.75;
+    const width = clamp(p.torso.waistW / ref.torso.waistW, 0.6, 1.8);
+    const chestW = clamp(p.torso.chestW / ref.torso.chestW, 0.7, 1.6);
+    return {
+      scale: round(sc, 3),
+      bodyR: round(0.2 * sc * (0.75 + 0.25 * chestW) * (1 + 0.12 * p.softness), 4),
+      bellyR: round(0.17 * sc * width * (1 + 0.35 * p.softness), 4),
+      headR: round(0.19 * sc, 4),
+      armR: round(p.limbs.upperArmR * 1.25 * (1 + 0.15 * p.softness), 4),
+      legR: round(p.limbs.thighR * 0.95 * (1 + 0.1 * p.softness), 4),
+      armLen: round(0.2 * sc, 4),
+      legLen: round(0.14 * sc, 4)
+    };
+  }
+
   /** Pure mapping: inputs → body parameters for the renderer (all lengths in meters). */
   function bodyParams(inp) {
     const sex = inp && inp.sex === 'f' ? 'f' : 'm';
@@ -220,14 +305,19 @@
     function val(k) { const n = num(v[k]); return clamp(n === null ? def[k] : n, RANGES[k][0], RANGES[k][1]); }
     const heightCm = val('height');
     const weightKg = val('weight');
-    const chest = val('chest');
-    const waist = val('waist');
-    const hips = val('hips');
-    const arm = val('arm');
-    const thigh = val('thigh');
+    function styled(k) {
+      const raw = val(k);
+      return clamp(def[k] + (raw - def[k]) * STYLE_GAIN, RANGES[k][0] * 0.85, RANGES[k][1] * 1.1);
+    }
+    const waistRaw = val('waist');
+    const chest = styled('chest');
+    const waist = styled('waist');
+    const hips = styled('hips');
+    const arm = styled('arm');
+    const thigh = styled('thigh');
     const h = heightCm / 100;
     const bmi = weightKg / (h * h);
-    const whtr = waist / heightCm;
+    const whtr = waistRaw / heightCm;
     // softness: 0 lean/defined … 1 soft. BMI alone can't tell muscle from fat, so waist-to-height carries
     // almost half the weight (WHtR 0.43 lean → 0.60 high).
     const softness = clamp(0.55 * norm01(bmi, 21, 32) + 0.45 * norm01(whtr, 0.43, 0.6), 0, 1);
@@ -247,11 +337,10 @@
     const chestVol = vol('chest');
     const shoulderVol = vol('shoulders');
 
-    const rec = inp && inp.recoveryPct != null && isFinite(Number(inp.recoveryPct)) ? clamp(Number(inp.recoveryPct), 0, 100) : null;
-    const zone = rec === null ? null : rec >= 67 ? 'green' : rec >= 34 ? 'yellow' : 'red';
-    const slouch = rec === null ? 0 : round(clamp((70 - rec) / 60, 0, 1), 3);
+    const mood = moodFor(inp && inp.recoveryPct);
 
     return {
+      kind: inp && inp.kind ? inp.kind : 'human',
       sex: sex,
       height: round(h, 3),
       bmi: round(bmi, 1),
@@ -262,7 +351,7 @@
         chestW: round(ch.w * backVol, 4), chestD: round(ch.d * chestVol, 4),
         waistW: round(wa.w, 4), waistD: round(wa.d, 4),
         hipsW: round(hi.w, 4), hipsD: round(hi.d, 4),
-        belly: round(softness * 0.035 * (h / 1.75), 4),
+        belly: round(softness * 0.07 * (h / 1.75), 4),
         shoulderW: round((ch.w * (sex === 'f' ? 1.12 : 1.22)) * shoulderVol, 4)
       },
       limbs: {
@@ -276,14 +365,14 @@
         chest: round(gain('chest'), 3), shoulders: round(gain('shoulders'), 3), arms: round(gain('arms'), 3),
         back: round(gain('back'), 3), core: round(gain('core'), 3), legs: round(gain('legs'), 3)
       },
-      recovery: { pct: rec, zone: zone, slouch: slouch, mood: zone === 'green' ? 'happy' : zone === 'red' ? 'tired' : 'neutral' }
+      recovery: mood
     };
   }
 
   /** Short Hebrew lines for the "what shapes your avatar" list. */
   function explain(inp) {
     const lines = [];
-    const src = { measured: 'מדוד', base: 'בסיס', default: 'ברירת מחדל' };
+    const src = { measured: 'מדוד', base: 'בסיס', scaled: 'לפי משקל', default: 'ברירת מחדל' };
     ['weight', 'height'].concat(FIELDS).forEach(function (k) {
       const unit = k === 'weight' ? 'ק״ג' : 'ס״מ';
       lines.push({ key: k, label: FIELD_LABELS[k], value: round(inp.values[k], 1) + ' ' + unit, source: inp.sources[k], sourceLabel: src[inp.sources[k]] });
@@ -302,6 +391,7 @@
   }
 
   const FitAvatarModel = {
+    KINDS, CREATURE_COLORS, WEIGHT_EXP, STYLE_GAIN, scaleWithWeight, moodFor, creatureShape,
     SKIN_TONES, HAIR_STYLES, HAIR_COLORS, BEARDS, FIELDS, FIELD_LABELS, SEX_DEFAULTS, RANGES,
     REGIONS, REGION_LABELS, MAX_GAIN, MAX_VOLUME,
     normalizeConfig, prefillConfig, latestOnOrBefore, strengthGains, gatherInputs,

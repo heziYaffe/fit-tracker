@@ -47,8 +47,11 @@ const st = {
 inp = M.gatherInputs(st, { sex: 'm', base: { height: 180, chest: 100 }, baseDate: '2026-11-01' }, today);
 assert(inp.values.weight === 84.4 && inp.sources.weight === 'measured', 'latest weight');
 assert(inp.values.waist === 90 && inp.dates.waist === '2026-11-22', 'latest waist, field-wise');
-assert(inp.values.arm === 35 && inp.sources.arm === 'measured', 'arm from older row when newest is empty');
-assert(inp.values.chest === 100 && inp.sources.chest === 'base', 'newer base beats older measurement');
+assert(inp.sources.arm === 'scaled' && Math.abs(inp.values.arm - Math.round(35 * Math.pow(84.4 / 88, 0.5) * 10) / 10) < 1e-9, 'arm measured at 88 kg follows the newer 84.4 kg weight, got ' + inp.values.arm);
+assert(inp.sources.waist === 'measured', 'waist measured after the last weight stays measured');
+assert(inp.sources.chest === 'scaled' && Math.abs(inp.values.chest - Math.round(100 * Math.pow(84.4 / 88, 0.45) * 10) / 10) < 1e-9, 'newer base beats older measurement, then follows the newer weight');
+const noW = M.gatherInputs(Object.assign({}, st, { weights: [] }), { sex: 'm', base: { height: 180, chest: 100 }, baseDate: '2026-11-01' }, today);
+assert(noW.values.chest === 100 && noW.sources.chest === 'base', 'newer base beats older measurement');
 assert(inp.recoveryPct === 22, 'today recovery read');
 const then = M.gatherInputs(st, { sex: 'm', base: { height: 180 }, baseDate: '2026-11-01' }, E.addDays(today, -30));
 assert(then.values.weight === 88 && then.values.waist === 94, 'then = values as of 30 days ago');
@@ -73,7 +76,9 @@ assert(P({ chest: 115 }).torso.chestW > P({ chest: 95 }).torso.chestW, 'bigger c
 assert(P({ hips: 110 }).torso.hipsW > P({ hips: 95 }).torso.hipsW, 'bigger hips → wider');
 assert(P({ arm: 40 }).limbs.upperArmR > P({ arm: 30 }).limbs.upperArmR, 'bigger arm → thicker');
 assert(P({ thigh: 64 }).limbs.thighR > P({ thigh: 52 }).limbs.thighR, 'bigger thigh → thicker');
-assert(Math.abs(P({ arm: 31.4159 }).limbs.upperArmR - 0.05) < 1e-3, 'arm circumference → radius C/2π');
+assert(Math.abs(P({ arm: 33 }).limbs.upperArmR - 0.33 / (2 * Math.PI)) < 1e-3, 'default arm circumference → radius C/2π');
+const a40 = P({ arm: 40 }).limbs.upperArmR, a33 = P({ arm: 33 }).limbs.upperArmR;
+assert(Math.abs((a40 - a33) - M.STYLE_GAIN * 0.07 / (2 * Math.PI)) < 1e-3, 'stylized: girth differences exaggerated by STYLE_GAIN');
 assert(P({ height: 190 }).height === 1.9, 'height in meters');
 assert(P({ height: 400 }).height === 2.15 && P({ height: 50 }).height === 1.3, 'height clamped');
 
@@ -123,5 +128,38 @@ assert(M.normalizeConfig(null) === null, 'no config → null');
 const pre = M.prefillConfig(st, null);
 assert(pre.base.weight === 84.4 && pre.base.waist === 90 && pre.base.chest === 104 && pre.base.thigh === 58, 'prefill from stored data');
 assert(pre.base.height === '', 'height not invented');
+
+// ---- visible change across realistic ranges (builder sliders)
+const w70 = P({ height: 178, weight: 70, waist: 80 }), w110 = P({ height: 178, weight: 110, waist: 112 });
+assert(w110.torso.waistW / w70.torso.waistW > 1.45, 'waist 80→112 visibly wider: ' + (w110.torso.waistW / w70.torso.waistW));
+assert(w110.torso.belly - w70.torso.belly > 0.04, 'belly grows by >4cm');
+
+// ---- weight-linked sliders
+const linked = M.scaleWithWeight({ chest: 100, waist: 90, hips: 100, arm: 35, thigh: 58, height: 178 }, 80, 100);
+assert(linked.waist > 105 && linked.waist < 110, 'waist follows weight strongly, got ' + linked.waist);
+assert(linked.chest > 100 && linked.chest / 100 < linked.waist / 90, 'chest follows less');
+assert(linked.height === 178, 'height untouched');
+assert(M.scaleWithWeight({ waist: '' }, 80, 100).waist === '', 'empty stays empty');
+
+// ---- mood from recovery
+const tired = M.moodFor(15), fresh = M.moodFor(92), none = M.moodFor(null);
+assert(tired.zzz && tired.eyeOpen < 0.6 && tired.earDroop > 0.8 && tired.bounce === 0, 'tired: sleepy eyes, droopy ears, zzz');
+assert(!fresh.zzz && fresh.eyeOpen === 1 && fresh.earDroop === 0 && fresh.bounce > 0.8, 'fresh: perky + bounce');
+assert(fresh.breathRate > tired.breathRate, 'tired breathes slower');
+assert(none.zone === null && none.bounce === 0 && none.slouch === 0 && !none.zzz, 'no recovery → calm neutral');
+
+// ---- creatures share the body mapping
+const cLean = M.creatureShape(P({ height: 178, weight: 70, waist: 78, arm: 32, thigh: 52 }));
+const cSoft = M.creatureShape(P({ height: 178, weight: 110, waist: 112, arm: 40, thigh: 64 }));
+const cTall = M.creatureShape(P({ height: 200 }));
+assert(cSoft.bellyR / cLean.bellyR > 1.5, 'soft creature has a much rounder belly');
+assert(cSoft.armR > cLean.armR && cSoft.legR > cLean.legR, 'limb thickness from arm/thigh');
+assert(cTall.scale > M.creatureShape(P({ height: 160 })).scale, 'height scale');
+const cStrong = M.creatureShape(P({ arm: 35 }, { strength: { arms: 0.5 } }));
+assert(cStrong.armR > M.creatureShape(P({ arm: 35 })).armR, 'strength thickens creature arms');
+const kc = M.normalizeConfig({ kind: 'dragon', color: 'nope' });
+assert(kc.kind === 'dragon' && kc.color === 'mint', 'creature config + default color');
+assert(M.normalizeConfig({ kind: 'unicorn' }).kind === 'human', 'unknown kind → human');
+assert(M.gatherInputs(empty, kc, today).kind === 'dragon' && M.bodyParams(M.gatherInputs(empty, kc, today)).kind === 'dragon', 'kind flows to params');
 
 console.log('avatar tests passed (' + n + ' assertions)');

@@ -1130,12 +1130,11 @@
       '</div>';
 
     return install + emptyDemoCta() +
-      hello +
+      (root.FitAvatar && root.FitAvatar.homeHero ? root.FitAvatar.homeHero(s, hello) : hello) +
       renderDatePill(info) +
       renderMilestoneCard(s) +
       smartBtn +
       renderHomeDashboard(s, info, cons) +
-      (root.FitAvatar ? root.FitAvatar.homeCard(s) : '') +
       todayCard +
       renderWeeklyCard(s);
   }
