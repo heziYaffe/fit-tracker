@@ -642,6 +642,10 @@
 
   function vibrate() {
     try {
+      if (root.FitHaptic && typeof root.FitHaptic.pulse === 'function') {
+        root.FitHaptic.pulse();
+        return;
+      }
       if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate([200, 80, 200]);
     } catch (err) { /* ignore */ }
   }

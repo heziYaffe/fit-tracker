@@ -1767,8 +1767,10 @@ button.linkish.add-rest {
   margin: 2px 0 10px;
   padding: 2px 0 0;
 }
-.home-rings .score-ring:nth-child(-n+3) { grid-column: span 4; }
-.home-rings .score-ring:nth-child(n+4) { grid-column: span 3; }
+.home-rings .score-ring:nth-child(-n+3),
+.home-rings .score-ring-wrap:nth-child(-n+3) { grid-column: span 4; }
+.home-rings .score-ring:nth-child(n+4),
+.home-rings .score-ring-wrap:nth-child(n+4) { grid-column: span 3; }
 .home-rings .score-dial { width: 82px; height: 82px; }
 .home-rings .score-num { font-size: 1.12rem; }
 .home-rings .score-num.empty { font-size: 1.25rem; }
@@ -2010,3 +2012,144 @@ button.linkish.add-rest {
 }
 .workout-card-row .workout-main { flex: 1; min-width: 0; }
 .workout-card-row .btn.tiny { flex-shrink: 0; margin-top: 6px; }
+
+
+/* ---- usability: smart home, info, stock sheet, one-hand live, undo toast ---- */
+#haptic-host {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.home-smart {
+  display: flex;
+  width: 100%;
+  min-height: 56px;
+  margin: 4px 0 12px;
+  font-size: 1.12rem;
+  font-weight: 800;
+  justify-content: center;
+  border-radius: 18px;
+}
+.score-ring-wrap, .dash-tile-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+.dash-tile-wrap { width: 100%; }
+.dash-tile-wrap .dash-tile { width: 100%; }
+.info-btn {
+  appearance: none;
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-soft) 85%, var(--text) 8%);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 22px;
+  text-align: center;
+  z-index: 2;
+}
+.trends-block .info-btn,
+.section-title .info-btn,
+.section-kicker .info-btn {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+.load-rec-info { /* already present */ }
+
+.stock-hero {
+  text-align: center;
+  padding: 8px 0 14px;
+}
+.stock-hero .stock-value {
+  font-size: 2.6rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.stock-delta { display: block; margin-top: 6px; font-weight: 750; font-size: 0.92rem; }
+.stock-delta.up { color: var(--whoop-green, #32d74b); }
+.stock-delta.down { color: var(--whoop-red, #ff4d4d); }
+.stock-delta.neutral, .stock-delta.muted { color: var(--text-muted); }
+.stock-stat { color: var(--text-muted); font-size: 0.88rem; margin: 4px 0 10px; text-align: center; }
+#widget-chart { margin: 4px 0 8px; min-height: 140px; }
+.widget-range { justify-content: center; margin-bottom: 8px; }
+
+.toast.has-undo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+}
+.toast-undo {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 800;
+  font-size: 0.92rem;
+  padding: 6px 8px;
+}
+
+.live-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 18px -8px 0;
+  padding: 12px 10px calc(10px + var(--safe-b, 0px));
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--line);
+  border-radius: 20px 20px 0 0;
+}
+.live-dock .step-grid { margin: 0 0 10px; gap: 12px; }
+.live-dock .big-stepper { gap: 10px; }
+.live-dock .step-btn {
+  min-width: 64px;
+  min-height: 64px;
+  font-size: 1.55rem;
+  border-radius: 18px;
+}
+.live-dock .step-val,
+.live-dock input.step-val {
+  min-width: 96px;
+  width: 5.6ch;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 2.4rem;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+}
+.live-dock .oh-unit { text-align: center; font-size: 0.78rem; color: var(--text-muted); margin: 2px 0 0; }
+.live-dock .live-log {
+  min-height: 58px;
+  font-size: 1.2rem;
+  font-weight: 800;
+  margin-top: 4px;
+}
+body.is-live .main { padding-bottom: 8px; }
+
+.metric-info-body { font-size: 1rem; line-height: 1.55; margin: 8px 0 0; }

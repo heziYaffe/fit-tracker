@@ -765,6 +765,25 @@
     return row;
   }
 
+  function restoreFoodLog(id) {
+    const row = (state.foodLog || []).find(function (r) { return r.id === id && r.deletedAt; });
+    if (!row) return null;
+    delete row.deletedAt;
+    nutritionDelta(row.date, row, 1);
+    touch(row);
+    commit();
+    return row;
+  }
+
+  function undeleteWorkout(id) {
+    const w = (state.workouts || []).find(function (row) { return row.id === id; });
+    if (!w || !w.deletedAt) return null;
+    delete w.deletedAt;
+    touch(w);
+    commit();
+    return w;
+  }
+
   // Distinct recent items (by label), newest first — for one-tap repeat.
   function recentFoodLog(limit) {
     const seen = {};
@@ -1059,6 +1078,8 @@
     addFoodLog: addFoodLog,
     listFoodLog: listFoodLog,
     removeFoodLog: removeFoodLog,
+    restoreFoodLog: restoreFoodLog,
+    undeleteWorkout: undeleteWorkout,
     recentFoodLog: recentFoodLog,
     isDemoMode: isDemoMode,
     enterDemoMode: enterDemoMode,

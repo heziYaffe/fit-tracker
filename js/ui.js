@@ -35,7 +35,9 @@
     swapMeal: null,
     cardio: null,
     cardioTimer: 0,
-    cardioWake: null
+    cardioWake: null,
+    widgetRange: 30,
+    pendingUndo: null
   };
 
   function esc(s) {
@@ -97,11 +99,76 @@
   function toast(msg) {
     const el = document.getElementById('toast');
     if (!el) return;
+    if (ui.pendingUndo) return;
+    el.classList.remove('has-undo');
     el.textContent = msg;
     el.hidden = false;
     clearTimeout(ui.toastTimer);
     ui.toastTimer = setTimeout(function () { el.hidden = true; }, 2400);
   }
+
+  function commitPendingUndo() {
+    const p = ui.pendingUndo;
+    if (!p) return;
+    ui.pendingUndo = null;
+    if (p.timer) clearTimeout(p.timer);
+    const el = document.getElementById('toast');
+    if (el) { el.hidden = true; el.classList.remove('has-undo'); el.textContent = ''; }
+    if (typeof p.commit === 'function') {
+      try { p.commit(); } catch (err) { /* ignore */ }
+    }
+  }
+
+  function toastUndo(label, restore, commit) {
+    commitPendingUndo();
+    const el = document.getElementById('toast');
+    if (!el) {
+      if (typeof commit === 'function') commit();
+      return;
+    }
+    clearTimeout(ui.toastTimer);
+    el.classList.add('has-undo');
+    el.innerHTML = esc(label || 'נמחק') + ' · <button type="button" class="toast-undo" data-action="toast-undo">בטל</button>';
+    el.hidden = false;
+    const pending = { restore: restore, commit: commit, timer: 0 };
+    pending.timer = setTimeout(function () { commitPendingUndo(); }, 5000);
+    ui.pendingUndo = pending;
+  }
+
+  function undoLast() {
+    const p = ui.pendingUndo;
+    if (!p) return;
+    ui.pendingUndo = null;
+    if (p.timer) clearTimeout(p.timer);
+    const el = document.getElementById('toast');
+    if (el) { el.hidden = true; el.classList.remove('has-undo'); el.textContent = ''; }
+    if (typeof p.restore === 'function') {
+      try { p.restore(); } catch (err) { /* ignore */ }
+    }
+    toast('בוטל');
+    haptic();
+    render();
+  }
+
+  const FitHaptic = (function () {
+    function isIOS() {
+      const ua = (navigator.userAgent || '');
+      return /iP(hone|ad|od)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+    function pulse() {
+      if (reducedMotion()) return;
+      if (isIOS()) {
+        const lab = document.getElementById('haptic-switch-label');
+        if (lab && typeof lab.click === 'function') {
+          try { lab.click(); } catch (err) { /* ignore */ }
+          return;
+        }
+      }
+      try { if (navigator.vibrate) navigator.vibrate(12); } catch (err) { /* ignore */ }
+    }
+    return { pulse: pulse, isIOS: isIOS };
+  })();
+  root.FitHaptic = FitHaptic;
 
   function openModal(type, props) {
     ui.modal = { type: type, props: props || {} };
@@ -253,9 +320,8 @@
     try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
   }
 
-  function haptic(ms) {
-    if (reducedMotion()) return;
-    try { if (navigator.vibrate) navigator.vibrate(ms || 12); } catch (e) { /* ignore */ }
+  function haptic() {
+    if (root.FitHaptic && root.FitHaptic.pulse) root.FitHaptic.pulse();
   }
 
   function getThemePref() {
@@ -507,7 +573,7 @@
     const action = opts.action ? (' data-action="' + esc(opts.action) + '"') : '';
     const kind = opts.kind ? (' data-kind="' + esc(opts.kind) + '"') : '';
     const valHtml = empty ? '—' : (opts.value || '');
-    return '<button type="button" class="score-ring"' + action + kind + ' aria-label="' + esc(opts.label || '') + (empty ? '' : (', ' + String(opts.value || '').replace(/<[^>]+>/g, ''))) + '">' +
+    const btn = '<button type="button" class="score-ring"' + action + kind + ' aria-label="' + esc(opts.label || '') + (empty ? '' : (', ' + String(opts.value || '').replace(/<[^>]+>/g, ''))) + '">' +
       '<span class="score-dial">' +
       '<svg viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true">' +
       '<circle class="ring-track" cx="' + mid + '" cy="' + mid + '" r="' + r + '" stroke-width="' + sw + '"/>' +
@@ -517,6 +583,11 @@
       '</span>' +
       '<span class="score-label">' + esc(opts.label || '') + (opts.chev === false ? '' : '<i class="chev" aria-hidden="true">›</i>') + '</span>' +
       '</button>';
+    if (opts.kind && opts.info !== false) {
+      return '<div class="score-ring-wrap">' + btn +
+        '<button type="button" class="info-btn" data-action="metric-info" data-kind="' + esc(opts.kind) + '" aria-label="מה זה ' + esc(opts.label || '') + '">ⓘ</button></div>';
+    }
+    return btn;
   }
 
   function recoveryColor(zone) {
@@ -616,9 +687,10 @@
     }).join('');
     const main = (tr.series || []).map(renderTrendCard).join('');
     const e1 = (tr.e1rm || []).map(renderTrendCard).join('');
-    return '<section class="trends-block"><div class="section-title"><h2>מגמות</h2></div>' +
+    return '<section class="trends-block"><div class="section-title"><h2>מגמות</h2>' +
+      '<button type="button" class="info-btn" data-action="metric-info" data-kind="trends" aria-label="מה זה מגמות">ⓘ</button></div>' +
       '<div class="chips trend-range">' + chips + '</div>' +
-      main + (e1 ? '<p class="section-kicker">1RM משוער</p>' + e1 : '') +
+      main + (e1 ? '<p class="section-kicker">1RM משוער<button type="button" class="info-btn" data-action="metric-info" data-kind="e1rm" aria-label="מה זה 1RM משוער">ⓘ</button></p>' + e1 : '') +
       '</section>';
   }
 
@@ -730,17 +802,19 @@
     const rhr = snap.rhr;
     const sleepH = snap.sleepHours;
     const tile2 = (rhr != null)
-      ? { kind: 'recovery', kicker: 'דופק מנוחה', val: String(Math.round(rhr)), unit: 'bpm', empty: false }
+      ? { kind: 'rhr', kicker: 'דופק מנוחה', val: String(Math.round(rhr)), unit: 'bpm', empty: false }
       : (sleepH != null
         ? { kind: 'sleep', kicker: 'משך שינה', val: E.formatHoursClock(sleepH), unit: 'שעות', empty: false }
         : { kind: 'sleep', kicker: 'משך שינה', val: '—', unit: '', empty: true });
     const tiles = '<div class="dash-tiles">' +
-      '<button type="button" class="dash-tile" data-action="open-whoop-ring" data-kind="recovery">' +
+      '<div class="dash-tile-wrap"><button type="button" class="dash-tile" data-action="open-whoop-ring" data-kind="hrv">' +
       '<p class="kicker">HRV</p>' +
       '<div class="dash-tile-val' + (hrv == null ? ' empty' : '') + '">' + (hrv == null ? '—' : esc(fmtHrv(hrv))) + (hrv == null ? '' : ' <span>ms</span>') + '</div></button>' +
-      '<button type="button" class="dash-tile" data-action="open-whoop-ring" data-kind="' + tile2.kind + '">' +
+      '<button type="button" class="info-btn" data-action="metric-info" data-kind="hrv" aria-label="מה זה HRV">ⓘ</button></div>' +
+      '<div class="dash-tile-wrap"><button type="button" class="dash-tile" data-action="open-whoop-ring" data-kind="' + tile2.kind + '">' +
       '<p class="kicker">' + esc(tile2.kicker) + '</p>' +
       '<div class="dash-tile-val' + (tile2.empty ? ' empty' : '') + '">' + esc(tile2.val) + (tile2.unit && !tile2.empty ? (' <span>' + esc(tile2.unit) + '</span>') : '') + '</div></button>' +
+      '<button type="button" class="info-btn" data-action="metric-info" data-kind="' + esc(tile2.kind) + '" aria-label="מה זה ' + esc(tile2.kicker) + '">ⓘ</button></div>' +
       '</div>';
 
     return rings + actions + insightCard + tiles;
@@ -751,63 +825,72 @@
     return '<div class="metric-row"><span class="label">' + esc(label) + '</span><span class="value">' + value + '</span></div>';
   }
 
-  function renderWhoopDetailSheet() {
+  function formatWidgetNumber(kind, n, unit) {
+    if (n == null || !Number.isFinite(Number(n))) return '—';
+    const v = Number(n);
+    const rounded = (kind === 'rhr' || kind === 'calories' || kind === 'workout' || kind === 'water')
+      ? String(Math.round(v))
+      : String(Math.round(v * 10) / 10);
+    return rounded + (unit ? '\u00a0' + unit : '');
+  }
+
+  function stockDeltaHtml(stats) {
+    if (!stats || stats.delta == null) return '<span class="stock-delta muted">אין מספיק נתונים להשוואה</span>';
+    const up = stats.delta > 0;
+    const down = stats.delta < 0;
+    const good = stats.upIsGood == null || stats.delta === 0 ? null : ((up && stats.upIsGood) || (down && stats.upIsGood === false));
+    const cls = good == null ? 'neutral' : (good ? 'up' : 'down');
+    const arrow = up ? '▲' : (down ? '▼' : '–');
+    const num = (stats.delta > 0 ? '+' : '') + formatWidgetNumber(stats.kind, stats.delta, stats.unit);
+    return '<span class="stock-delta ' + cls + '">' + arrow + ' ' + esc(num) + ' מול ממוצע 7 הימים הקודמים</span>';
+  }
+
+  function renderMetricInfoSheet() {
     const props = (ui.modal && ui.modal.props) || {};
-    const s = state();
-    const day = props.date || (homeDay().day);
-    const snap = E.metricSnapshot ? E.metricSnapshot(s, day) : {};
     const kind = props.kind || 'recovery';
-    const titles = { sleep: 'שינה', recovery: 'התאוששות', strain: 'מאמץ' };
-    const title = titles[kind] || 'Whoop';
-    var body = '';
-    if (kind === 'sleep') {
-      body += metricRow('ביצועי שינה', snap.sleepPerformance != null ? ltr(fmtPct(snap.sleepPerformance)) : '');
-      body += metricRow('משך שינה', snap.sleepHours != null ? ltr(E.formatHoursClock(snap.sleepHours)) : '');
-      body += metricRow('זמן במיטה', snap.sleepInBedHours != null ? ltr(E.formatHoursClock(snap.sleepInBedHours)) : '');
-      body += metricRow('יעילות', snap.sleepEfficiency != null ? ltr(fmtPct(snap.sleepEfficiency)) : '');
-      body += metricRow('עקביות שינה', snap.sleepConsistency != null ? ltr(fmtPct(snap.sleepConsistency)) : '');
-      body += metricRow('שינה קלה', snap.sleepLightHours != null ? ltr(E.formatHoursClock(snap.sleepLightHours)) : '');
-      body += metricRow('שינה עמוקה', snap.sleepDeepHours != null ? ltr(E.formatHoursClock(snap.sleepDeepHours)) : '');
-      body += metricRow('REM', snap.sleepRemHours != null ? ltr(E.formatHoursClock(snap.sleepRemHours)) : '');
-      body += metricRow('ערות', snap.sleepAwakeHours != null ? ltr(E.formatHoursClock(snap.sleepAwakeHours)) : '');
-      body += metricRow('מחזורים', snap.sleepCycles != null ? ltr(String(Math.round(snap.sleepCycles))) : '');
-      body += metricRow('הפרעות', snap.sleepDisturbances != null ? ltr(String(Math.round(snap.sleepDisturbances))) : '');
-      body += metricRow('קצב נשימה', snap.respiratoryRate != null ? ltr((Math.round(snap.respiratoryRate * 10) / 10) + ' / דק׳') : '');
-    } else if (kind === 'recovery') {
-      const zone = E.recoveryZone ? E.recoveryZone(snap.recoveryPct) : null;
-      const zoneLabel = zone === 'green' ? 'ירוק' : (zone === 'yellow' ? 'צהוב' : (zone === 'red' ? 'אדום' : ''));
-      body += metricRow('התאוששות', snap.recoveryPct != null ? ltr(fmtPct(snap.recoveryPct) + (zoneLabel ? ' · ' + zoneLabel : '')) : '');
-      body += metricRow('HRV', snap.hrv != null ? ltr(fmtHrv(snap.hrv) + ' ms') : '');
-      body += metricRow('דופק מנוחה', snap.rhr != null ? ltr(Math.round(snap.rhr) + ' bpm') : '');
-      body += metricRow('ספיגת חמצן', snap.spo2 != null ? ltr((Math.round(snap.spo2 * 10) / 10) + '%') : '');
-      body += metricRow('טמפ׳ עור', snap.skinTempC != null ? ltr((Math.round(snap.skinTempC * 10) / 10) + '°C') : '');
-    } else {
-      body += metricRow('מאמץ', snap.strain != null ? ltr(fmtStrain(snap.strain) + ' / 21') : '');
-      body += metricRow('אנרגיה', snap.kilojoule != null ? ltr(Math.round(snap.kilojoule) + ' קג׳ול') : '');
-      body += metricRow('דופק ממוצע', snap.avgHr != null ? ltr(Math.round(snap.avgHr) + ' bpm') : '');
-      body += metricRow('דופק שיא', snap.maxHr != null ? ltr(Math.round(snap.maxHr) + ' bpm') : '');
-      const wos = (E.workoutsOn(s, day) || []).filter(function (w) { return w.source === 'whoop'; });
-      if (wos.length) {
-        body += wos.map(function (w) {
-          const bits = [whoopSportLabel(w.customType || w.type)];
-          if (w.duration) bits.push(w.duration + ' דק׳');
-          if (w.notes) bits.push(w.notes.replace(/^Whoop\s*·\s*/, ''));
-          return metricRow('אימון Whoop', esc(bits.join(' · ')));
-        }).join('');
-      }
-    }
-    if (!body) body = '<p class="hp-legend">אין פירוט זמין ליום הזה. מוצגים רק שדות שמסונכרנים בפועל.</p>';
+    const info = E.metricInfo ? E.metricInfo(kind) : null;
+    const title = (info && info.title) || 'מה זה אומר';
+    const body = (info && info.body) || 'אין הסבר זמין למדד הזה.';
+    const extra = props.reason ? ('<p class="hp-legend">' + esc(props.reason) + '</p>') : '';
     return '<div class="sheet" role="dialog" aria-label="' + esc(title) + '"><div class="sheet-handle"></div>' +
       '<div class="sheet-head"><h2>' + esc(title) + '</h2>' +
       '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
-      '<p class="kicker">' + esc(E.formatDayLong(day)) + '</p>' +
-      '<div class="metric-rows">' + body + '</div></div>';
+      '<p class="metric-info-body">' + esc(body) + '</p>' + extra + '</div>';
   }
 
-  function renderFitDetailSheet() {
+  function renderMetricDetailSheet(kind) {
     const props = (ui.modal && ui.modal.props) || {};
+    kind = kind || props.kind || 'recovery';
     const s = state();
     const infoDay = props.date || homeDay().day;
+    const range = Number(ui.widgetRange) || 30;
+    const stats = E.widgetStats ? E.widgetStats(s, kind, range, E.parseISO(infoDay), infoDay) : { title: kind, current: null, values: [], labels: [] };
+    const chips = [[7, '7 ימים'], [30, '30 ימים'], [90, '90 ימים']].map(function (pair) {
+      return '<button type="button" class="chip' + (range === pair[0] ? ' active' : '') + '" data-action="widget-range" data-days="' + pair[0] + '">' + pair[1] + '</button>';
+    }).join('');
+    const peakLabel = stats.upIsGood === false ? 'הנמוך' : 'שיא';
+    const avgLine = (stats.avg7 == null && stats.peak == null)
+      ? ''
+      : ('<p class="stock-stat">ממוצע 7 ימים ' + esc(formatWidgetNumber(kind, stats.avg7, stats.unit)) +
+        (stats.peak == null ? '' : (', ' + peakLabel + ' ' + esc(formatWidgetNumber(kind, stats.peak, stats.unit)))) + '</p>');
+    const info = E.metricInfo ? E.metricInfo(kind === 'sleepHours' ? 'sleep' : kind) : null;
+    const rows = renderMetricRows(kind, s, infoDay);
+    return '<div class="sheet stock-sheet" role="dialog" aria-label="' + esc(stats.title || 'מדד') + '"><div class="sheet-handle"></div>' +
+      '<div class="sheet-head"><h2>' + esc(stats.title || 'מדד') +
+      (info ? ' <button type="button" class="info-btn" data-action="metric-info" data-kind="' + esc(kind) + '" aria-label="מה זה ' + esc(stats.title || '') + '">ⓘ</button>' : '') +
+      '</h2>' +
+      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
+      '<p class="kicker">' + esc(E.formatDayLong ? E.formatDayLong(infoDay) : infoDay) + '</p>' +
+      '<div class="stock-hero"><div class="stock-value">' + esc(formatWidgetNumber(kind, stats.current, stats.unit)) + '</div>' +
+      stockDeltaHtml(stats) + '</div>' +
+      '<div class="chips widget-range">' + chips + '</div>' +
+      '<div id="widget-chart"></div>' +
+      avgLine +
+      '<div class="metric-rows">' + rows + '</div></div>';
+  }
+
+  function renderMetricRows(kind, s, infoDay) {
+    const snap = E.metricSnapshot ? E.metricSnapshot(s, infoDay) : {};
     const cons = E.computeConsistency(s, E.parseISO(infoDay));
     const nut = E.nutritionOn(s, infoDay);
     const pTarget = E.proteinTarget(s);
@@ -817,39 +900,72 @@
     const calories = nut ? Number(nut.calories) || 0 : 0;
     const water = nut ? Number(nut.water) || 0 : 0;
     const workouts = E.workoutsOn(s, infoDay) || [];
-    const kind = props.kind || 'consistency';
-    const titles = { consistency: 'עקביות', nutrition: 'תזונה', water: 'מים', workout: 'אימון' };
     var body = '';
-    var go = '';
-    if (kind === 'consistency') {
+    if (kind === 'sleep' || kind === 'sleepHours') {
+      body += metricRow('ביצועי שינה', snap.sleepPerformance != null ? ltr(Math.round(snap.sleepPerformance) + '%') : '');
+      body += metricRow('משך שינה', snap.sleepHours != null ? ltr((E.formatHoursClock ? E.formatHoursClock(snap.sleepHours) : snap.sleepHours) + ' שע׳') : '');
+    } else if (kind === 'recovery') {
+      const zone = E.recoveryZone ? E.recoveryZone(snap.recoveryPct) : null;
+      const zoneLabel = zone === 'green' ? 'ירוק' : (zone === 'yellow' ? 'צהוב' : (zone === 'red' ? 'אדום' : ''));
+      body += metricRow('התאוששות', snap.recoveryPct != null ? ltr(Math.round(snap.recoveryPct) + '%') : '');
+      if (zoneLabel) body += metricRow('אזור', esc(zoneLabel));
+    } else if (kind === 'strain') {
+      body += metricRow('מאמץ', snap.strain != null ? ltr(fmtStrain(snap.strain) + ' / 21') : '');
+    } else if (kind === 'hrv') {
+      body += metricRow('HRV', snap.hrv != null ? ltr(fmtHrv(snap.hrv) + ' ms') : '');
+    } else if (kind === 'rhr') {
+      body += metricRow('דופק מנוחה', snap.rhr != null ? ltr(Math.round(snap.rhr) + ' bpm') : '');
+    } else if (kind === 'consistency') {
       body += metricRow('מד עקביות', cons.hasData ? ltr(Math.round(cons.combined * 100) + '%') : '—');
       body += metricRow('אימונים ב־14 יום', ltr((cons.workoutsDone || 0) + ' / ' + (cons.expectedWorkouts || 0)));
       body += metricRow('ימים ביעד חלבון', ltr((cons.proteinHits || 0) + ' / ' + (cons.days || 0)));
       body += metricRow('רצף נוכחי', ltr(String(cons.streak || 0)));
-      go = '<button type="button" class="btn wide" data-action="tab" data-tab="progress">להתקדמות</button>';
-    } else if (kind === 'nutrition') {
+    } else if (kind === 'nutrition' || kind === 'protein' || kind === 'calories') {
       body += metricRow('חלבון', ltr(Math.round(protein) + ' / ' + pTarget + ' גרם'));
       if (cTarget) body += metricRow('קלוריות', ltr(Math.round(calories) + ' / ' + cTarget + ' קק״ל'));
-      go = '<button type="button" class="btn primary wide" data-action="tab" data-tab="nutrition">לתזונה</button>';
     } else if (kind === 'water') {
       const wl = waterLabel(water, wTarget, s);
       body += metricRow('כמות', ltr(wl.progress));
       if (wl.units) body += metricRow('יחידות', esc(wl.units));
-      go = '<button type="button" class="btn primary wide" data-action="tab" data-tab="nutrition">לתזונה</button>';
-    } else {
+    } else if (kind === 'workout') {
       const week = weekWorkoutStats(s, infoDay);
       body += metricRow('השבוע', ltr(week.done + ' / ' + week.target + ' אימונים'));
       if (!workouts.length) body += '<p class="hp-legend">עדיין לא תועד אימון ביום הזה.</p>';
       body += workouts.map(function (w) {
         return metricRow(typeLabel(w), esc((w.duration ? (w.duration + ' דק׳') : (w.source === 'whoop' ? whoopSportLabel(w.customType) : 'תועד'))));
       }).join('');
-      go = '<button type="button" class="btn primary wide" data-action="open-start">התחלת אימון</button>';
     }
-    return '<div class="sheet" role="dialog" aria-label="' + esc(titles[kind] || 'מדד') + '"><div class="sheet-handle"></div>' +
-      '<div class="sheet-head"><h2>' + esc(titles[kind] || 'מדד') + '</h2>' +
-      '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
-      '<p class="kicker">' + esc(E.formatDayLong(infoDay)) + '</p>' +
-      '<div class="metric-rows">' + body + '</div>' + go + '</div>';
+    return body;
+  }
+
+  function paintWidgetChart() {
+    const host = document.getElementById('widget-chart');
+    if (!host || !Charts || !Charts.lineChart) return;
+    const props = (ui.modal && ui.modal.props) || {};
+    const kind = props.kind || 'recovery';
+    const infoDay = props.date || homeDay().day;
+    const range = Number(ui.widgetRange) || 30;
+    const stats = E.widgetStats ? E.widgetStats(state(), kind, range, E.parseISO(infoDay), infoDay) : null;
+    if (!stats) return;
+    const color = kind === 'rhr' ? '#ff8a7a' : (kind === 'calories' || kind === 'strain' ? '#8ab4ff' : '#d36bff');
+    host.innerHTML = Charts.lineChart({
+      labels: stats.labels,
+      values: stats.values,
+      color: color,
+      tighten: true,
+      height: 160,
+      aria: stats.title || kind
+    });
+  }
+
+  function renderWhoopDetailSheet() {
+    const props = (ui.modal && ui.modal.props) || {};
+    return renderMetricDetailSheet(props.kind || 'recovery');
+  }
+
+  function renderFitDetailSheet() {
+    const props = (ui.modal && ui.modal.props) || {};
+    return renderMetricDetailSheet(props.kind || 'consistency');
   }
 
   function renderHome() {
@@ -932,9 +1048,19 @@
         ? '<section class="card today-card done"><h2>היום שלי</h2><p class="hp-legend">הכול מעודכן להיום.</p></section>'
         : '');
 
+    const liveOpen = !!(root.FitLive && root.FitLive.getSession && root.FitLive.getSession());
+    loadCardioSession();
+    const cardioOpen = !!(ui.cardio && ui.cardio.activityId && (ui.cardio.running || Number(ui.cardio.elapsedMs) > 0 || Number(ui.cardio.durationMin) > 0));
+    const primary = E.homePrimaryAction
+      ? E.homePrimaryAction(s, new Date(), { liveOpen: liveOpen && info.isToday, cardioOpen: cardioOpen && info.isToday, date: day })
+      : { label: 'התחל אימון', action: 'open-start' };
+    const smartBtn = '<button type="button" class="btn primary home-smart" data-action="home-smart" data-do="' +
+      esc(primary.action) + '" data-kind="' + esc(primary.kind || '') + '">' + esc(primary.label) + '</button>';
+
     return install + emptyDemoCta() +
       '<p class="section-kicker">שלום, ' + esc(name) + '</p>' +
       renderDatePill(info) +
+      smartBtn +
       renderHomeDashboard(s, info, cons) +
       todayCard +
       renderWeeklyCard(s);
@@ -2581,16 +2707,19 @@
   function discardCardioSession() {
     clearCardio();
     closeModal();
-    toast('האימון בוטל');
   }
 
   function pushWorkoutDelete(id) {
     if (!id) return;
     Store.deleteWorkout(id);
-    toast('האימון נמחק');
-    if (root.FitSync && FitSync.syncNow && FitSync.status && FitSync.status().signedIn) {
-      FitSync.syncNow().catch(function () {});
-    }
+    haptic();
+    toastUndo('נמחק', function () {
+      if (Store.undeleteWorkout) Store.undeleteWorkout(id);
+    }, function () {
+      if (root.FitSync && FitSync.syncNow && FitSync.status && FitSync.status().signedIn) {
+        FitSync.syncNow().catch(function () {});
+      }
+    });
   }
 
   function saveCardioSession() {
@@ -2885,11 +3014,13 @@
     else if (type === 'swap-food') overlay.innerHTML = renderSwapFoodSheet();
     else if (type === 'whoop-detail') overlay.innerHTML = renderWhoopDetailSheet();
     else if (type === 'fit-detail') overlay.innerHTML = renderFitDetailSheet();
+    else if (type === 'metric-info') overlay.innerHTML = renderMetricInfoSheet();
     else if (type === 'live-swap') overlay.innerHTML = renderSwapExerciseSheet();
     else if (type === 'ai-plan' && root.FitAI) overlay.innerHTML = root.FitAI.renderPlanSheet(state());
     else overlay.innerHTML = '';
     bindSheetDrag(overlay);
     if (type === 'cardio-log') startCardioClock();
+    if (type === 'whoop-detail' || type === 'fit-detail') paintWidgetChart();
   }
 
   function workoutDraft() {
@@ -3247,34 +3378,39 @@
           (suggest && !(isMaxReps(ex) && /שיא MAX/.test(suggest)) ? '<p class="suggest-reason">' + esc(suggest) + '</p>' : '') +
           (pr.isPR ? '<div class="live-pr">⭐ שיא חדש בסט הזה! ' + prTags(pr.types) + '</div>' : '') +
           setList +
-          (parkedNow ? '' : (          '<div class="step-grid">' +
-          '<div class="step-col"><div class="label">' + (isBwEx(ex, ex.name) ? 'תוספת (ק״ג)' : 'משקל (ק״ג)') + '</div>' +
-          '<div class="big-stepper">' +
-          '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="-2.5">−2.5</button>' +
-          '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="-1.25">−1.25</button>' +
-          '<div class="step-val" id="live-weight">' + sess.draft.weight + '</div>' +
-          '<button type="button" class="step-btn sm" data-action="live-step" data-field="weight" data-delta="1.25">+1.25</button>' +
-          '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-delta="2.5">+2.5</button>' +
-          '</div>' + (isBwEx(ex, ex.name) ? '<p class="hp-legend" style="text-align:center;margin-top:6px">0 = בלי תוספת, רק משקל גוף</p>' : '') + '</div>' +
-          (isSt
-            ? ('<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'שניות שהוחזקו' : 'זמן (שנ׳)') + '</div>' +
+          (parkedNow ? '' : (function () {
+            const wStep = E.weightStep ? E.weightStep(ex.name, sess.draft.weight) : 2.5;
+            const wtLabel = isBwEx(ex, ex.name) ? 'תוספת (ק״ג)' : 'משקל (ק״ג)';
+            return '<div class="live-dock">' +
+              '<div class="step-grid">' +
+              '<div class="step-col"><div class="label">' + wtLabel + '</div>' +
               '<div class="big-stepper">' +
-              '<button type="button" class="step-btn" data-action="live-step" data-field="secs" data-delta="-5">−5</button>' +
-              '<div class="step-val" id="live-secs">' + (sess.draft.secs || 0) + '</div>' +
-              '<button type="button" class="step-btn" data-action="live-step" data-field="secs" data-delta="5">+5</button>' +
-              '</div></div>')
-            : ('<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'חזרות שהושלמו' : 'חזרות') + '</div>' +
-              '<div class="big-stepper">' +
-              '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="-1">−</button>' +
-              '<div class="step-val" id="live-reps">' + sess.draft.reps + '</div>' +
-              '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-delta="1">+</button>' +
-              '</div></div>')) +
-          '</div>' +
-          (isSt && !hold ? '<button type="button" class="btn primary wide live-log live-hold-start" data-action="live-hold-start">התחל טיימר</button>' : '') +
-          (hold ? '' : '<button type="button" class="btn' + (isSt ? '' : ' primary') + ' wide live-log" data-action="live-log">' + (isSt ? 'רשום בלי טיימר · סט ' : 'רשום סט ') + (ex.sets.length + 1) + '</button>') +
-          '<div class="live-actions">' +
-          (ex.sets.length && !ex.skipped && !ex.finishedEarly ? '<button type="button" class="btn" data-action="live-undo">בטל סט</button>' : '') +
-          '</div>')) +
+              '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-dir="-1" aria-label="הורדת משקל">−</button>' +
+              '<input class="step-val" id="live-weight" type="number" inputmode="decimal" step="0.25" min="0" data-live-draft="weight" value="' + esc(sess.draft.weight) + '" aria-label="' + wtLabel + '" />' +
+              '<button type="button" class="step-btn" data-action="live-step" data-field="weight" data-dir="1" aria-label="הוספת משקל">+</button>' +
+              '</div><p class="oh-unit">קפיצה של ' + esc(String(wStep)) + ' ק״ג · אפשר גם להקליד</p>' +
+              (isBwEx(ex, ex.name) ? '<p class="hp-legend" style="text-align:center;margin-top:6px">0 = בלי תוספת, רק משקל גוף</p>' : '') +
+              '</div>' +
+              (isSt
+                ? ('<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'שניות שהוחזקו' : 'זמן (שנ׳)') + '</div>' +
+                  '<div class="big-stepper">' +
+                  '<button type="button" class="step-btn" data-action="live-step" data-field="secs" data-dir="-1" aria-label="הורדת זמן">−</button>' +
+                  '<input class="step-val" id="live-secs" type="number" inputmode="numeric" step="1" min="0" data-live-draft="secs" value="' + esc(sess.draft.secs || 0) + '" aria-label="שניות" />' +
+                  '<button type="button" class="step-btn" data-action="live-step" data-field="secs" data-dir="1" aria-label="הוספת זמן">+</button>' +
+                  '</div><p class="oh-unit">קפיצה של 5 שניות</p></div>')
+                : ('<div class="step-col"><div class="label">' + (isMaxReps(ex) ? 'חזרות שהושלמו' : 'חזרות') + '</div>' +
+                  '<div class="big-stepper">' +
+                  '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-dir="-1" aria-label="הורדת חזרה">−</button>' +
+                  '<input class="step-val" id="live-reps" type="number" inputmode="numeric" step="1" min="0" data-live-draft="reps" value="' + esc(sess.draft.reps) + '" aria-label="חזרות" />' +
+                  '<button type="button" class="step-btn" data-action="live-step" data-field="reps" data-dir="1" aria-label="הוספת חזרה">+</button>' +
+                  '</div><p class="oh-unit">קפיצה של חזרה אחת</p></div>')) +
+              '</div>' +
+              (isSt && !hold ? '<button type="button" class="btn primary wide live-log live-hold-start" data-action="live-hold-start">התחל טיימר</button>' : '') +
+              (hold ? '' : '<button type="button" class="btn' + (isSt ? '' : ' primary') + ' wide live-log" data-action="live-log">' + (isSt ? 'רשום בלי טיימר · סט ' : 'רשום סט ') + (ex.sets.length + 1) + '</button>') +
+              '<div class="live-actions">' +
+              (ex.sets.length && !ex.skipped && !ex.finishedEarly ? '<button type="button" class="btn" data-action="live-undo">בטל סט</button>' : '') +
+              '</div></div>';
+          }())) +
           '</section>')
         : '<section class="card"><p>הוסיפו תרגיל כדי להתחיל לתעד סטים.</p></section>') +
       '<section class="card"><h2>הוסף תרגיל</h2>' +
@@ -3911,7 +4047,15 @@
     if (action === 'measure-chart') { ui.measureKey = btn.dataset.key || 'waist'; render(); return; }
     if (action === 'save-measure') { saveMeasureForm(); return; }
     if (action === 'del-measure') {
-      openModal('confirm', { title: 'מחיקת מדידה', message: 'למחוק את המדידה הזו?', danger: true, okLabel: 'מחיקה', onOk: function () { Store.deleteMeasure(btn.dataset.id); closeModal(); render(); toast('המדידה נמחקה'); } });
+      const mid = btn.dataset.id;
+      const row = (state().measures || []).find(function (m) { return m.id === mid; });
+      if (!row) return;
+      const snap = JSON.parse(JSON.stringify(row));
+      Store.deleteMeasure(mid);
+      haptic();
+      toastUndo('נמחק', function () { Store.upsertMeasure(Object.assign({}, snap, { _forceNew: true })); }, function () {
+        if (root.FitSync && FitSync.syncNow && FitSync.status && FitSync.status().signedIn) FitSync.syncNow().catch(function () {});
+      });
       return;
     }
     if (action === 'add-photo') {
@@ -3986,27 +4130,21 @@
     if (action === 'save-cardio') { saveCardioSession(); return; }
     if (action === 'discard-cardio') {
       loadCardioSession();
-      const sess = ui.cardio;
-      const dirty = !!(sess && (sess.running || Number(sess.elapsedMs) > 0 || Number(sess.durationMin) > 0 || sess.distanceKm || sess.avgHr || sess.notes));
-      if (!dirty) { discardCardioSession(); return; }
-      openModal('confirm', {
-        title: 'לבטל את האימון?',
-        message: 'האימון הזה עוד לא נשמר, והנתונים יימחקו.',
-        danger: true,
-        okLabel: 'מחיקה',
-        onOk: function () { discardCardioSession(); }
+      const snap = ui.cardio ? JSON.parse(JSON.stringify(ui.cardio)) : null;
+      const dirty = !!(snap && (snap.running || Number(snap.elapsedMs) > 0 || Number(snap.durationMin) > 0 || snap.distanceKm || snap.avgHr || snap.notes));
+      discardCardioSession();
+      if (!dirty) return;
+      haptic();
+      toastUndo('נמחק', function () {
+        ui.cardio = snap;
+        persistCardio();
+        openModal('cardio-log', { activityId: snap.activityId });
       });
       return;
     }
     if (action === 'delete-workout') {
-      const id = btn.dataset.id;
-      openModal('confirm', {
-        title: 'מחיקת אימון',
-        message: 'למחוק את האימון הזה? הפעולה לא ניתנת לביטול.',
-        danger: true,
-        okLabel: 'מחיקה',
-        onOk: function () { pushWorkoutDelete(id); closeModal(); }
-      });
+      pushWorkoutDelete(btn.dataset.id);
+      closeModal();
       return;
     }
     if (action === 'start-live' || action === 'resume-live') { closeModal(); openLive(); return; }
@@ -4024,7 +4162,35 @@
       return;
     }
     if (action === 'load-rec-info') {
-      toast(btn.dataset.reason || 'אין הסבר');
+      openModal('metric-info', { kind: 'recommendation', reason: btn.dataset.reason || '' });
+      return;
+    }
+    if (action === 'metric-info') {
+      ev.stopPropagation();
+      openModal('metric-info', { kind: btn.dataset.kind || 'recovery' });
+      return;
+    }
+    if (action === 'widget-range') {
+      ui.widgetRange = Number(btn.dataset.days) || 30;
+      renderOverlay();
+      return;
+    }
+    if (action === 'toast-undo') { undoLast(); return; }
+    if (action === 'home-smart') {
+      haptic();
+      const doWhat = btn.dataset.do;
+      if (doWhat === 'resume-live') { openLive(); return; }
+      if (doWhat === 'resume-cardio') {
+        loadCardioSession();
+        if (ui.cardio && ui.cardio.activityId) openModal('cardio-log', { activityId: ui.cardio.activityId });
+        return;
+      }
+      if (doWhat === 'open-start') { openModal('start-kind'); return; }
+      if (doWhat === 'log-breakfast' || doWhat === 'log-meal') { setTab('nutrition'); return; }
+      if (doWhat === 'open-metric') {
+        openModal('fit-detail', { kind: btn.dataset.kind || 'consistency', date: homeDay().day });
+        return;
+      }
       return;
     }
     if (action === 'trend-range') {
@@ -4427,9 +4593,16 @@
     }
 
     if (action === 'cancel-live') {
+      const sess = root.FitLive.getSession && root.FitLive.getSession();
+      const hasSets = !!(sess && (sess.exercises || []).some(function (ex) { return ex.sets && ex.sets.length; }));
+      if (!hasSets) {
+        root.FitLive.discard();
+        setTab('workouts');
+        return;
+      }
       openModal('confirm', {
         title: 'יציאה מהאימון?',
-        message: 'הסטים שטרם נשמרו יימחקו.',
+        message: 'הסטים שכבר נרשמו באימון הזה יימחקו ולא יישמרו בהיסטוריה.',
         danger: true,
         okLabel: 'יציאה',
         onOk: function () {
@@ -4466,7 +4639,21 @@
     }
     if (action === 'live-select-ex') { root.FitLive.selectExercise(Number(btn.dataset.index)); render(); return; }
     if (action === 'live-step') {
-      root.FitLive.stepDraft(btn.dataset.field, Number(btn.dataset.delta));
+      const field = btn.dataset.field;
+      let delta = Number(btn.dataset.delta);
+      if (btn.dataset.dir) {
+        const dir = Number(btn.dataset.dir) || 0;
+        const sess = root.FitLive.getSession && root.FitLive.getSession();
+        const draft = sess && sess.draft;
+        const ex = sess && sess.exercises ? sess.exercises[sess.currentEx] : null;
+        if (field === 'weight') {
+          const step = E.weightStep ? E.weightStep(ex && ex.name, draft && draft.weight) : 2.5;
+          delta = dir * step;
+        } else if (field === 'secs') delta = dir * 5;
+        else delta = dir * 1;
+      }
+      root.FitLive.stepDraft(field, delta);
+      haptic();
       render();
       return;
     }
@@ -4487,6 +4674,7 @@
       if (root.FitLive.unlockAudio) root.FitLive.unlockAudio();
       const row = root.FitLive.logSet();
       if (!row) { toast('יש להזין משקל, חזרות או זמן'); return; }
+      haptic();
       if (row.pr) toast('שיא חדש! ⭐');
       render();
       return;
@@ -4583,8 +4771,16 @@
       return;
     }
     if (action === 'ql-remove') {
-      const row = Store.removeFoodLog(btn.dataset.id);
-      if (row) toast('הוסר: ' + (row.label || row.name));
+      const id = btn.dataset.id;
+      const row = Store.removeFoodLog(id);
+      if (row) {
+        haptic();
+        toastUndo('נמחק', function () {
+          if (Store.restoreFoodLog) Store.restoreFoodLog(id);
+        }, function () {
+          if (root.FitSync && FitSync.syncNow && FitSync.status && FitSync.status().signedIn) FitSync.syncNow().catch(function () {});
+        });
+      }
       return;
     }
     if (action === 'ql-fav') {
@@ -4822,13 +5018,8 @@
     if (action === 'save-workout') { saveWorkout(); return; }
     if (action === 'confirm-delete-workout') {
       const id = workoutDraft() && workoutDraft().id;
-      openModal('confirm', {
-        title: 'מחיקת אימון',
-        message: 'למחוק את האימון הזה? הפעולה לא ניתנת לביטול.',
-        danger: true,
-        okLabel: 'מחיקה',
-        onOk: function () { pushWorkoutDelete(id); closeModal(); }
-      });
+      pushWorkoutDelete(id);
+      closeModal();
       return;
     }
     if (action === 'open-weight') {
@@ -5213,6 +5404,10 @@
       });
     }
     Store.subscribe(function () { maybeCelebrate(); render(); });
+    window.addEventListener('pagehide', function () { commitPendingUndo(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') commitPendingUndo();
+    });
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible' && ui.cardio && ui.cardio.running) {
         requestCardioWake();
@@ -5232,6 +5427,12 @@
     document.addEventListener('input', function (ev) {
       const el = ev.target;
       if (el && el.dataset.cardio) { syncCardioField(el); return; }
+      if (el && el.dataset.liveDraft && root.FitLive && root.FitLive.setDraft) {
+        const patch = {};
+        patch[el.dataset.liveDraft] = el.value;
+        root.FitLive.setDraft(patch);
+        return;
+      }
       if (el && (el.dataset.draft || el.dataset.ex != null)) syncDraftFromInput(el);
       if (el && el.dataset.exk === 'name') updateExAutocomplete(el);
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);

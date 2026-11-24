@@ -1948,6 +1948,230 @@
     return { ok: true, workout: row };
   }
 
+
+  const METRIC_INFO = {
+    sleep: {
+      title: 'שינה',
+      body: 'ביצועי שינה של Whoop מודדים כמה ישנתם ביחס לצורך השינה שלכם. 100% אומר שמילאתם את הצורך. מעל 85% נחשב טוב.'
+    },
+    recovery: {
+      title: 'התאוששות',
+      body: 'התאוששות של Whoop (0–100) מחושבת מ־HRV, דופק מנוחה ושינה. ירוק מ־67%, צהוב 34–66%, אדום עד 33%. ירוק אומר שהגוף מוכן לאימון עצימות גבוהה.'
+    },
+    strain: {
+      title: 'מאמץ',
+      body: 'מאמץ של Whoop (0–21) מודד את העומס על מערכת הלב־ריאה במהלך היום. אימון קל לרוב מתחת ל־10, אימון איכותי סביב 10–14, ומעל 14 זה עומס גבוה.'
+    },
+    hrv: {
+      title: 'HRV',
+      body: 'HRV הוא השונות בין פעימות הלב, במילישניות. ערך גבוה יותר בדרך כלל מעיד על מוכנות טובה. חשוב להשוות לעצמכם לאורך זמן, לא לאחרים.'
+    },
+    rhr: {
+      title: 'דופק מנוחה',
+      body: 'דופק המנוחה בבוקר. ירידה מתונה לאורך זמן לרוב מעידה על כושר או התאוששות טובה. עלייה חדה יכולה לרמוז על עייפות, סטרס או מחלה.'
+    },
+    consistency: {
+      title: 'עקביות',
+      body: 'מדד של 14 יום: חצי לפי מספר האימונים מול היעד השבועי, וחצי לפי ימים שבהם עמדתם ביעד החלבון. 70% ומעלה זה רצף יציב.'
+    },
+    nutrition: {
+      title: 'תזונה',
+      body: 'חלבון וקלוריות מצטברים מול היעדים היומיים שבהגדרות. המספרים מגיעים מהיומן ומהתפריט, לא מ־Whoop.'
+    },
+    protein: {
+      title: 'חלבון',
+      body: 'חלבון מצטבר מול היעד היומי שבהגדרות. עמידה ביעד מסייעת לשיקום ולשמירה על מסת שריר.'
+    },
+    calories: {
+      title: 'קלוריות',
+      body: 'קלוריות מצטברות מול היעד היומי, אם הוגדר. המספר מגיע מהיומן ומהתפריט.'
+    },
+    water: {
+      title: 'מים',
+      body: 'צריכת מים מול היעד היומי שבהגדרות, לפי כוסות או בקבוקים.'
+    },
+    workout: {
+      title: 'אימון',
+      body: 'כמה אימונים תיעדתם השבוע מול היעד השבועי שבהגדרות. גם כוח וגם אירובי נספרים.'
+    },
+    e1rm: {
+      title: '1RM משוער',
+      body: 'משקל לחזרה אחת משוער לפי נוסחת Epley, לפי הסטים האחרונים. זה כלי מעקב, לא בהכרח המשקל שכדאי להרים בפועל.'
+    },
+    recommendation: {
+      title: 'המלצת עומס',
+      body: 'ההמלצה לאימון הבא מחושבת לפי האימון הקודם, כלל 2־ל־2, ואזור ההתאוששות מ־Whoop. ביום אדום ההמלצה נשמרת או יורדת.'
+    },
+    trends: {
+      title: 'מגמות',
+      body: 'הקו הוא ממוצע נע של 7 ימים, כדי לראות כיוון בלי רעש יומי. אפשר לבחור טווח של 30 יום, 90 יום או שנה.'
+    }
+  };
+
+  function metricInfo(kind) {
+    return METRIC_INFO[kind] || null;
+  }
+
+  function mealLooksBreakfast(name) {
+    const t = foldName(name || '');
+    return t.indexOf('בוקר') >= 0 || t.indexOf('breakfast') >= 0;
+  }
+
+  function breakfastLogged(state, iso) {
+    const days = state && state.dayMenus ? state.dayMenus : [];
+    for (let i = 0; i < days.length; i++) {
+      if (days[i] && days[i].date === iso) {
+        const meals = days[i].meals || [];
+        if (meals.some(function (m) { return mealLooksBreakfast(m.name || m.slot || '') && m.status === 'eaten'; })) return true;
+      }
+    }
+    const logs = (state && state.foodLog) || [];
+    for (let i = 0; i < logs.length; i++) {
+      const r = logs[i];
+      if (!r || r.date !== iso || r.deletedAt) continue;
+      if (mealLooksBreakfast(r.name || r.label || '')) return true;
+      if (r.at) {
+        const h = new Date(r.at).getHours();
+        if (h >= 4 && h < 11) return true;
+      } else {
+        return true;
+      }
+    }
+    const nut = nutritionOn(state, iso);
+    return !!(nut && ((Number(nut.protein) || 0) > 0 || (Number(nut.calories) || 0) > 0));
+  }
+
+  function isPlannedTrainingDay(state, iso) {
+    const dow = parseISO(iso).getDay();
+    return ((state && state.templates) || []).some(function (t) {
+      return t && (t.days || []).map(Number).indexOf(dow) >= 0;
+    });
+  }
+
+  function homePrimaryAction(state, now, opts) {
+    opts = opts || {};
+    const at = now ? new Date(now) : new Date();
+    const iso = opts.date || todayISO(at);
+    const today = todayISO(at);
+    const hour = at.getHours();
+    if (opts.liveOpen || opts.cardioOpen) {
+      return { id: 'resume', label: 'המשך אימון', action: opts.liveOpen ? 'resume-live' : 'resume-cardio' };
+    }
+    if (iso !== today) {
+      return { id: 'summary', label: 'סיכום יום', action: 'open-metric', kind: 'consistency' };
+    }
+    const trained = workoutsOn(state, iso).length > 0;
+    const planned = isPlannedTrainingDay(state, iso);
+    const ateBreakfast = breakfastLogged(state, iso);
+    if (hour < 11 && !ateBreakfast) {
+      return { id: 'breakfast', label: 'רשום ארוחת בוקר', action: 'log-breakfast' };
+    }
+    if (!trained && (planned || (hour >= 11 && hour < 18))) {
+      return { id: 'start', label: 'התחל אימון', action: 'open-start' };
+    }
+    if (hour >= 18) {
+      return { id: 'summary', label: 'סיכום יום', action: 'open-metric', kind: 'consistency' };
+    }
+    if (!ateBreakfast) {
+      return { id: 'breakfast', label: 'רשום ארוחת בוקר', action: 'log-breakfast' };
+    }
+    const nut = nutritionOn(state, iso);
+    const pTarget = proteinTarget(state);
+    const protein = nut ? Number(nut.protein) || 0 : 0;
+    if (pTarget && protein < pTarget * 0.5) {
+      return { id: 'meal', label: 'רשום ארוחה', action: 'log-meal' };
+    }
+    if (!trained) return { id: 'start', label: 'התחל אימון', action: 'open-start' };
+    return { id: 'summary', label: 'סיכום יום', action: 'open-metric', kind: 'consistency' };
+  }
+
+  function metricUpIsGood(kind) {
+    if (kind === 'rhr') return false;
+    if (kind === 'strain' || kind === 'calories' || kind === 'weight') return null;
+    return true;
+  }
+
+  function metricUnit(kind) {
+    const map = {
+      sleep: '%', recovery: '%', strain: '', hrv: 'ms', rhr: 'bpm',
+      consistency: '%', nutrition: 'גרם', protein: 'גרם', calories: 'קק״ל',
+      water: 'מ״ל', workout: ''
+    };
+    return map[kind] || '';
+  }
+
+  function metricTitle(kind) {
+    const info = metricInfo(kind);
+    return (info && info.title) || kind;
+  }
+
+  function rawMetricOnDay(state, kind, iso) {
+    const snap = metricSnapshot(state, iso) || {};
+    if (kind === 'sleep') {
+      if (snap.sleepPerformance != null) return asNum(snap.sleepPerformance);
+      return asNum(snap.sleepHours);
+    }
+    if (kind === 'sleepHours') return asNum(snap.sleepHours);
+    if (kind === 'recovery') return asNum(snap.recoveryPct);
+    if (kind === 'strain') return asNum(snap.strain);
+    if (kind === 'hrv') return asNum(snap.hrv);
+    if (kind === 'rhr') return asNum(snap.rhr);
+    if (kind === 'consistency') {
+      const c = computeConsistency(state, parseISO(iso));
+      return c && c.hasData ? Math.round(c.combined * 1000) / 10 : null;
+    }
+    const nut = nutritionOn(state, iso);
+    if (kind === 'nutrition' || kind === 'protein') return nut && Number(nut.protein) ? Number(nut.protein) : (nut ? 0 : null);
+    if (kind === 'calories') return nut && Number(nut.calories) ? Number(nut.calories) : (nut ? 0 : null);
+    if (kind === 'water') return nut && Number(nut.water) ? Number(nut.water) : (nut ? 0 : null);
+    if (kind === 'workout') return workoutsOn(state, iso).length;
+    return null;
+  }
+
+  function meanPresent(vals) {
+    const nums = (vals || []).filter(function (v) { return v != null && Number.isFinite(Number(v)); }).map(Number);
+    if (!nums.length) return null;
+    return nums.reduce(function (a, b) { return a + b; }, 0) / nums.length;
+  }
+
+  function widgetStats(state, kind, days, now, dateISO) {
+    const end = dateISO || todayISO(now);
+    const range = Number(days) || 30;
+    const dates = lastNDates(range, parseISO(end)).slice().reverse();
+    const raw = dates.map(function (d) { return rawMetricOnDay(state, kind, d); });
+    const current = rawMetricOnDay(state, kind, end);
+    const prevDates = lastNDates(8, parseISO(end)).slice(1);
+    const prevAvg = meanPresent(prevDates.map(function (d) { return rawMetricOnDay(state, kind, d); }));
+    const delta = (current != null && prevAvg != null) ? current - prevAvg : null;
+    const last7 = lastNDates(7, parseISO(end)).map(function (d) { return rawMetricOnDay(state, kind, d); });
+    const avg7 = meanPresent(last7);
+    const present = raw.filter(function (v) { return v != null; });
+    const upIsGood = metricUpIsGood(kind);
+    let peak = null;
+    if (present.length) {
+      peak = present.reduce(function (m, v) { return Math.max(m, v); }, present[0]);
+      if (upIsGood === false) peak = present.reduce(function (m, v) { return Math.min(m, v); }, present[0]);
+    }
+    const labels = dates.map(function (d) {
+      return parseISO(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
+    });
+    return {
+      kind: kind,
+      title: metricTitle(kind),
+      unit: (kind === 'sleep' && rawMetricOnDay(state, 'sleep', end) != null && (metricSnapshot(state, end) || {}).sleepPerformance == null) ? 'שע׳' : metricUnit(kind),
+      current: current,
+      prevAvg: prevAvg,
+      delta: delta,
+      upIsGood: upIsGood,
+      avg7: avg7,
+      peak: peak,
+      labels: labels,
+      values: raw,
+      points: present.length,
+      date: end
+    };
+  }
+
   const FitEngine = {
     todayISO: todayISO,
     parseISO: parseISO,
@@ -2036,7 +2260,15 @@
     enrichCardioFromWhoop: enrichCardioFromWhoop,
     backfillCardioWorkouts: backfillCardioWorkouts,
     applyWhoopToCardioSession: applyWhoopToCardioSession,
-    whoopMetricsFrom: whoopMetricsFrom
+    whoopMetricsFrom: whoopMetricsFrom,
+    metricInfo: metricInfo,
+    METRIC_INFO: METRIC_INFO,
+    breakfastLogged: breakfastLogged,
+    isPlannedTrainingDay: isPlannedTrainingDay,
+    homePrimaryAction: homePrimaryAction,
+    metricUpIsGood: metricUpIsGood,
+    widgetStats: widgetStats,
+    rawMetricOnDay: rawMetricOnDay
   };
 
   root.FitEngine = FitEngine;
