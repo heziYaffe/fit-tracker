@@ -1972,3 +1972,20 @@ button.linkish.add-rest {
   line-height: 1.1;
 }
 .cardio-clock-actions { margin-top: 14px; }
+
+/* Quick food log + menu wizard */
+.quick-log textarea { width: 100%; min-height: 64px; resize: vertical; }
+.ql-barcode { margin-top: 8px; }
+.ql-list { margin-top: 10px; }
+.ql-item { padding: 10px 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; }
+.ql-item:first-child { border-top: 0; }
+.ql-item .ql-name { font-weight: 700; }
+.ql-item .ql-macros { grid-column: 1; color: var(--text-muted); font-size: var(--fs-sm); }
+.ql-item .ql-ctl { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 8px; }
+.ql-item.miss { grid-template-columns: 1fr; }
+.ql-item.miss .ql-ctl { grid-column: 1; grid-row: auto; }
+.ql-item.miss .list { grid-column: 1; margin-top: 6px; }
+.ql-grams { display: flex; align-items: center; gap: 4px; font-size: var(--fs-sm); color: var(--text-muted); }
+.ql-grams input { width: 72px; text-align: center; }
+.ql-total { font-weight: 700; margin: 10px 0 8px; }
+.chip.strike { text-decoration: line-through; opacity: 0.75; }

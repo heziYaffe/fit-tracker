@@ -103,7 +103,10 @@
       protein: Number(f.protein) || 0,
       calories: Number(f.calories) || 0,
       carbs: f.carbs === '' || f.carbs == null ? '' : Number(f.carbs),
-      fat: f.fat === '' || f.fat == null ? '' : Number(f.fat)
+      fat: f.fat === '' || f.fat == null ? '' : Number(f.fat),
+      dbId: f.dbId || '',
+      role: f.role || '',
+      grams: Number(f.grams) || 0
     };
   }
 
@@ -167,7 +170,8 @@
       dayMenus: [],
       measures: [],
       exercises: [],
-      substitutions: {}
+      substitutions: {},
+      foodLog: []
     };
   }
 
@@ -382,7 +386,8 @@
       dayMenus: Array.isArray(raw.dayMenus) ? raw.dayMenus : [],
       measures: Array.isArray(raw.measures) ? raw.measures.map(normalizeMeasureRow) : [],
       exercises: normalizeExerciseList(raw.exercises),
-      substitutions: normalizeSubstitutions(raw.substitutions)
+      substitutions: normalizeSubstitutions(raw.substitutions),
+      foodLog: Array.isArray(raw.foodLog) ? raw.foodLog.filter(function (r) { return r && r.id; }) : []
     };
   }
 
@@ -689,6 +694,74 @@
   }
 
 
+  // ---- per-item food log (quick logging). Each entry adds to the day's
+  // nutrition totals; removing subtracts. Deletes are tombstones so cloud
+  // sync does not bring them back.
+  function nutritionDelta(date, item, sign) {
+    const cur = getNutrition(date) || { protein: 0, calories: 0, carbs: 0, fat: 0 };
+    upsertNutrition(date, {
+      protein: Math.max(0, Math.round(((Number(cur.protein) || 0) + sign * (Number(item.protein) || 0)) * 10) / 10),
+      calories: Math.max(0, Math.round((Number(cur.calories) || 0) + sign * (Number(item.calories) || 0))),
+      carbs: Math.max(0, Math.round(((Number(cur.carbs) || 0) + sign * (Number(item.carbs) || 0)) * 10) / 10),
+      fat: Math.max(0, Math.round(((Number(cur.fat) || 0) + sign * (Number(item.fat) || 0)) * 10) / 10)
+    });
+  }
+
+  function addFoodLog(date, items) {
+    const day = date || root.FitEngine.todayISO();
+    state.foodLog = state.foodLog || [];
+    const rows = [];
+    (items || []).forEach(function (it) {
+      if (!it || it.unmatched) return;
+      const row = touch({
+        id: uid(), date: day, at: new Date().toISOString(),
+        name: it.name || it.label || '', label: it.label || it.name || '',
+        grams: Number(it.grams) || 0,
+        calories: Math.round(Number(it.calories) || 0),
+        protein: Math.round((Number(it.protein) || 0) * 10) / 10,
+        carbs: Math.round((Number(it.carbs) || 0) * 10) / 10,
+        fat: Math.round((Number(it.fat) || 0) * 10) / 10,
+        dbId: it.dbId || '', code: it.code || '', per100: it.per100 || null,
+        source: it.source || ''
+      });
+      state.foodLog.push(row);
+      rows.push(row);
+      nutritionDelta(day, row, 1);
+    });
+    commit();
+    return rows;
+  }
+
+  function listFoodLog(date) {
+    return (state.foodLog || []).filter(function (r) { return r.date === date && !r.deletedAt; })
+      .sort(function (a, b) { return String(a.at || '').localeCompare(String(b.at || '')); });
+  }
+
+  function removeFoodLog(id) {
+    const row = (state.foodLog || []).find(function (r) { return r.id === id && !r.deletedAt; });
+    if (!row) return null;
+    nutritionDelta(row.date, row, -1);
+    row.deletedAt = new Date().toISOString();
+    touch(row);
+    commit();
+    return row;
+  }
+
+  // Distinct recent items (by label), newest first — for one-tap repeat.
+  function recentFoodLog(limit) {
+    const seen = {};
+    const out = [];
+    (state.foodLog || []).filter(function (r) { return !r.deletedAt; })
+      .slice().sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); })
+      .forEach(function (r) {
+        const k = r.label || r.name;
+        if (!k || seen[k]) return;
+        seen[k] = 1;
+        out.push(r);
+      });
+    return out.slice(0, limit || 8);
+  }
+
   function listTemplates() {
     return (state.templates || []).slice();
   }
@@ -809,12 +882,13 @@
     function applyMealMacros(sign) {
       const tot = mealTotals(meal);
       const cur = getNutrition(date) || { protein: 0, calories: 0, carbs: 0, fat: 0 };
+      const r1 = function (v) { return Math.round(v * 10) / 10; };
       const patch = {
-        protein: Math.max(0, (Number(cur.protein) || 0) + sign * tot.protein),
-        calories: Math.max(0, (Number(cur.calories) || 0) + sign * tot.calories)
+        protein: r1(Math.max(0, (Number(cur.protein) || 0) + sign * tot.protein)),
+        calories: Math.round(Math.max(0, (Number(cur.calories) || 0) + sign * tot.calories))
       };
-      if (tot.hasCarbs) patch.carbs = Math.max(0, (Number(cur.carbs) || 0) + sign * tot.carbs);
-      if (tot.hasFat) patch.fat = Math.max(0, (Number(cur.fat) || 0) + sign * tot.fat);
+      if (tot.hasCarbs) patch.carbs = r1(Math.max(0, (Number(cur.carbs) || 0) + sign * tot.carbs));
+      if (tot.hasFat) patch.fat = r1(Math.max(0, (Number(cur.fat) || 0) + sign * tot.fat));
       upsertNutrition(date, patch);
     }
     if (status === 'eaten' && prev !== 'eaten') {
@@ -915,7 +989,8 @@
         dayMenus: state.dayMenus,
         measures: state.measures,
         exercises: state.exercises,
-        substitutions: state.substitutions
+        substitutions: state.substitutions,
+        foodLog: state.foodLog
       }
     };
   }
@@ -923,7 +998,7 @@
   function importJSON(payload) {
     const raw = payload && payload.data ? payload.data : payload;
     if (!raw || typeof raw !== 'object') throw new Error('invalid');
-    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus || raw.measures || raw.exercises || raw.substitutions;
+    const hasAny = raw.settings || raw.workouts || raw.nutrition || raw.weights || raw.metrics || raw.foods || raw.templates || raw.menus || raw.measures || raw.exercises || raw.substitutions || raw.foodLog;
     if (!hasAny) throw new Error('invalid');
     state = normalize(raw);
     commit();
@@ -962,6 +1037,10 @@
     deleteFood: deleteFood,
     getFood: getFood,
     useFood: useFood,
+    addFoodLog: addFoodLog,
+    listFoodLog: listFoodLog,
+    removeFoodLog: removeFoodLog,
+    recentFoodLog: recentFoodLog,
     isDemoMode: isDemoMode,
     enterDemoMode: enterDemoMode,
     exitDemoMode: exitDemoMode,

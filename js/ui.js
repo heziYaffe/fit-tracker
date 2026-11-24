@@ -1014,6 +1014,194 @@
       renderTemplateList() + body;
   }
 
+  // ---------- Quick food logging ----------
+  function qlState() {
+    if (!ui.quick) ui.quick = { text: '', items: [], code: '', barcode: false, search: null };
+    return ui.quick;
+  }
+
+  function macroLine(t) {
+    return Math.round(t.calories || 0) + ' קק״ל · ' + Math.round(t.protein || 0) + ' חל׳ · ' +
+      Math.round(t.carbs || 0) + ' פחמ׳ · ' + Math.round(t.fat || 0) + ' שומן';
+  }
+
+  function renderQuickLog(date) {
+    const q = qlState();
+    const F = root.FitFood;
+    const items = q.items || [];
+    const rows = items.map(function (it, i) {
+      if (it.unmatched) {
+        const sr = q.search && q.search.i === i ? q.search : null;
+        let res = '';
+        if (sr && sr.loading) res = '<p class="kicker">מחפש…</p>';
+        else if (sr && sr.error) res = '<p class="kicker">' + esc(sr.error) + '</p>';
+        else if (sr && sr.results) {
+          res = sr.results.length ? '<div class="list">' + sr.results.map(function (r, ri) {
+            return '<button type="button" class="list-item" data-action="ql-pick" data-i="' + i + '" data-r="' + ri + '">' +
+              '<div class="title">' + esc(r.name) + '</div><div class="sub">' + esc(r.grams + ' ג׳ · ' + macroLine(r)) + '</div></button>';
+          }).join('') + '</div>' : '<p class="kicker">לא נמצא במאגר המוצרים. אפשר לנסח אחרת.</p>';
+        }
+        return '<div class="ql-item miss"><div class="ql-name">לא זיהיתי: «' + esc(it.query || it.text) + '»</div>' +
+          '<div class="ql-ctl"><button type="button" class="btn tiny" data-action="ql-search" data-i="' + i + '">חיפוש במאגר המוצרים</button>' +
+          '<button type="button" class="icon-btn" data-action="ql-del" data-i="' + i + '" aria-label="הסרה">×</button></div>' + res + '</div>';
+      }
+      return '<div class="ql-item"><div class="ql-name">' + esc(it.label || it.name) + '</div>' +
+        '<div class="ql-macros">' + esc(macroLine(it)) + '</div>' +
+        '<div class="ql-ctl"><label class="ql-grams"><input type="number" min="1" step="5" inputmode="numeric" data-ql-grams="' + i + '" value="' + (it.grams || '') + '" /> ג׳</label>' +
+        '<button type="button" class="icon-btn" data-action="ql-del" data-i="' + i + '" aria-label="הסרה">×</button></div></div>';
+    }).join('');
+    const ok = items.filter(function (it) { return !it.unmatched; });
+    const tot = F ? F.totals(ok) : { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    const recents = Store.recentFoodLog ? Store.recentFoodLog(6) : [];
+    return '<section class="card quick-log">' +
+      '<div class="section-title" style="margin-top:0"><h2>מה אכלת?</h2>' +
+      '<button type="button" class="linkish" data-action="ql-barcode">' + (q.barcode ? 'סגירת ברקוד' : 'ברקוד') + '</button></div>' +
+      '<textarea id="ql-text" rows="2" placeholder="למשל: 2 ביצים ופרוסת לחם מלא, קוטג׳">' + esc(q.text || '') + '</textarea>' +
+      (q.barcode ? '<div class="reps-editor ql-barcode"><input type="text" id="ql-code" inputmode="numeric" placeholder="מספר הברקוד שעל האריזה" value="' + esc(q.code || '') + '" />' +
+        '<button type="button" class="btn tiny" data-action="ql-code-go">חיפוש</button></div>' : '') +
+      '<div class="live-actions"><button type="button" class="btn primary" data-action="ql-parse"' + (q.busy ? ' disabled' : '') + '>' + (q.busy ? 'מחשב…' : 'חישוב') + '</button>' +
+      (items.length ? '<button type="button" class="btn" data-action="ql-clear">ניקוי</button>' : '') + '</div>' +
+      (rows ? '<div class="ql-list">' + rows + '</div>' : '') +
+      (ok.length ? '<p class="ql-total">סה״כ: ' + esc(macroLine(tot)) + '</p>' +
+        '<button type="button" class="btn primary wide" data-action="ql-add" data-date="' + date + '">הוספה ליומן</button>' : '') +
+      (recents.length && !items.length ? '<div class="field"><span class="kicker">אכלת לאחרונה · לחיצה מוסיפה שוב</span><div class="food-chips">' +
+        recents.map(function (r) {
+          return '<button type="button" class="chip food-chip" data-action="ql-recent" data-id="' + esc(r.id) + '" data-date="' + date + '">' +
+            esc(r.label || r.name) + ' <span>' + Math.round(r.calories) + '</span></button>';
+        }).join('') + '</div></div>' : '') +
+      '<p class="hp-legend">ערכים: USDA FoodData Central ותוויות יצרן (Open Food Facts).</p>' +
+      '</section>';
+  }
+
+  function renderFoodLogList(date) {
+    const rows = Store.listFoodLog ? Store.listFoodLog(date) : [];
+    if (!rows.length) return '';
+    const tot = root.FitFood ? root.FitFood.totals(rows) : null;
+    return '<section class="card"><div class="section-title" style="margin-top:0"><h2>נרשם ' + (date === E.todayISO() ? 'היום' : 'ביום הזה') + '</h2>' +
+      (tot ? '<span class="kicker">' + esc(Math.round(tot.calories) + ' קק״ל · ' + Math.round(tot.protein) + ' חל׳') + '</span>' : '') + '</div>' +
+      rows.map(function (r) {
+        return '<div class="ql-item"><div class="ql-name">' + esc(r.label || r.name) + '</div>' +
+          '<div class="ql-macros">' + esc(macroLine(r)) + '</div>' +
+          '<div class="ql-ctl"><button type="button" class="linkish" data-action="ql-fav" data-id="' + esc(r.id) + '">⭐ לקבועים</button>' +
+          '<button type="button" class="icon-btn" data-action="ql-remove" data-id="' + esc(r.id) + '" aria-label="מחיקה">×</button></div></div>';
+      }).join('') + '</section>';
+  }
+
+  // ---------- Menu wizard (built together, step by step) ----------
+  function menuPrefs() {
+    const s = state();
+    return Object.assign({ excludes: [], dislikes: [], meals: 4 }, s.settings.menuPrefs || {});
+  }
+
+  function startWizard() {
+    const s = state();
+    const p = menuPrefs();
+    const w = Store.latestWeight ? Store.latestWeight() : null;
+    const kg = w && (w.kg || w.weight || w.value);
+    const cal = Number(s.settings.dailyCalorieTarget) || (root.FitFood ? root.FitFood.estimateCalories(kg, p.goal || 'keep') : 2200);
+    ui.wiz = {
+      step: 1, goal: p.goal || 'keep', protein: E.proteinTarget(s), calories: cal, calAuto: !Number(s.settings.dailyCalorieTarget), kg: kg || 0,
+      meals: p.meals || 4, excludes: (p.excludes || []).slice(), dislikes: (p.dislikes || []).slice(), seed: 0, menu: null
+    };
+    ui.tab = 'nutrition';
+    render();
+    try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+  }
+
+  // Rule-based menu now; a registered menu provider (FitFood.setMenuProvider)
+  // takes over automatically and falls back to the rules on any failure.
+  function wizBuild() {
+    const w = ui.wiz;
+    const prefs = { protein: w.protein, calories: w.calories, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes, seed: w.seed, goal: w.goal };
+    if (!root.FitFood.hasMenuProvider()) { w.menu = root.FitFood.buildMenu(prefs); return; }
+    w.menu = null;
+    w.loading = true;
+    const token = (w.token = (w.token || 0) + 1);
+    root.FitFood.buildMenuAsync(prefs).then(function (menu) {
+      if (ui.wiz !== w || w.token !== token) return;
+      w.menu = menu;
+      w.loading = false;
+      render();
+    });
+  }
+
+  function renderWizard() {
+    const w = ui.wiz;
+    const F = root.FitFood;
+    const dots = '<p class="kicker">שלב ' + w.step + ' מתוך 4</p>';
+    const back = w.step > 1 ? '<button type="button" class="btn" data-action="wiz-back">חזרה</button>' : '';
+    let body = '';
+    if (w.step === 1) {
+      const goals = [['cut', 'חיטוב'], ['keep', 'שמירה'], ['bulk', 'מסה']];
+      body = '<section class="card"><h2>מה המטרה?</h2><div class="chips">' + goals.map(function (g) {
+        return '<button type="button" class="chip' + (w.goal === g[0] ? ' active' : '') + '" data-action="wiz-goal" data-val="' + g[0] + '">' + g[1] + '</button>';
+      }).join('') + '</div>' +
+        '<label class="field"><span>חלבון ביום (גרם)</span><input type="number" id="wiz-protein" inputmode="numeric" value="' + esc(w.protein) + '" /></label>' +
+        '<label class="field"><span>קלוריות ביום</span><input type="number" id="wiz-calories" inputmode="numeric" value="' + esc(w.calories) + '" /></label>' +
+        (w.calAuto ? '<p class="hp-legend">הערכה לפי ' + (w.kg ? 'משקל ' + w.kg + ' ק״ג' : 'ממוצע') + ' ×30, מותאם למטרה. אפשר לשנות.</p>' : '') +
+        '</section>';
+    } else if (w.step === 2) {
+      body = '<section class="card"><h2>כמה ארוחות ביום?</h2><div class="chips">' + [3, 4, 5].map(function (n) {
+        return '<button type="button" class="chip' + (w.meals === n ? ' active' : '') + '" data-action="wiz-meals" data-val="' + n + '">' + n + '</button>';
+      }).join('') + '</div><p class="hp-legend">' + (w.meals === 3 ? 'בוקר, צהריים, ערב' : w.meals === 4 ? 'בוקר, צהריים, ביניים, ערב' : 'בוקר, ביניים, צהריים, ביניים, ערב') + '</p></section>';
+    } else if (w.step === 3) {
+      const groups = [['חלבונים', ['bp', 'mp', 'sp']], ['פחמימות', ['bc', 'mc']], ['ירקות, פירות ותוספות', ['veg', 'fruit', 'fat', 'nut']]];
+      const shown = {};
+      body = '<section class="card"><h2>מה לא בתפריט?</h2><div class="chips">' + F.EXCLUDE_OPTIONS.map(function (o) {
+        return '<button type="button" class="chip' + (w.excludes.indexOf(o.id) >= 0 ? ' active' : '') + '" data-action="wiz-excl" data-val="' + o.id + '">' + esc(o.label) + '</button>';
+      }).join('') + '</div></section>' +
+        '<section class="card"><h2>מה אתה לא אוהב?</h2><p class="hp-legend">לחיצה מסמנת מאכל שלא ייכנס לתפריט.</p>' +
+        groups.map(function (g) {
+          const foods = F.choosable().filter(function (f) {
+            if (shown[f.id]) return false;
+            const hit = f.roles.some(function (r) { return g[1].indexOf(r) >= 0; });
+            if (hit) shown[f.id] = 1;
+            return hit;
+          });
+          return '<div class="field"><span class="kicker">' + g[0] + '</span><div class="chips">' + foods.map(function (f) {
+            const off = w.dislikes.indexOf(f.id) >= 0;
+            return '<button type="button" class="chip' + (off ? ' active strike' : '') + '" data-action="wiz-dislike" data-val="' + f.id + '">' + esc(f.name) + '</button>';
+          }).join('') + '</div></div>';
+        }).join('') + '</section>';
+    } else if (!w.menu) {
+      if (!w.loading) wizBuild();
+      body = w.menu ? '' : '<section class="card"><p>בונה הצעה…</p></section>';
+    }
+    if (w.step === 4 && w.menu) {
+      const tot = Store.menuTotals(w.menu);
+      body = '<p class="plan-progress">חלבון ' + Math.round(tot.protein) + ' מתוך ' + w.protein + ' ג׳ · ' + Math.round(tot.calories) + ' מתוך ' + w.calories + ' קק״ל</p>' +
+        '<p class="hp-legend">לא מתאים משהו? «החלפה» ליד כל פריט מציעה חלופות עם ערכים דומים.</p>' +
+        w.menu.meals.map(function (meal, mi) {
+          const mt = Store.mealTotals(meal);
+          return '<div class="meal-card"><div class="meal-head"><div><strong>' + esc(meal.name) + '</strong><div class="kicker">' + esc(meal.time || '') + '</div></div>' +
+            '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div><div class="meal-foods">' +
+            meal.foods.map(function (f, fi) {
+              return '<div class="meal-food"><div>' + esc(f.name) + '</div><div>' + Math.round(f.protein) + ' חל׳ · ' + Math.round(f.calories) + ' קק״ל' +
+                ' <button type="button" class="linkish" data-action="wiz-swap" data-mi="' + mi + '" data-fi="' + fi + '">החלפה</button></div></div>';
+            }).join('') + '</div></div>';
+        }).join('') +
+        '<button type="button" class="btn wide" data-action="wiz-again">הצעה אחרת</button>';
+    }
+    const next = w.step < 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">המשך</button>'
+      : (w.step === 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">בנה לי תפריט</button>'
+        : '<button type="button" class="btn primary wide" data-action="wiz-save">שמירה כתפריט שלי</button>');
+    return pageHead('<div><p class="kicker">בונים תפריט יחד</p><h1>' + ['', 'יעדים', 'ארוחות', 'העדפות', 'התפריט שלך'][w.step] + '</h1></div>',
+      '<button type="button" class="btn" data-action="wiz-cancel">ביטול</button>', { noGear: true }) +
+      dots + body + '<div class="live-actions">' + back + next + '</div>';
+  }
+
+  function wizCollect() {
+    const w = ui.wiz;
+    if (!w) return;
+    const p = document.getElementById('wiz-protein');
+    const c = document.getElementById('wiz-calories');
+    if (p && Number(p.value) > 0) w.protein = Math.round(Number(p.value));
+    if (c && Number(c.value) > 0) {
+      if (Math.round(Number(c.value)) !== w.calories) w.calAuto = false;
+      w.calories = Math.round(Number(c.value));
+    }
+  }
+
   function renderNutrition() {
     const s = state();
     const date = ui.nutritionDate || E.todayISO();
@@ -1062,6 +1250,8 @@
       '<h2>' + esc(title) + '</h2>' +
       '<button type="button" class="btn" data-action="shift-day" data-delta="1" aria-label="היום הבא" ' + (isToday ? 'disabled' : '') + '>←</button>' +
       '</div>' +
+      renderQuickLog(date) +
+      renderFoodLogList(date) +
       renderTodayMeals(date) +
       renderFoodsLibrary(date) +
       '<section class="card">' +
@@ -2118,11 +2308,12 @@
     const day = Store.getDayMenu(date);
     const menus = Store.listMenus();
     const header = '<div class="section-title"><h2>תפריט היום</h2>' +
-      '<button type="button" class="linkish" data-action="new-menu">+ תפריט</button></div>';
+      '<button type="button" class="linkish" data-action="wiz-start">' + (menus.length ? 'בנייה מחדש' : '+ תפריט') + '</button></div>';
     if (!day) {
       return header + (menus.length ? renderMenuList() : '<div class="empty card">' + emptyArt('food') +
-        '<p>אין תפריט ליום הזה. בנו תבנית או החילו תפריט קיים.</p>' +
-        '<button type="button" class="btn primary" data-action="new-menu">תפריט חדש</button></div>');
+        '<p>אין עדיין תפריט. נבנה אחד יחד ב-4 שלבים קצרים: יעדים, מספר ארוחות, מה לא אוכלים, ואז הצעה שאפשר להחליף בה כל פריט.</p>' +
+        '<button type="button" class="btn primary" data-action="wiz-start">בונים תפריט יחד</button>' +
+        '<button type="button" class="linkish" data-action="new-menu">או בנייה ידנית</button></div>');
     }
     const eaten = (day.meals || []).filter(function (m) { return m.status === 'eaten'; }).length;
     const total = (day.meals || []).length;
@@ -2144,7 +2335,7 @@
         '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div>' +
         '<div class="meal-foods">' + foods + '</div>' +
         (st === 'pending'
-          ? '<div class="live-actions"><button type="button" class="btn primary" data-action="eat-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">אכלתי</button>' +
+          ? '<div class="live-actions"><button type="button" class="btn primary" data-action="eat-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">אכלתי כמתוכנן</button>' +
             '<button type="button" class="btn" data-action="skip-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">דילוג</button></div>'
           : '<div class="live-actions"><p class="kicker">' + (st === 'eaten' ? 'נאכלה ✓' : 'דולגה') + '</p>' +
             '<button type="button" class="linkish" data-action="undo-meal" data-date="' + date + '" data-mid="' + esc(meal.id) + '">ביטול</button></div>') +
@@ -2152,7 +2343,7 @@
     }).join('');
     return header +
       '<p class="plan-progress">ארוחות ' + ltr(eaten + ' / ' + total) +
-      ' · חלבון עד כה ' + ltr((Number(nut.protein) || 0) + ' / ' + pTarget) + '</p>' +
+      ' · חלבון עד כה ' + ltr(Math.round(Number(nut.protein) || 0) + ' / ' + pTarget) + '</p>' +
       '<p class="kicker" style="margin-bottom:8px">' + esc(day.menuName || '') + '</p>' +
       cards +
       '<details class="card" style="margin-top:8px"><summary>החלפת תפריט או עריכה</summary>' + renderMenuList() + '</details>';
@@ -2448,14 +2639,40 @@
 
   function renderSwapFoodSheet() {
     const foods = Store.listFoods();
+    const sm = ui.swapMeal;
+    let alts = [];
+    if (sm && root.FitFood) {
+      let item = null;
+      let mealFoods = [];
+      if (sm.wiz && ui.wiz && ui.wiz.menu) {
+        const meal = ui.wiz.menu.meals[sm.mi];
+        mealFoods = meal ? meal.foods : [];
+        item = mealFoods[sm.fi];
+      } else {
+        const day = Store.getDayMenu(sm.date);
+        const meal = day && (day.meals || []).find(function (m) { return m.id === sm.mealId; });
+        mealFoods = meal ? meal.foods : [];
+        item = mealFoods.find(function (f) { return f.id === sm.foodId; });
+      }
+      const w = ui.wiz;
+      const prefs = sm.wiz && w ? { excludes: w.excludes, dislikes: w.dislikes } : menuPrefs();
+      if (item && item.dbId) alts = root.FitFood.swapOptions(item, prefs, mealFoods);
+      sm.alts = alts;
+    }
     return '<div class="sheet" role="dialog" aria-label="החלפת מאכל"><div class="sheet-handle"></div>' +
-      '<div class="sheet-head"><h2>החלפת מאכל להיום</h2>' +
+      '<div class="sheet-head"><h2>' + (sm && sm.wiz ? 'החלפת פריט' : 'החלפת מאכל להיום') + '</h2>' +
       '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
-      '<div class="list">' + foods.map(function (f) {
+      (alts.length ? '<div class="section-title"><h2>חלופות עם ערכים דומים</h2></div><div class="list">' + alts.map(function (f, i) {
+        return '<button type="button" class="list-item" data-action="pick-swap-alt" data-idx="' + i + '">' +
+          '<div class="title">' + esc(f.name) + '</div>' +
+          '<div class="sub">' + Math.round(f.protein) + 'ג׳ חלבון · ' + Math.round(f.calories) + ' קק״ל</div></button>';
+      }).join('') + '</div>' : '') +
+      (sm && sm.wiz ? '' : '<div class="section-title"><h2>מהקבועים שלך</h2></div>') +
+      (sm && sm.wiz ? '' : '<div class="list">' + foods.map(function (f) {
         return '<button type="button" class="list-item" data-action="pick-swap-food" data-id="' + esc(f.id) + '">' +
           '<div class="title">' + esc(f.name) + '</div>' +
           '<div class="sub">' + (f.protein || 0) + 'ג׳ · ' + (f.calories || 0) + ' קק״ל</div></button>';
-      }).join('') + '</div></div>';
+      }).join('') + '</div>') + '</div>';
   }
 
   function renderSwapExerciseSheet() {
@@ -2966,6 +3183,7 @@
     else if (liveOn) html += renderLive();
     else if (ui.editingTemplate) html += renderTemplateEditor();
     else if (ui.editingMenu) html += renderMenuEditor();
+    else if (ui.wiz && ui.tab === 'nutrition') html += renderWizard();
     else if (ui.view === 'summary') html += renderSummary();
     else if (ui.view === 'body') html += renderBody();
     else if (ui.exerciseName) html += renderExerciseDetail();
@@ -2977,7 +3195,7 @@
     main.innerHTML = html;
     document.body.classList.toggle('is-demo', Store.isDemoMode());
     document.body.classList.toggle('is-live', liveOn);
-    document.body.classList.toggle('is-builder', !!(ui.editingTemplate || ui.editingMenu));
+    document.body.classList.toggle('is-builder', !!(ui.editingTemplate || ui.editingMenu || (ui.wiz && ui.tab === 'nutrition')));
     paintSummaryPreview();
 
     document.querySelectorAll('.tab').forEach(function (btn) {
@@ -4115,6 +4333,174 @@
       render();
       return;
     }
+    // ---------- quick log ----------
+    if (action === 'ql-parse') {
+      const q = qlState();
+      const ta = document.getElementById('ql-text');
+      q.text = ta ? ta.value : q.text;
+      if (!String(q.text || '').trim()) { toast('כתבו מה אכלתם'); return; }
+      q.search = null;
+      q.busy = true;
+      render();
+      root.FitFood.parseFoodText(q.text).then(function (items) {
+        q.busy = false;
+        q.items = (q.items || []).filter(function (it) { return it.fromCode; }).concat(items);
+        render();
+        if (items.some(function (it) { return it.unmatched; })) toast('חלק לא זוהה · אפשר לחפש במאגר המוצרים');
+      });
+      return;
+    }
+    if (action === 'ql-clear') { ui.quick = null; render(); return; }
+    if (action === 'ql-del') {
+      const q = qlState();
+      q.items.splice(Number(btn.dataset.i), 1);
+      q.search = null;
+      render();
+      return;
+    }
+    if (action === 'ql-search') {
+      const q = qlState();
+      const i = Number(btn.dataset.i);
+      const it = q.items[i];
+      if (!it) return;
+      q.search = { i: i, loading: true };
+      render();
+      root.FitFood.searchProducts(it.query || it.text).then(function (results) {
+        if (q.search && q.search.i === i) { q.search = { i: i, results: results }; render(); }
+      }).catch(function () {
+        if (q.search && q.search.i === i) { q.search = { i: i, error: 'המאגר לא זמין כרגע. נסו שוב עוד רגע.' }; render(); }
+      });
+      return;
+    }
+    if (action === 'ql-pick') {
+      const q = qlState();
+      const i = Number(btn.dataset.i);
+      const r = q.search && q.search.results && q.search.results[Number(btn.dataset.r)];
+      if (r) q.items[i] = r;
+      q.search = null;
+      render();
+      return;
+    }
+    if (action === 'ql-barcode') { const q = qlState(); q.barcode = !q.barcode; render(); return; }
+    if (action === 'ql-code-go') {
+      const q = qlState();
+      const el = document.getElementById('ql-code');
+      q.code = el ? el.value : q.code;
+      const ta = document.getElementById('ql-text');
+      if (ta) q.text = ta.value;
+      toast('מחפש…');
+      root.FitFood.lookupBarcode(q.code).then(function (item) {
+        if (!item) { toast('הברקוד לא נמצא במאגר'); return; }
+        item.fromCode = true;
+        q.items.push(item);
+        q.code = '';
+        render();
+      }).catch(function () { toast('המאגר לא זמין כרגע'); });
+      return;
+    }
+    if (action === 'ql-add') {
+      const q = qlState();
+      const date = btn.dataset.date || ui.nutritionDate || E.todayISO();
+      const items = q.items;
+      ui.quick = null;
+      const rows = Store.addFoodLog(date, items);
+      render();
+      haptic(14);
+      toast('נוסף ליומן: ' + rows.length + ' פריטים');
+      return;
+    }
+    if (action === 'ql-recent') {
+      const src = (Store.getState().foodLog || []).find(function (r) { return r.id === btn.dataset.id; });
+      if (!src) return;
+      Store.addFoodLog(btn.dataset.date || ui.nutritionDate || E.todayISO(), [src]);
+      haptic(14);
+      toast('נוסף: ' + (src.label || src.name));
+      return;
+    }
+    if (action === 'ql-remove') {
+      const row = Store.removeFoodLog(btn.dataset.id);
+      if (row) toast('הוסר: ' + (row.label || row.name));
+      return;
+    }
+    if (action === 'ql-fav') {
+      const src = (Store.getState().foodLog || []).find(function (r) { return r.id === btn.dataset.id; });
+      if (!src) return;
+      const name = src.label || src.name;
+      if (Store.listFoods().some(function (f) { return f.name === name; })) { toast('כבר בקבועים'); return; }
+      Store.addFood({ name: name, protein: src.protein, calories: src.calories, carbs: src.carbs, fat: src.fat });
+      toast('נשמר בקבועים · לחיצה אחת להוספה');
+      return;
+    }
+    // ---------- menu wizard ----------
+    if (action === 'wiz-start') { closeModal(); startWizard(); return; }
+    if (action === 'wiz-cancel') { ui.wiz = null; render(); return; }
+    if (action === 'wiz-back') { wizCollect(); ui.wiz.step = Math.max(1, ui.wiz.step - 1); render(); return; }
+    if (action === 'wiz-next') {
+      wizCollect();
+      ui.wiz.step = Math.min(4, ui.wiz.step + 1);
+      if (ui.wiz.step === 4) wizBuild();
+      render();
+      try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+      return;
+    }
+    if (action === 'wiz-goal') {
+      wizCollect();
+      const w = ui.wiz;
+      w.goal = btn.dataset.val;
+      if (w.calAuto) w.calories = root.FitFood.estimateCalories(w.kg, w.goal);
+      render();
+      return;
+    }
+    if (action === 'wiz-meals') { ui.wiz.meals = Number(btn.dataset.val); render(); return; }
+    if (action === 'wiz-excl' || action === 'wiz-dislike') {
+      const arr = action === 'wiz-excl' ? ui.wiz.excludes : ui.wiz.dislikes;
+      const v = btn.dataset.val;
+      const i = arr.indexOf(v);
+      if (i >= 0) arr.splice(i, 1); else arr.push(v);
+      render();
+      return;
+    }
+    if (action === 'wiz-again') { ui.wiz.seed += 1; wizBuild(); render(); return; }
+    if (action === 'wiz-swap') {
+      ui.swapMeal = { wiz: true, mi: Number(btn.dataset.mi), fi: Number(btn.dataset.fi) };
+      openModal('swap-food');
+      return;
+    }
+    if (action === 'wiz-save') {
+      const w = ui.wiz;
+      if (!w || !w.menu) return;
+      const existing = Store.listMenus().find(function (m) { return m.name === 'התפריט שלי'; });
+      const data = { name: 'התפריט שלי', days: [0, 1, 2, 3, 4, 5, 6], applyOn: '', meals: w.menu.meals };
+      const menu = existing ? Store.updateMenu(existing.id, data) : Store.addMenu(data);
+      Store.updateSettings({
+        dailyProteinTarget: w.protein, dailyCalorieTarget: w.calories,
+        menuPrefs: { goal: w.goal, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes }
+      });
+      const date = ui.nutritionDate || E.todayISO();
+      const day = Store.getDayMenu(date);
+      const eatenAny = day && (day.meals || []).some(function (m) { return m.status === 'eaten'; });
+      if (menu && !eatenAny) Store.applyMenuToDate(menu.id, date);
+      ui.wiz = null;
+      haptic(16);
+      toast('התפריט נשמר · כל ארוחה: «אכלתי כמתוכנן»');
+      setTab('nutrition');
+      return;
+    }
+    if (action === 'pick-swap-alt') {
+      const sm = ui.swapMeal;
+      const alt = sm && sm.alts && sm.alts[Number(btn.dataset.idx)];
+      if (alt && sm.wiz && ui.wiz && ui.wiz.menu) {
+        const meal = ui.wiz.menu.meals[sm.mi];
+        if (meal) meal.foods[sm.fi] = Object.assign({}, alt);
+        toast('הוחלף');
+      } else if (alt && sm) {
+        Store.replaceDayMealFood(sm.date, sm.mealId, sm.foodId, alt);
+        toast('המאכל הוחלף להיום בלבד');
+      }
+      ui.swapMeal = null;
+      closeModal();
+      return;
+    }
     if (action === 'use-food') {
       const food = Store.useFood(btn.dataset.id, btn.dataset.date || ui.nutritionDate || E.todayISO());
       if (food) toast('נוסף: ' + food.name);
@@ -4422,6 +4808,15 @@
   function onChange(ev) {
     const el = ev.target;
     if (!el) return;
+    if (el.dataset && el.dataset.qlGrams != null && ui.quick) {
+      const i = Number(el.dataset.qlGrams);
+      const it = ui.quick.items[i];
+      if (it && !it.unmatched && Number(el.value) > 0) {
+        ui.quick.items[i] = root.FitFood.rescale(it, Number(el.value));
+        render();
+      }
+      return;
+    }
     if (el.dataset.liveTarget) {
       if (!root.FitLive || !root.FitLive.editSessionTarget) return;
       const patch = {};
@@ -4675,6 +5070,8 @@
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);
       if (el && el.dataset.tex != null) onTexInput(el);
       if (el && el.dataset.meal != null) syncMeal(el);
+      if (el && el.id === 'ql-text') { qlState().text = el.value; return; }
+      if (el && el.id === 'ql-code') { qlState().code = el.value; return; }
       if (el && el.id === 'swap-query') {
         ui.swapQuery = el.value;
         const pos = el.selectionStart;

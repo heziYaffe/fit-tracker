@@ -3,7 +3,7 @@
 (function (root) {
   'use strict';
 
-  var COLLECTIONS = ['workouts', 'nutrition', 'weights', 'metrics', 'foods', 'templates', 'menus', 'dayMenus', 'measures'];
+  var COLLECTIONS = ['workouts', 'nutrition', 'weights', 'metrics', 'foods', 'templates', 'menus', 'dayMenus', 'measures', 'foodLog'];
   var authUser = null;
   var status = { configured: false, user: null, lastSync: null, error: null };
 
@@ -86,7 +86,8 @@
     const out = [];
     Object.keys(map).forEach(function (id) {
       const rec = map[id].row;
-      if (rec.deletedAt || rec.deleted_at) return;
+      // Local tombstones (deletedAt) stay so the next push records the delete.
+      if (rec.deleted_at && !rec.deletedAt) return;
       out.push(rec);
     });
     return out;
