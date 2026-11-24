@@ -172,7 +172,10 @@ pending.push(F.parseFoodText('משהו', { provider: function () { return Promis
   .then(items => assert(items[0].unmatched, 'provider failure falls back')));
 pending.push(F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3, excludes: ['nofish'] }, {
   provider: function (prefs, ctx) {
-    assert(ctx.catalog.length === F.DB.length && ctx.catalog[0].per100, 'catalog passed');
+    assert(ctx.catalog.length > 20 && ctx.catalog[0].per100, 'catalog passed');
+    assert(!ctx.catalog.some(c => c.tags.indexOf('fish') >= 0), 'excluded foods never reach the model');
+    assert(ctx.catalog.every(c => c.roles.length), 'only menu foods in the catalog');
+    assert(ctx.slots && ctx.slots.length === 3 && ctx.slots[0].kind === 'breakfast', 'meal slots passed');
     return Promise.resolve({ meals: [
       { name: 'בוקר', foods: [{ dbId: 'egg', grams: 100 }, { dbId: 'wbread', grams: 60 }] },
       { name: 'צהריים', foods: [{ dbId: 'chicken', grams: 150, role: 'mp' }, { dbId: 'rice', grams: 150 }, { dbId: 'salmon', grams: 100 }, { dbId: 'nonsense' }] },

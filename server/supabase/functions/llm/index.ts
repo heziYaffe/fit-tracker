@@ -119,7 +119,7 @@ async function runTask(sb: ReturnType<typeof admin>, userId: string, task: strin
     attempts.push(a);
     if (a.status === 200) {
       try {
-        const out = validateOutput(task, JSON.parse(a.text));
+        const out = validateOutput(task, JSON.parse(a.text), input);
         if (out) { parsed = out; used = model; break; }
         a.err = "bad_output";
       } catch (_e) { a.err = "bad_output"; }

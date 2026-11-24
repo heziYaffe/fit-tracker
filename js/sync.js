@@ -202,6 +202,8 @@
     if (!sess) {
       authUser = null;
       status.user = null;
+      status.whoop = undefined;
+      try { localStorage.removeItem('fit-whoop-status'); } catch (e) { /* ignore */ }
       writeStoredAuth(null);
       return;
     }
@@ -545,6 +547,41 @@
     });
   }
 
+  // Last answer the server gave about the Whoop link, so the first paint after
+  // opening the app already knows "connected" (no flash of «חבר Whoop» while
+  // the status call is in flight, offline, or the app session is refreshing).
+  var WHOOP_STATUS_KEY = 'fit-whoop-status';
+  function saveWhoopStatus(w) {
+    try {
+      if (!w || !w.definitive) return;
+      localStorage.setItem(WHOOP_STATUS_KEY, JSON.stringify({
+        connected: !!w.connected, needs_reconnect: !!w.needs_reconnect, definitive: true,
+        link: w.link ? { connected_at: w.link.connected_at || null, last_sync_at: w.link.last_sync_at || null } : null,
+        at: new Date().toISOString()
+      }));
+    } catch (e) { /* ignore */ }
+  }
+  function loadWhoopStatus() {
+    try {
+      var w = JSON.parse(localStorage.getItem(WHOOP_STATUS_KEY) || 'null');
+      return w && w.definitive ? Object.assign({}, w, { cached: true }) : null;
+    } catch (e) { return null; }
+  }
+  if (readStoredAuth()) status.whoop = loadWhoopStatus() || undefined;
+
+  // 'connected' | 'reconnect' | 'disconnected' | 'unknown'. Only a definitive
+  // server answer (status 200, or a refresh that said invalid_grant /
+  // not_connected) can make it 'reconnect' or 'disconnected'; a 401 from the
+  // app session, a 5xx, no network or "not checked yet" stays 'unknown'.
+  function whoopConnState(w) {
+    w = w === undefined ? status.whoop : w;
+    if (!w) return 'unknown';
+    if (w.needs_reconnect && w.definitive) return 'reconnect';
+    if (w.connected && !w.needs_reconnect) return 'connected';
+    if (w.definitive && !w.connected) return 'disconnected';
+    return 'unknown';
+  }
+
   function applyWhoopStatusResponse(prev, httpStatus, body) {
     prev = prev || {};
     body = body || {};
@@ -560,7 +597,10 @@
         error: authErrorMessage(body, 'לא ניתן לבדוק את מצב Whoop')
       });
     }
-    return body;
+    if (!body || typeof body.connected !== 'boolean') {
+      return Object.assign({}, prev, { statusFailed: true });
+    }
+    return Object.assign({}, body, { definitive: true });
   }
 
   function whoopStatus() {
@@ -571,6 +611,7 @@
     return authedFetch(fnUrl() + '/status').then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         status.whoop = applyWhoopStatusResponse(status.whoop, r.status, body);
+        saveWhoopStatus(status.whoop);
         return status.whoop;
       });
     }).catch(function (err) {
@@ -596,15 +637,19 @@
           if (body && (body.error === 'invalid_grant' || body.error === 'not_connected')) {
             status.whoop = Object.assign({}, status.whoop || {}, {
               needs_reconnect: true,
-              connected: body.error === 'not_connected' ? false : (status.whoop && status.whoop.connected),
+              definitive: true,
+              connected: false,
               error: 'החיבור ל-Whoop פג. לחצו «חבר Whoop» פעם אחת.'
             });
+            saveWhoopStatus(status.whoop);
           }
           throw new Error(authErrorMessage(body, 'משיכת נתוני Whoop נכשלה'));
         }
         markWhoopPulled();
         if (body) {
-          status.whoop = Object.assign({}, status.whoop || {}, body, { needs_reconnect: !!body.needs_reconnect, error: null });
+          // a successful pull proves the link works
+          status.whoop = Object.assign({}, status.whoop || {}, body, { connected: true, needs_reconnect: false, definitive: true, error: null });
+          saveWhoopStatus(status.whoop);
         }
         return body;
       });
@@ -649,7 +694,15 @@
     COLLECTIONS: COLLECTIONS,
     isConfigured: isConfigured,
     whoopReady: whoopReady,
-    status: function () { return Object.assign({}, status, { configured: isConfigured(), signedIn: !!authUser, whoopReady: whoopReady() }); },
+    status: function () {
+      return Object.assign({}, status, {
+        configured: isConfigured(), signedIn: !!authUser, whoopReady: whoopReady(),
+        // a stored session that is still being restored counts as signed in for display
+        maybeSignedIn: !!(authUser || readStoredAuth()),
+        whoopState: whoopConnState()
+      });
+    },
+    whoopConnState: whoopConnState,
     mergeRecords: mergeRecords,
     mergeStates: mergeStates,
     packCollections: packCollections,

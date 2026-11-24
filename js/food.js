@@ -142,6 +142,57 @@
   const byId = {};
   DB.forEach(function (f) { byId[f.id] = f; });
 
+  // Cooking yields (cooked weight / raw weight). The table values above are
+  // for the state in `base`: grains, legumes and meat/fish are per 100 g
+  // COOKED (USDA "cooked" entries), oats per 100 g DRY. Starches use the USDA
+  // raw/cooked energy ratio (so a raw weight converts to the same calories);
+  // meat and fish use USDA cooking weight yields (fat/water drip).
+  const COOK = {
+    rice: { y: 2.8, base: 'cooked' }, brownrice: { y: 3.2, base: 'cooked' }, pasta: { y: 2.35, base: 'cooked' },
+    quinoa: { y: 3, base: 'cooked' }, buckwheat: { y: 3.7, base: 'cooked' }, lentils: { y: 3, base: 'cooked' },
+    chickpeas: { y: 2.3, base: 'cooked' },
+    chicken: { y: 0.75, base: 'cooked' }, thigh: { y: 0.7, base: 'cooked' }, turkey: { y: 0.75, base: 'cooked' },
+    beef: { y: 0.75, base: 'cooked' }, steak: { y: 0.75, base: 'cooked' },
+    salmon: { y: 0.8, base: 'cooked' }, whitefish: { y: 0.8, base: 'cooked' },
+    oats: { y: 4, base: 'raw' } // porridge with water; depends on how much water
+  };
+  function cookInfo(foodOrId) {
+    const id = typeof foodOrId === 'string' ? foodOrId : (foodOrId && foodOrId.id);
+    return (id && COOK[id]) || null;
+  }
+  function round5(n) { return Math.max(5, Math.round(n / 5) * 5); }
+  // Second line for a portion: the other weight. grams are in the table's state.
+  function cookAlt(dbId, grams) {
+    const c = cookInfo(dbId);
+    const g = Number(grams) || 0;
+    if (!c || g <= 0) return null;
+    if (c.base === 'cooked') {
+      const raw = round5(g / c.y);
+      return { state: 'cooked', raw: raw, cooked: Math.round(g), text: 'אחרי בישול · לפני: ≈ ' + raw + ' ג׳' };
+    }
+    const cooked = round5(g * c.y);
+    return { state: 'raw', raw: Math.round(g), cooked: cooked, text: 'יבש · אחרי בישול: ≈ ' + cooked + ' ג׳' };
+  }
+  const RAW_RE = /(^| )(לא מבושל(ת|ים|ות)?|לפני (ה)?בישול|יבש(ה|ים|ות)?|נא|גולמי(ת|ים|ות)?)(?= |$)/g;
+  const COOKED_RE = /(^| )(מבושל(ת|ים|ות)?|אחרי (ה)?בישול|מוכן|מוכנה)(?= |$)/g;
+  function cookStateOf(text) {
+    const t = bare(text);
+    if (RAW_RE.test(t)) { RAW_RE.lastIndex = 0; return 'raw'; }
+    RAW_RE.lastIndex = 0;
+    if (COOKED_RE.test(t)) { COOKED_RE.lastIndex = 0; return 'cooked'; }
+    COOKED_RE.lastIndex = 0;
+    return '';
+  }
+  function stripCookWords(text) {
+    return bare(text).replace(RAW_RE, ' ').replace(COOKED_RE, ' ').replace(/\s+/g, ' ').trim();
+  }
+  // grams the user gave in `state` → grams in the table's state
+  function toTableGrams(food, grams, state) {
+    const c = cookInfo(food);
+    if (!c || !state || state === c.base) return grams;
+    return c.base === 'cooked' ? grams * c.y : grams / c.y;
+  }
+
   function norm(s) {
     return String(s || '')
       .replace(/[\u0591-\u05C7]/g, '')
@@ -265,8 +316,11 @@
     });
     if (half) qty = (qty == null ? 1 : qty) + half;
     const name = rest.join(' ');
-    const food = matchFood(name) || (unit === 'serving' ? null : null);
+    // "אורז מבושל" / "אורז לא מבושל" / "50 גרם שיבולת שועל יבשה": the full name
+    // first (some aliases include the word, e.g. "חומוס מבושל"), then without it.
+    const food = matchFood(name) || (stripCookWords(name) ? matchFood(stripCookWords(name)) : null);
     if (!food) return { text: seg, query: name || seg, unmatched: true, qty: qty, unit: unit };
+    const cookState = cookInfo(food) ? cookStateOf(name) : '';
     let grams;
     if (unit === 'g' || unit === 'ml') grams = qty || food.b;
     else if (unit === 'kg' || unit === 'l') grams = (qty || 1) * 1000;
@@ -276,7 +330,10 @@
       else grams = qty >= 20 ? qty : qty * food.b;
     } else grams = food.u && food.b < food.u.g ? food.u.g : (food.u ? food.u.g * Math.max(1, Math.round(food.b / food.u.g)) : food.b);
     if (!unit && qty == null && food.u && food.u.g >= 50) grams = food.u.g; // "ביצה" = one egg
-    grams = Math.round(grams * size);
+    // Only a weight the user typed is converted; default portions are already
+    // in the table's state.
+    const typedWeight = unit === 'g' || unit === 'kg' || (!unit && qty != null && qty >= 20 && grams === qty);
+    grams = Math.round(typedWeight ? toTableGrams(food, grams * size, cookState) : grams * size);
     return itemFor(food, grams, seg);
   }
 
@@ -470,10 +527,129 @@
     return out;
   }
 
+  // ---------- Dislikes (hard constraint everywhere: AI catalog, AI output, rules, swaps) ----------
+  // A disliked table food also blocks its close variants that have no chip of
+  // their own (e.g. "טונה במים" → "טונה בשמן").
+  const FAMILY = { tuna: ['tunaoil'], tahini: ['rawtahini'], hummus: ['chickpeas'], potato: ['fries'] };
+
+  // Generic words that mean a whole group.
+  const GROUP_WORDS = {
+    'עוף': ['chicken', 'thigh', 'schnitzel'],
+    'דג': ['whitefish', 'salmon', 'tuna', 'tunaoil'], 'דגים': ['whitefish', 'salmon', 'tuna', 'tunaoil'],
+    'בשר': ['beef', 'steak'], 'בשר אדום': ['beef', 'steak'],
+    'גבינה': ['cottage', 'whitecheese', 'yellowcheese', 'bulgarian', 'labane'], 'גבינות': ['cottage', 'whitecheese', 'yellowcheese', 'bulgarian', 'labane'],
+    'ביצה': ['egg', 'omelet', 'eggwhite'], 'ביצים': ['egg', 'omelet', 'eggwhite'],
+    'קטניות': ['lentils', 'chickpeas', 'hummus'], 'יוגורט': ['yogurt', 'proyogurt']
+  };
+
+  function singular(w) {
+    if (w.length >= 4 && /(ים|ות)$/.test(w)) return w.slice(0, -2);
+    return w;
+  }
+
+  // Free-text term ("טונה", "עוף", "קוטג׳", "דגים") → table ids. Matches the
+  // best food for the phrase plus every food whose name/alias contains the
+  // term as a whole word ("טונה" → טונה במים + טונה בשמן; "עוף" → חזה עוף,
+  // פרגית (ירך עוף), שניצל (שניצל עוף)).
+  function termIds(term) {
+    const out = {};
+    const t = bare(term).replace(/^(את|ה)\s+/, '');
+    if (!t || t.length < 2) return [];
+    const variants = [t];
+    const sg = t.split(' ').map(singular).join(' ');
+    if (sg !== t) variants.push(sg);
+    if (t.length > 3 && t[0] === 'ה' && t.indexOf(' ') < 0) variants.push(t.slice(1));
+    variants.forEach(function (v) {
+      (GROUP_WORDS[v] || []).forEach(function (id) { out[id] = 1; });
+      // the term as the head word of a food name/alias (Hebrew puts the head
+      // noun first: "טונה בשמן", "גבינה לבנה", "לחם מלא" — but not "פריכיות אורז")
+      ALIASES.forEach(function (a) { if (a.a === v || (a.a + ' ').indexOf(v + ' ') === 0) out[a.id] = 1; });
+      // the best food named inside a longer phrase ("שניצל עוף" → שניצל only)
+      const f = matchFood(v);
+      if (f && ALIASES.some(function (a) { return a.id === f.id && wordIn(v, a.a); })) out[f.id] = 1;
+    });
+    return Object.keys(out);
+  }
+
+  const NEG_TRIGGER = /(?:^| )ו?(?:לא אוהב(?:ת|ים)?|לא אוכל(?:ת|ים)?|לא רוצה|לא בא לי|שונא(?:ת)?|אלרגי(?:ת|ה)?(?: ל)?|רגיש(?:ה)? ל|בלי|ללא|אין|בלעדי|תוריד(?:י)?|להוריד|הורד|תחליף את|להחליף את|מספיק עם|נמאס(?: לי)? מ)(?= )/;
+  const TEXT_EXCLUDES = [
+    { re: /טבעוני/, ids: ['veg', 'nodairy', 'noegg'] },
+    { re: /צמחוני/, ids: ['veg'] },
+    { re: /(בלי|ללא|לא אוכל|לא אוהב|אין|אלרגי)[^.,;\n]*(מוצרי חלב|חלבי|לקטוז)/, ids: ['nodairy'] },
+    { re: /(בלי|ללא|לא אוכל|לא אוהב|שונא|אין|אלרגי)[^.,;\n]*(דגים|דג)(?= |$|[.,;])/, ids: ['nofish'] },
+    { re: /(בלי|ללא|לא אוכל|אלרגי|רגיש)[^.,;\n]*(גלוטן|צליאק)/, ids: ['nogluten'] }
+  ];
+
+  // "לא אוהב טונה וקוטג׳, אין לי זמן לבשל" → ['טונה', 'קוטג׳'] (only phrases that
+  // match a table food are kept, so "זמן לבשל" is ignored).
+  function extractDislikes(text) {
+    const out = [];
+    const seen = {};
+    String(text || '').split(/[.,;:!?\n()]+| אבל | כי | במקום | חוץ מ/).forEach(function (clause) {
+      let c = ' ' + norm(clause) + ' ';
+      let m = c.match(NEG_TRIGGER);
+      while (m) {
+        let rest = c.slice(m.index + m[0].length).trim();
+        // a second trigger in the same clause starts its own list
+        const next = (' ' + rest).match(NEG_TRIGGER);
+        let tail = '';
+        if (next) { tail = (' ' + rest).slice(next.index); rest = (' ' + rest).slice(0, next.index).trim(); }
+        if (/^(לי )?(בעיה|מניעה|צורך לוותר)/.test(rest)) rest = ''; // "אין בעיה עם ביצים"
+        rest.split(/ או | וגם | ולא | ו(?=[א-ת])/).forEach(function (piece) {
+          const words = piece.trim().split(' ').filter(function (w) { return w && !FILLER[w] && w !== 'לי' && w !== 'את' && w !== 'בכלל'; }).slice(0, 3);
+          if (!words.length) return;
+          const term = words.join(' ');
+          if (seen[term]) return;
+          if (termIds(term).length) { seen[term] = 1; out.push(term); }
+        });
+        c = tail ? tail + ' ' : '';
+        m = c ? c.match(NEG_TRIGGER) : null;
+      }
+    });
+    return out;
+  }
+
+  function textExcludes(text) {
+    const t = ' ' + norm(text) + ' ';
+    const out = [];
+    TEXT_EXCLUDES.forEach(function (x) { if (x.re.test(t)) x.ids.forEach(function (id) { if (out.indexOf(id) < 0) out.push(id); }); });
+    return out;
+  }
+
+  function prefsText(prefs) {
+    return [prefs.note, prefs.change].concat(prefs.rules || []).filter(Boolean).join('\n');
+  }
+
+  function effectiveExcludes(prefs) {
+    const ex = (prefs.excludes || []).slice();
+    textExcludes(prefsText(prefs)).forEach(function (id) { if (ex.indexOf(id) < 0) ex.push(id); });
+    return ex;
+  }
+
+  const blockCache = {};
+  // Every table id the menu must never contain for these prefs.
+  function blockedIds(prefs) {
+    prefs = prefs || {};
+    const key = JSON.stringify([prefs.dislikes || [], prefs.dislikeTerms || [], prefsText(prefs), prefs.excludes || []]);
+    if (blockCache[key]) return blockCache[key];
+    const out = {};
+    (prefs.dislikes || []).forEach(function (d) {
+      if (byId[d]) { out[d] = 1; (FAMILY[d] || []).forEach(function (x) { out[x] = 1; }); return; }
+      termIds(d).forEach(function (id) { out[id] = 1; });
+    });
+    (prefs.dislikeTerms || []).concat(extractDislikes(prefsText(prefs))).forEach(function (term) {
+      termIds(term).forEach(function (id) { out[id] = 1; (FAMILY[id] || []).forEach(function (x) { out[x] = 1; }); });
+    });
+    const tags = blockedTags(effectiveExcludes(prefs));
+    DB.forEach(function (f) { if ((f.tags || []).some(function (t) { return tags[t]; })) out[f.id] = 1; });
+    const keys = Object.keys(blockCache);
+    if (keys.length > 40) keys.forEach(function (k) { delete blockCache[k]; });
+    blockCache[key] = out;
+    return out;
+  }
+
   function allowed(food, prefs, mealHas) {
-    const blocked = blockedTags(prefs.excludes);
-    if ((food.tags || []).some(function (t) { return blocked[t]; })) return false;
-    if ((prefs.dislikes || []).indexOf(food.id) >= 0) return false;
+    if (blockedIds(prefs)[food.id]) return false;
     // kosher-style: no meat and dairy in the same meal
     if (mealHas) {
       if (mealHas.meat && (food.tags || []).indexOf('dairy') >= 0) return false;
@@ -688,25 +864,62 @@
     });
   }
 
-  function catalog() {
-    return DB.map(function (f) {
-      return { id: f.id, name: f.name, roles: (f.roles || []).slice(), tags: (f.tags || []).slice(), per100: { kcal: f.k, protein: f.p, carbs: f.c, fat: f.f } };
+  // The foods the model may pick from: menu foods (with a role) that these
+  // prefs allow. Disliked/excluded foods are never even shown to the model.
+  function catalog(prefs) {
+    const list = prefs ? choosable().filter(function (f) { return allowed(f, prefs); }) : DB;
+    return list.map(function (f) {
+      const c = COOK[f.id];
+      return {
+        id: f.id, name: f.name, roles: (f.roles || []).slice(), tags: (f.tags || []).slice(),
+        per100: { kcal: f.k, protein: f.p, carbs: f.c, fat: f.f },
+        min: f.mn, max: f.mx, state: c ? (c.base === 'cooked' ? 'מבושל' : 'יבש') : ''
+      };
     });
   }
 
+  // Meal slots (name, time, kind) for the chosen number of meals.
+  function slotsFor(prefs) {
+    const n = SLOT_PLANS[prefs && prefs.meals] ? prefs.meals : 4;
+    return SLOT_PLANS[n].map(function (sl, i) { return { name: sl[0], time: SLOT_TIMES[n][i], kind: sl[1] }; });
+  }
+
+  // A role-matching stand-in for a food the menu may not contain.
+  function replacementFor(role, prefs, mealFoods, usedIds) {
+    const pool = role ? candidates(role, prefs, hasOf(mealFoods)) : [];
+    const fresh = pool.filter(function (f) { return !usedIds[f.id] && mealFoods.indexOf(f) < 0; });
+    return fresh[0] || pool.filter(function (f) { return mealFoods.indexOf(f) < 0; })[0] || null;
+  }
+
   // Validate a provider menu spec into the same shape buildMenu returns.
+  // Hard rules re-applied here no matter what the model returned: only table
+  // foods that were in the catalog, nothing disliked/excluded, no meat+dairy
+  // in one meal, no duplicates in a meal. A dropped food is replaced by an
+  // allowed food with the same role so the meal stays balanced.
   function menuFromSpec(spec, prefs) {
     prefs = prefs || {};
+    const okIds = {};
+    catalog(prefs).forEach(function (c) { okIds[c.id] = 1; });
+    const used = {};
+    const replaced = [];
     const meals = ((spec && spec.meals) || []).map(function (m, i) {
       const items = [];
       ((m && m.foods) || []).forEach(function (f) {
-        const food = f && byId[f.dbId];
-        if (!food) return;
+        if (!f) return;
+        let food = byId[f.dbId] || null;
         const others = items.map(function (x) { return x.food; });
-        if (!allowed(food, prefs, hasOf(others))) return;
-        const role = f.role && (food.roles || []).indexOf(f.role) >= 0 ? f.role : ((food.roles || [])[0] || '');
+        let role = f.role && food && (food.roles || []).indexOf(f.role) >= 0 ? f.role
+          : (food && (food.roles || [])[0]) || (ROLE_NAMES[f.role] ? f.role : '');
+        if (!food || !okIds[food.id] || !allowed(food, prefs, hasOf(others)) || others.indexOf(food) >= 0) {
+          const alt = replacementFor(role, prefs, others, used);
+          replaced.push({ from: food ? food.id : String(f.dbId || ''), to: alt ? alt.id : '' });
+          if (!alt) return;
+          food = alt;
+          f = { grams: 0 };
+        }
+        used[food.id] = 1;
         const g = Number(f.grams) > 0 ? snap(food, Number(f.grams)) : food.b;
-        items.push({ food: food, role: role, grams: g });
+        items.push({ food: food, role: role || ((food.roles || [])[0] || ''), grams: g });
       });
       return { name: String((m && m.name) || ('ארוחה ' + (i + 1))), time: (m && m.time) || '', items: items };
     }).filter(function (m) { return m.items.length; });
@@ -714,17 +927,20 @@
     fitPortions(meals, prefs);
     return {
       name: 'התפריט שלי',
+      replaced: replaced,
       meals: meals.map(function (m) {
         return { name: m.name, time: m.time, foods: m.items.map(function (it) { return toMenuFood(it.food, it.grams, it.role); }) };
       })
     };
   }
+  const ROLE_NAMES = { bp: 1, bc: 1, mp: 1, mc: 1, veg: 1, fat: 1, sp: 1, fruit: 1, nut: 1 };
 
   function buildMenuAsync(prefs, opts) {
     opts = opts || {};
+    prefs = prefs || {};
     const provider = opts.provider || menuProvider;
     if (!provider) return Promise.resolve(buildMenu(prefs));
-    return withTimeout(Promise.resolve(provider(prefs || {}, { catalog: catalog() })), opts.timeoutMs || 20000)
+    return withTimeout(Promise.resolve(provider(prefs, { catalog: catalog(prefs), slots: slotsFor(prefs) })), opts.timeoutMs || 20000)
       .then(function (spec) { return menuFromSpec(spec, prefs) || buildMenu(prefs); })
       .catch(function () { return buildMenu(prefs); });
   }
@@ -738,6 +954,8 @@
     EXCLUDE_OPTIONS: EXCLUDE_OPTIONS, choosable: choosable, unitGrams: unitGrams,
     parseFoodText: parseFoodText, setTextProvider: setTextProvider, resolveSpec: resolveSpec,
     buildMenuAsync: buildMenuAsync, setMenuProvider: setMenuProvider, menuFromSpec: menuFromSpec, catalog: catalog,
+    slotsFor: slotsFor, blockedIds: blockedIds, extractDislikes: extractDislikes, termIds: termIds,
+    COOK: COOK, cookInfo: cookInfo, cookAlt: cookAlt, cookStateOf: cookStateOf,
     hasTextProvider: function () { return !!textProvider; }, hasMenuProvider: function () { return !!menuProvider; }
   };
   root.FitFood = FitFood;

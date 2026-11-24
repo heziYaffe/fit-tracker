@@ -744,9 +744,10 @@
     const snap = E.metricSnapshot ? E.metricSnapshot(s, info.day) : {};
     const st = window.FitSync ? FitSync.status() : { signedIn: false, whoop: {} };
     const whoopSt = st.whoop || {};
-    const signedIn = !!st.signedIn;
-    const needsReconnect = !!whoopSt.needs_reconnect;
-    const connected = !needsReconnect && !!(whoopSt.connected || (whoopSt.link && whoopSt.link.connected_at));
+    const signedIn = !!(st.signedIn || st.maybeSignedIn);
+    // Server-side truth only: «חבר Whoop» shows just when the server said the
+    // link is gone (invalid_grant / no tokens), never while unknown.
+    const wState = st.whoopState || (window.FitSync && FitSync.whoopConnState ? FitSync.whoopConnState(whoopSt) : 'unknown');
     const rec = snap.recoveryPct;
     const sleepP = snap.sleepPerformance;
     const strain = snap.strain;
@@ -817,9 +818,9 @@
     var actions = '';
     if (!signedIn) {
       actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="tab" data-tab="settings">התחברות לחשבון</button></div>';
-    } else if (needsReconnect || !connected) {
-      actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="whoop-connect">חבר Whoop</button></div>';
-    } else if (!hasSleep && !hasRec && !hasStrain) {
+    } else if (wState === 'reconnect' || wState === 'disconnected') {
+      actions = '<div class="whoop-empty-actions"><button type="button" class="btn primary" data-action="whoop-connect">' + (wState === 'reconnect' ? 'חיבור Whoop מחדש' : 'חבר Whoop') + '</button></div>';
+    } else if (wState === 'connected' && !hasSleep && !hasRec && !hasStrain) {
       actions = '<div class="whoop-empty-actions"><button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>';
     }
 
@@ -1212,6 +1213,27 @@
       Math.round(t.carbs || 0) + ' פחמ׳ · ' + Math.round(t.fat || 0) + ' שומן';
   }
 
+  // Server timestamps are UTC ISO; show them in the phone's local time.
+  function fmtSyncAt(iso) {
+    const d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(iso).slice(0, 16);
+    const hm = d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return 'היום ' + hm;
+    const y = new Date(today.getTime() - 86400000);
+    if (d.toDateString() === y.toDateString()) return 'אתמול ' + hm;
+    return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' }) + ' ' + hm;
+  }
+
+  // Second small line under a cookable food: the weight in the other state
+  // ("אחרי בישול · לפני: ≈ 55 ג׳"). Works for old saved items too (dbId + grams).
+  function cookAltHtml(f, qty) {
+    const F = root.FitFood;
+    if (!f || !f.dbId || !F || !F.cookAlt) return '';
+    const alt = F.cookAlt(f.dbId, (Number(f.grams) || 0) * (Number(qty) || 1));
+    return alt ? '<div class="cook-alt">' + esc(alt.text) + '</div>' : '';
+  }
+
   function renderQuickLog(date) {
     const q = qlState();
     const F = root.FitFood;
@@ -1232,7 +1254,7 @@
           '<div class="ql-ctl"><button type="button" class="btn tiny" data-action="ql-search" data-i="' + i + '">חיפוש במאגר המוצרים</button>' +
           '<button type="button" class="icon-btn" data-action="ql-del" data-i="' + i + '" aria-label="הסרה">×</button></div>' + res + '</div>';
       }
-      return '<div class="ql-item"><div class="ql-name">' + esc(it.label || it.name) + '</div>' +
+      return '<div class="ql-item"><div class="ql-name">' + esc(it.label || it.name) + cookAltHtml(it) + '</div>' +
         '<div class="ql-macros">' + esc(macroLine(it)) + '</div>' +
         '<div class="ql-ctl"><label class="ql-grams"><input type="number" min="1" step="5" inputmode="numeric" data-ql-grams="' + i + '" value="' + (it.grams || '') + '" /> ג׳</label>' +
         '<button type="button" class="icon-btn" data-action="ql-del" data-i="' + i + '" aria-label="הסרה">×</button></div></div>';
@@ -1267,7 +1289,7 @@
     return '<section class="card"><div class="section-title" style="margin-top:0"><h2>נרשם ' + (date === E.todayISO() ? 'היום' : 'ביום הזה') + '</h2>' +
       (tot ? '<span class="kicker">' + esc(Math.round(tot.calories) + ' קק״ל · ' + Math.round(tot.protein) + ' חל׳') + '</span>' : '') + '</div>' +
       rows.map(function (r) {
-        return '<div class="ql-item"><div class="ql-name">' + esc(r.label || r.name) + '</div>' +
+        return '<div class="ql-item"><div class="ql-name">' + esc(r.label || r.name) + cookAltHtml(r) + '</div>' +
           '<div class="ql-macros">' + esc(macroLine(r)) + '</div>' +
           '<div class="ql-ctl"><button type="button" class="linkish" data-action="ql-fav" data-id="' + esc(r.id) + '">⭐ לקבועים</button>' +
           '<button type="button" class="icon-btn" data-action="ql-remove" data-id="' + esc(r.id) + '" aria-label="מחיקה">×</button></div></div>';
@@ -1288,7 +1310,8 @@
     const cal = Number(s.settings.dailyCalorieTarget) || (root.FitFood ? root.FitFood.estimateCalories(kg, p.goal || 'keep') : 2200);
     ui.wiz = {
       step: 1, goal: p.goal || 'keep', protein: E.proteinTarget(s), calories: cal, calAuto: !Number(s.settings.dailyCalorieTarget), kg: kg || 0,
-      meals: p.meals || 4, excludes: (p.excludes || []).slice(), dislikes: (p.dislikes || []).slice(), seed: 0, menu: null
+      meals: p.meals || 4, excludes: (p.excludes || []).slice(), dislikes: (p.dislikes || []).slice(),
+      dislikeTerms: (p.dislikeTerms || []).slice(), seed: 0, menu: null
     };
     ui.tab = 'nutrition';
     render();
@@ -1300,7 +1323,7 @@
   function wizBuild() {
     const w = ui.wiz;
     const prefs = { protein: w.protein, calories: w.calories, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes, seed: w.seed, goal: w.goal,
-      note: w.note || '', change: w.change || '', current: w.change ? w.prevMenu : null };
+      dislikeTerms: w.dislikeTerms || [], note: w.note || '', change: w.change || '', current: w.change ? w.prevMenu : null };
     w.aiReply = '';
     if (!root.FitFood.hasMenuProvider()) { w.menu = root.FitFood.buildMenu(prefs); return; }
     w.menu = null;
@@ -1365,13 +1388,14 @@
     if (w.step === 4 && w.menu) {
       const tot = Store.menuTotals(w.menu);
       body = '<p class="plan-progress">חלבון ' + Math.round(tot.protein) + ' מתוך ' + w.protein + ' ג׳ · ' + Math.round(tot.calories) + ' מתוך ' + w.calories + ' קק״ל</p>' +
+        wizBlockedLine(w) +
         '<p class="hp-legend">לא מתאים משהו? «החלפה» ליד כל פריט מציעה חלופות עם ערכים דומים.</p>' +
         w.menu.meals.map(function (meal, mi) {
           const mt = Store.mealTotals(meal);
           return '<div class="meal-card"><div class="meal-head"><div><strong>' + esc(meal.name) + '</strong><div class="kicker">' + esc(meal.time || '') + '</div></div>' +
             '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div><div class="meal-foods">' +
             meal.foods.map(function (f, fi) {
-              return '<div class="meal-food"><div>' + esc(f.name) + '</div><div>' + Math.round(f.protein) + ' חל׳ · ' + Math.round(f.calories) + ' קק״ל' +
+              return '<div class="meal-food"><div>' + esc(f.name) + cookAltHtml(f) + '</div><div>' + Math.round(f.protein) + ' חל׳ · ' + Math.round(f.calories) + ' קק״ל' +
                 ' <button type="button" class="linkish" data-action="wiz-swap" data-mi="' + mi + '" data-fi="' + fi + '">החלפה</button></div></div>';
             }).join('') + '</div></div>';
         }).join('') +
@@ -1388,6 +1412,16 @@
     return pageHead('<div><p class="kicker">בונים תפריט יחד</p><h1>' + ['', 'יעדים', 'ארוחות', 'העדפות', 'התפריט שלך'][w.step] + '</h1></div>',
       '<button type="button" class="btn" data-action="wiz-cancel">ביטול</button>', { noGear: true }) +
       dots + body + '<div class="live-actions">' + back + next + '</div>';
+  }
+
+  // "בלי: טונה, קוטג׳" — what the menu keeps out (chips + what you wrote).
+  function wizBlockedLine(w) {
+    const F = root.FitFood;
+    const names = [];
+    (w.dislikes || []).forEach(function (id) { const f = F.DB.find(function (x) { return x.id === id; }); if (f) names.push(f.name); });
+    const written = (w.dislikeTerms || []).concat(F.extractDislikes ? F.extractDislikes(w.note || '') : []);
+    written.forEach(function (t) { if (names.indexOf(t) < 0) names.push(t); });
+    return names.length ? '<p class="hp-legend">בלי: ' + esc(names.slice(0, 12).join(', ')) + '</p>' : '';
   }
 
   function wizCollect() {
@@ -2259,23 +2293,25 @@
     const whoopSt = syncSt.whoop || {};
     const whoopErr = whoopSt.error || whoopSt.last_error || (whoopSt.link && whoopSt.link.last_error);
     const whoopSyncAt = (whoopSt.link && (whoopSt.link.last_sync_at || whoopSt.last_sync_at)) || '';
+    const wSet = syncSt.whoopState || 'unknown';
     const whoopCard = !whoopOn
       ? ('<section class="card is-soon"><h2>חיבור Whoop ' + soon + '</h2>' +
         '<p class="hp-legend">אחרי הקמת השרת ומילוי מזהה הלקוח של Whoop ב-<code>js/cloud-config.js</code>, אפשר יהיה לחבר את החשבון. מדדי Recovery, Strain, שינה, HRV ואימונים ייכנסו עם מקור whoop.</p></section>')
       : ('<section class="card"><h2>חיבור Whoop</h2>' +
         (syncSt.signedIn
-          ? ((whoopSt.needs_reconnect
-              ? '<p class="hp-legend">החיבור ל-Whoop פג. צריך לאשר פעם אחת מחדש, ואז הנתונים יימשכו לבד כל יום.</p>'
-              : (whoopSt.connected
-                ? ('<p class="hp-legend">מחוברים ל-Whoop' + (whoopSyncAt ? (' · סונכרן לאחרונה: ' + esc(String(whoopSyncAt).replace('T', ' ').slice(0, 16))) : '') + '. הנתונים נמשכים לבד, גם בלי לפתוח את האפליקציה.</p>')
-                : '<p class="hp-legend">לחיצה תפתח את אתר Whoop לאישור. אחרי האישור חזרו לאפליקציה — החיבור נשמר בשרת, וצריך לאשר רק פעם אחת.</p>')) +
-            (whoopSt.connected && !whoopSt.needs_reconnect
-              ? ('<button type="button" class="btn primary wide" data-action="whoop-refresh">משיכת נתונים</button>' +
-                '<p class="hp-legend"><button type="button" class="linkish" data-action="whoop-connect">חיבור מחדש</button></p>')
-              : ('<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
-                '<button type="button" class="btn primary" data-action="whoop-connect">' + (whoopSt.needs_reconnect ? 'חיבור מחדש' : 'חבר Whoop') + '</button>' +
-                '<button type="button" class="btn" data-action="whoop-refresh">משיכת נתונים</button></div>')) +
-            (whoopErr && (whoopSt.needs_reconnect || !whoopSt.connected) ? '<p class="hp-legend">' + esc(whoopErr) + '</p>' : ''))
+          ? (wSet === 'reconnect'
+              ? ('<p class="hp-legend">החיבור ל-Whoop פג. צריך לאשר פעם אחת מחדש, ואז הנתונים יימשכו לבד כל יום.</p>' +
+                '<button type="button" class="btn primary wide" data-action="whoop-connect">חיבור מחדש</button>' +
+                (whoopErr ? '<p class="hp-legend">' + esc(whoopErr) + '</p>' : ''))
+              : wSet === 'connected'
+                ? ('<p class="hp-legend">מחוברים ל-Whoop ✓' + (whoopSyncAt ? (' · סונכרן לאחרונה: ' + esc(fmtSyncAt(whoopSyncAt))) : '') + '. הנתונים נמשכים לבד, גם בלי לפתוח את האפליקציה.</p>' +
+                  '<button type="button" class="btn primary wide" data-action="whoop-refresh">משיכת נתונים</button>' +
+                  '<p class="hp-legend"><button type="button" class="linkish" data-action="whoop-connect">חיבור מחדש</button></p>')
+                : wSet === 'disconnected'
+                  ? ('<p class="hp-legend">לחיצה תפתח את אתר Whoop לאישור. אחרי האישור חזרו לאפליקציה — החיבור נשמר בשרת, וצריך לאשר רק פעם אחת.</p>' +
+                    '<button type="button" class="btn primary wide" data-action="whoop-connect">חבר Whoop</button>')
+                  : ('<p class="hp-legend">בודק את החיבור ל-Whoop…' + (whoopSt.statusFailed ? ' (אין תשובה מהשרת כרגע)' : '') + '</p>' +
+                    '<button type="button" class="btn wide" data-action="whoop-refresh">משיכת נתונים</button>'))
           : '<p class="hp-legend">קודם התחברו לחשבון, ואז אפשר לחבר את Whoop.</p>') +
         '</section>');
 
@@ -2474,7 +2510,7 @@
     const meals = (draft.meals || []).map(function (meal, i) {
       const mt = Store.mealTotals(meal);
       const foods = (meal.foods || []).map(function (f, fi) {
-        return '<div class="meal-food"><div>' + esc(f.name) + ' ×' + (f.qty || 1) + '</div>' +
+        return '<div class="meal-food"><div>' + esc(f.name) + ' ×' + (f.qty || 1) + cookAltHtml(f, f.qty) + '</div>' +
           '<div>' + Math.round((f.protein || 0) * (f.qty || 1)) + 'ג׳' +
           ' <button type="button" class="linkish" data-action="del-menu-food" data-mi="' + i + '" data-fi="' + fi + '">הסרה</button></div></div>';
       }).join('') || '<p class="kicker">אין מאכלים עדיין</p>';
@@ -2540,7 +2576,7 @@
       const mt = Store.mealTotals(meal);
       const st = meal.status || 'pending';
       const foods = (meal.foods || []).map(function (f) {
-        return '<div class="meal-food"><div>' + esc(f.name) + (f.qty && f.qty !== 1 ? ' ×' + f.qty : '') + '</div>' +
+        return '<div class="meal-food"><div>' + esc(f.name) + (f.qty && f.qty !== 1 ? ' ×' + f.qty : '') + cookAltHtml(f, f.qty) + '</div>' +
           '<div>' + Math.round((f.protein || 0) * (f.qty || 1)) + 'ג׳' +
           (st === 'pending' ? ' <button type="button" class="linkish" data-action="swap-food" data-date="' + date + '" data-mid="' + esc(meal.id) + '" data-fid="' + esc(f.id) + '">החלפה</button>' : '') +
           '</div></div>';
@@ -2978,7 +3014,7 @@
         item = mealFoods.find(function (f) { return f.id === sm.foodId; });
       }
       const w = ui.wiz;
-      const prefs = sm.wiz && w ? { excludes: w.excludes, dislikes: w.dislikes } : menuPrefs();
+      const prefs = sm.wiz && w ? { excludes: w.excludes, dislikes: w.dislikes, dislikeTerms: w.dislikeTerms || [], note: w.note || '' } : menuPrefs();
       if (item && item.dbId) alts = root.FitFood.swapOptions(item, prefs, mealFoods);
       sm.alts = alts;
     }
@@ -2987,7 +3023,7 @@
       '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
       (alts.length ? '<div class="section-title"><h2>חלופות עם ערכים דומים</h2></div><div class="list">' + alts.map(function (f, i) {
         return '<button type="button" class="list-item" data-action="pick-swap-alt" data-idx="' + i + '">' +
-          '<div class="title">' + esc(f.name) + '</div>' +
+          '<div class="title">' + esc(f.name) + '</div>' + cookAltHtml(f) +
           '<div class="sub">' + Math.round(f.protein) + 'ג׳ חלבון · ' + Math.round(f.calories) + ' קק״ל</div></button>';
       }).join('') + '</div>' : '') +
       (sm && sm.wiz ? '' : '<div class="section-title"><h2>מהקבועים שלך</h2></div>') +
@@ -4902,6 +4938,9 @@
       const txt = ta ? String(ta.value || '').trim() : '';
       if (!txt) { toast('כתוב מה לשנות'); return; }
       ui.wiz.change = txt.slice(0, 500);
+      // "בלי קוטג׳" stays out of every later version too, not only this round
+      const said = root.FitFood.extractDislikes ? root.FitFood.extractDislikes(txt) : [];
+      ui.wiz.dislikeTerms = (ui.wiz.dislikeTerms || []).concat(said.filter(function (t) { return (ui.wiz.dislikeTerms || []).indexOf(t) < 0; }));
       ui.wiz.prevMenu = ui.wiz.menu;
       wizBuild();
       render();
@@ -4920,7 +4959,8 @@
       const menu = existing ? Store.updateMenu(existing.id, data) : Store.addMenu(data);
       Store.updateSettings({
         dailyProteinTarget: w.protein, dailyCalorieTarget: w.calories,
-        menuPrefs: { goal: w.goal, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes }
+        menuPrefs: { goal: w.goal, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes,
+          dislikeTerms: (w.dislikeTerms || []).concat((root.FitFood.extractDislikes ? root.FitFood.extractDislikes(w.note || '') : []).filter(function (t) { return (w.dislikeTerms || []).indexOf(t) < 0; })) }
       });
       const date = ui.nutritionDate || E.todayISO();
       const day = Store.getDayMenu(date);

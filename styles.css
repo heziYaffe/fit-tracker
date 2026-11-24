@@ -2284,3 +2284,6 @@ body.is-live .main { padding-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .milestone-card { animation: none; }
 }
+
+/* raw / cooked weight under a food (v37) */
+.cook-alt { color: var(--text-dim); font-size: var(--fs-xs, 12px); font-weight: 400; margin-top: 1px; line-height: 1.3; }

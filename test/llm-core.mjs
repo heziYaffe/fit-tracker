@@ -30,6 +30,29 @@ assert(v.items.length === 2 && v.items[0].name === "ביצה" && v.items[1].qty 
 assert(validateOutput("menu", { reply: "x", meals: [{ name: "a", foods: [] }] }) === null, "empty menu rejected");
 v = validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "8:00", foods: [{ dbId: "egg", grams: 100 }] }] });
 assert(v.meals[0].time === "8:00" && v.meals[0].foods[0].dbId === "egg", "menu ok");
+// menu prompt: blocked foods filtered out server-side too, enum schema, meal targets
+const catalog = [
+  { id: "egg", name: "ביצה", roles: ["bp"], tags: ["egg"], per100: { kcal: 155, protein: 12.6, carbs: 1.1, fat: 10.6 }, min: 50, max: 200, state: "" },
+  { id: "tuna", name: "טונה במים", roles: ["mp"], tags: ["fish"], per100: { kcal: 116, protein: 25.5, carbs: 0, fat: 0.8 }, min: 110, max: 220, state: "" },
+  { id: "rice", name: "אורז", roles: ["mc"], tags: [], per100: { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3 }, min: 100, max: 300, state: "מבושל" },
+  { id: "cottage", name: "קוטג׳ 5%", roles: ["bp"], tags: ["dairy"], per100: { kcal: 95, protein: 11, carbs: 1.5, fat: 5 }, min: 100, max: 250, state: "" },
+];
+const mIn = { prefs: { protein: 160, calories: 2400, meals: 4, goal: "cut", note: "בוקר מהיר", dislikes: ["cottage"] }, blocked: ["tuna"], catalog,
+  slots: [{ name: "בוקר", time: "08:00", kind: "breakfast" }, { name: "צהריים", time: "13:00", kind: "lunch" }, { name: "ביניים", time: "16:30", kind: "snack" }, { name: "ערב", time: "20:00", kind: "dinner" }] };
+const mr = buildRequest("menu", mIn, "gemini-flash-lite-latest");
+const mText = mr.contents[0].parts[0].text, sys = mr.systemInstruction.parts[0].text;
+assert(!/tuna|טונה|cottage|קוטג/.test(mText), "blocked foods never appear in the prompt");
+assert(/rice\|אורז\|mc\|\|100-300\|מבושל\|130/.test(mText), "catalog line has range and cooked state");
+assert(/בוקר 08:00: ~600 קק״ל, ~40 ג׳ חלבון/.test(mText) && /צהריים 13:00: ~840/.test(mText), "per-meal targets");
+assert(/חיטוב/.test(mText) && /בוקר מהיר/.test(mText), "goal + note");
+assert(/חוקים מחייבים/.test(sys) && /העדפות \(רכות/.test(sys), "hard rules vs soft preferences");
+const enumIds = mr.generationConfig.responseSchema.properties.meals.items.properties.foods.items.properties.dbId.enum;
+assert(enumIds.join() === "egg,rice", "dbId enum = allowed catalog only: " + enumIds);
+v = validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "08:00", foods: [{ dbId: "cottage", grams: 200 }, { dbId: "egg", grams: 100 }] }] }, mIn);
+assert(v.meals[0].foods.length === 1 && v.meals[0].foods[0].dbId === "egg", "server drops blocked ids");
+const legacy = buildRequest("menu", { prefs: { protein: 150, calories: 2200, meals: 3 }, catalog }, "gemini-3.8-flash");
+assert(/ערב 19:30/.test(legacy.contents[0].parts[0].text), "default slots when an older app sends none");
+
 v = validateOutput("plan", { reply: "שאלה?", plan: { name: "", days: [] } });
 assert(v.plan === null && v.reply === "שאלה?", "question-only reply allowed");
 v = validateOutput("plan", { reply: "ok", plan: { name: "p", days: [{ name: "A", weekday: 9, type: "weird", exercises: [{ name: "סקוואט", sets: 40, repsMin: 8, repsMax: 5 }] }] } });

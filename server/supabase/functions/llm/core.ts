@@ -122,22 +122,99 @@ function foodPrompt(input: Record<string, unknown>) {
   };
 }
 
+const MEAL_SHARE: Record<string, number> = { breakfast: 0.25, lunch: 0.35, dinner: 0.28, snack: 0.12 };
+const GOAL_HE: Record<string, string> = { cut: "חיטוב (גירעון קלורי, חלבון גבוה, נפח ירקות)", keep: "שמירה", bulk: "מסה (עודף קל, פחמימה סביב האימון)" };
+const DEFAULT_SLOTS: Record<number, Array<[string, string, string]>> = {
+  3: [["בוקר", "08:00", "breakfast"], ["צהריים", "13:30", "lunch"], ["ערב", "19:30", "dinner"]],
+  4: [["בוקר", "08:00", "breakfast"], ["צהריים", "13:00", "lunch"], ["ביניים", "16:30", "snack"], ["ערב", "20:00", "dinner"]],
+  5: [["בוקר", "07:30", "breakfast"], ["ביניים", "10:30", "snack"], ["צהריים", "13:30", "lunch"], ["ביניים אחה״צ", "16:30", "snack"], ["ערב", "20:00", "dinner"]],
+};
+
+// The catalog the model may use: what the app sent minus anything blocked
+// (dislikes/exclusions; older app versions sent `prefs.dislikes`).
+export function menuCatalog(input: Record<string, unknown>) {
+  const p = (input.prefs || {}) as Record<string, unknown>;
+  const blocked = new Set<string>([...arr(input.blocked, 120), ...arr(p.dislikes, 120)].map((x) => String(x)));
+  return (arr(input.catalog, 300) as Array<Record<string, unknown>>).filter((f) => f && f.id && !blocked.has(String(f.id)));
+}
+
+export function menuSlots(input: Record<string, unknown>) {
+  const p = (input.prefs || {}) as Record<string, unknown>;
+  const sent = (arr(input.slots, 6) as Array<Record<string, unknown>>).filter((s) => s && s.name);
+  if (sent.length) return sent.map((s) => ({ name: clip(s.name, 20), time: clip(s.time, 5), kind: MEAL_SHARE[String(s.kind)] ? String(s.kind) : "snack" }));
+  const n = DEFAULT_SLOTS[Number(p.meals)] ? Number(p.meals) : 4;
+  return DEFAULT_SLOTS[n].map(([name, time, kind]) => ({ name, time, kind }));
+}
+
 function menuPrompt(input: Record<string, unknown>) {
   const p = (input.prefs || {}) as Record<string, unknown>;
-  const cat = arr(input.catalog, 300).map((f: Record<string, unknown>) => {
-    const n = (f.per100 || {}) as Record<string, unknown>;
-    return [clip(f.id, 30), clip(f.name, 40), arr(f.roles, 6).join("/"), arr(f.tags, 6).join("/"), "k" + n.kcal, "p" + n.protein, "c" + n.carbs, "f" + n.fat].join("|");
+  const kcal = Math.round(Number(p.calories) || 0);
+  const prot = Math.round(Number(p.protein) || 0);
+  const slots = menuSlots(input);
+  const total = slots.reduce((a, s) => a + MEAL_SHARE[s.kind], 0) || 1;
+  const mealLines = slots.map((s) => {
+    const sh = MEAL_SHARE[s.kind] / total;
+    return "- " + s.name + " " + s.time + ": ~" + Math.round(kcal * sh / 10) * 10 + " קק״ל, ~" + Math.round(prot * sh) + " ג׳ חלבון";
   }).join("\n");
-  const cur = input.current ? "\nהתפריט הנוכחי (לשינוי לפי הבקשה, שמור על מה שלא התבקש לשנות):\n" + clip(JSON.stringify(input.current), 4000) : "";
+  const cat = menuCatalog(input).map((f) => {
+    const n = (f.per100 || {}) as Record<string, unknown>;
+    const range = f.min && f.max ? Number(f.min) + "-" + Number(f.max) : "";
+    return [clip(f.id, 30), clip(f.name, 40), arr(f.roles, 6).join("/"), arr(f.tags, 6).join("/"), range, clip(f.state, 8),
+      n.kcal + "/" + n.protein + "/" + n.carbs + "/" + n.fat].join("|");
+  }).join("\n");
+  const goal = GOAL_HE[String(p.goal)] || clip(p.goal, 20) || "שמירה";
+  const excl = arr(p.excludes, 10).map((x) => clip(x, 20)).filter(Boolean).join(", ");
+  const cur = input.current ? "\nהתפריט הנוכחי (שנה רק מה שהתבקש, השאר כמו שהוא):\n" + clip(JSON.stringify(input.current), 3000) : "";
   return {
-    system: "אתה דיאטן ספורט שבונה תפריט יומי ישראלי פשוט ומעשי יחד עם המשתמש. מותר להשתמש רק במאכלים מהקטלוג (dbId מדויק). " +
-      "שורות הקטלוג: id|שם|תפקידים|תגיות|ערכים ל-100 גרם. תפקידים: bp חלבון בוקר, bc פחמימה בוקר, mp חלבון עיקרי, mc פחמימה עיקרית, veg ירק, fat שומן, sp חלבון ביניים, fruit פרי, nut אגוזים. " +
-      "בלי בשר וחלב באותה ארוחה. התאם ככל האפשר ליעדי החלבון והקלוריות (האפליקציה תכוונן מנות בסוף). כבד העדפות והחרגות. שמות ארוחות בעברית (בוקר, ביניים, צהריים, ערב). reply קצר וחם בעברית.",
-    user: "יעדים: חלבון " + Number(p.protein || 0) + " ג׳, קלוריות " + Number(p.calories || 0) + ", ארוחות " + Number(p.meals || 4) + ", מטרה " + clip(p.goal, 10) +
-      "\nהחרגות: " + arr(p.excludes, 20).map((x) => clip(x, 20)).join(", ") + "\nלא אוהב (dbId): " + arr(p.dislikes, 60).map((x) => clip(x, 30)).join(", ") +
-      (p.note ? "\nהעדפות במילים שלו: " + clip(p.note, 500) : "") + (p.change ? "\nבקשת שינוי: " + clip(p.change, 500) : "") + cur +
-      "\n\nקטלוג:\n" + cat,
+    system: "אתה דיאטן ספורט ישראלי. בונים תפריט ליום אחד מתוך קטלוג סגור.\n" +
+      "חוקים מחייבים (הפרה פוסלת את התשובה):\n" +
+      "1. dbId רק מהקטלוג, מועתק בדיוק. מאכל שלא בקטלוג אסור – המשתמש לא אוכל אותו. אל תציע אותו גם ב-reply.\n" +
+      "2. בדיוק הארוחות שברשימה, באותו סדר, אותו name ו-time.\n" +
+      "3. אין בשר (meat) ומוצרי חלב (dairy) באותה ארוחה.\n" +
+      "4. grams בתוך טווח הגרמים של המאכל, במצב שבעמודת המצב (מבושל = משקל אחרי בישול, יבש = לפני). בלי מצב = כפי שנאכל.\n" +
+      "5. ארוחה עיקרית: מקור חלבון (bp/mp) + פחמימה (bc/mc) + ירק (veg), ואפשר תוספת שומן (fat). ביניים: 1-2 פריטים (sp/fruit/nut).\n" +
+      "6. אותו מקור חלבון עיקרי לא חוזר ביותר מארוחה אחת; לא אותו מאכל פעמיים באותה ארוחה.\n" +
+      "יעדים: התקרב ליעד היומי ולחלוקה לארוחות (±10%); האפליקציה מכווננת גרמים בסוף, אז העיקר לבחור מאכלים שמאפשרים להגיע לחלבון בלי לחרוג בקלוריות.\n" +
+      "העדפות (רכות, לפי הסדר): מה שהמשתמש כתב במילים שלו; אוכל ישראלי יומיומי מהסופר; הכנה עד 15 דקות; בוקר וערב חלביים/ביצים וצהריים בשרי או דג; גיוון בין הארוחות.\n" +
+      "role = התפקיד של המאכל מהקטלוג. reply: משפט-שניים חמים בעברית מה בנית ולמה, בלי מספרים.",
+    user: "יעד יומי: " + kcal + " קק״ל, " + prot + " ג׳ חלבון. מטרה: " + goal + "." +
+      (excl ? "\nהגבלות: " + excl + " (כבר הוסרו מהקטלוג)." : "") +
+      "\nארוחות:\n" + mealLines +
+      (p.note ? "\nבמילים שלו: " + clip(p.note, 400) : "") + (p.change ? "\nבקשת שינוי: " + clip(p.change, 400) : "") + cur +
+      "\n\nקטלוג (id|שם|תפקידים|תגיות|גרם מינ׳-מקס׳|מצב|ל-100 ג׳: קק״ל/חלבון/פחמימה/שומן):\n" + cat,
   };
+}
+
+// Same shape as MENU_SCHEMA but dbId/role are enums of the allowed values, so
+// the model cannot even emit a food outside the (filtered) catalog.
+function menuSchema(input: Record<string, unknown>) {
+  const ids = menuCatalog(input).map((f) => clip(f.id, 30)).filter(Boolean);
+  if (!ids.length) return MENU_SCHEMA;
+  return S("OBJECT", {
+    properties: {
+      reply: S("STRING", { description: "משפט-שניים בעברית: מה בנית/שינית ולמה" }),
+      meals: S("ARRAY", {
+        items: S("OBJECT", {
+          properties: {
+            name: S("STRING"),
+            time: S("STRING", { description: "HH:MM" }),
+            foods: S("ARRAY", {
+              items: S("OBJECT", {
+                properties: {
+                  dbId: S("STRING", { format: "enum", enum: ids }),
+                  grams: S("NUMBER"),
+                  role: S("STRING", { format: "enum", enum: ["bp", "bc", "mp", "mc", "veg", "fat", "sp", "fruit", "nut"] }),
+                },
+                required: ["dbId", "grams", "role"],
+              }),
+            }),
+          },
+          required: ["name", "time", "foods"],
+        }),
+      }),
+    },
+    required: ["reply", "meals"],
+  });
 }
 
 function planPrompt(input: Record<string, unknown>) {
@@ -172,7 +249,7 @@ export function buildRequest(task: string, input: Record<string, unknown>, model
     }
     if (contents[contents.length - 1].role !== "user") contents.push({ role: "user", parts: [{ text: "המשך." }] });
   }
-  const schema = task === "food" ? FOOD_SCHEMA : task === "menu" ? MENU_SCHEMA : PLAN_SCHEMA;
+  const schema = task === "food" ? FOOD_SCHEMA : task === "menu" ? menuSchema(input) : PLAN_SCHEMA;
   const thinking = model.indexOf("lite") >= 0 ? "minimal" : spec.thinking;
   return {
     systemInstruction: { parts: [{ text: pr.system }] },
@@ -181,7 +258,7 @@ export function buildRequest(task: string, input: Record<string, unknown>, model
       responseMimeType: "application/json",
       responseSchema: schema,
       maxOutputTokens: spec.maxOut,
-      temperature: task === "food" ? 0.1 : 0.6,
+      temperature: task === "food" ? 0.1 : task === "menu" ? 0.5 : 0.6,
       thinkingConfig: { thinkingLevel: thinking },
     },
   };
@@ -193,7 +270,7 @@ const num = (v: unknown, lo: number, hi: number, d: number) => {
   return Math.min(hi, Math.max(lo, n));
 };
 
-export function validateOutput(task: string, out: unknown): unknown {
+export function validateOutput(task: string, out: unknown, input?: Record<string, unknown>): unknown {
   if (!out || typeof out !== "object") return null;
   const o = out as Record<string, unknown>;
   if (task === "food") {
@@ -206,12 +283,14 @@ export function validateOutput(task: string, out: unknown): unknown {
     return { items };
   }
   if (task === "menu") {
+    const cat = input ? menuCatalog(input) : [];
+    const allowedIds = cat.length ? new Set(cat.map((f) => String(f.id))) : null;
     const meals = arr(o.meals, 8).map((m: Record<string, unknown>) => ({
       name: clip(m && m.name, 30),
       time: /^\d{1,2}:\d{2}$/.test(String(m && m.time)) ? String(m.time) : "",
       foods: arr(m && m.foods, 12).map((f: Record<string, unknown>) => ({
         dbId: clip(f && f.dbId, 40), grams: num(f && f.grams, 0, 1500, 0), role: clip(f && f.role, 10),
-      })).filter((f) => f.dbId),
+      })).filter((f) => f.dbId && (!allowedIds || allowedIds.has(f.dbId))),
     })).filter((m) => m.foods.length);
     if (!meals.length) return null;
     return { reply: clip(o.reply, 600), meals };

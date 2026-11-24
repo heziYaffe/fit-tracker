@@ -102,11 +102,18 @@
   function menuProvider(prefs, ctx) {
     lastMenuReply = '';
     if (!available()) return Promise.reject(aiError('off'));
+    const F = root.FitFood;
+    // Disliked/excluded foods are already removed from the catalog (and are
+    // re-checked on the reply), so the model never sees them. `blocked` lets
+    // the server drop them too, without putting them in the prompt.
+    const blocked = F && F.blockedIds ? Object.keys(F.blockedIds(prefs)) : (prefs.dislikes || []);
     const body = {
       prefs: {
         protein: prefs.protein, calories: prefs.calories, meals: prefs.meals, goal: prefs.goal,
-        excludes: excludeLabels(prefs.excludes), dislikes: prefs.dislikes || [], note: prefs.note || '', change: prefs.change || ''
+        excludes: excludeLabels(prefs.excludes), note: prefs.note || '', change: prefs.change || ''
       },
+      slots: (ctx && ctx.slots) || [],
+      blocked: blocked,
       catalog: (ctx && ctx.catalog) || [],
       current: prefs.current ? compactMenu(prefs.current) : null
     };

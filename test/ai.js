@@ -90,9 +90,23 @@ ctx.FitUI = { toast: function (m) { toasts.push(m); } };
   const last = calls[calls.length - 1];
   assert(/\/llm\/menu$/.test(last.url) && last.body.prefs.note === 'בוקר מהיר' && last.body.catalog.length > 20, 'menu request');
   assert(AI.lastMenuReply() === 'בניתי תפריט פשוט', 'reply kept');
+  assert(!last.body.catalog.some(function (c) { return c.tags.indexOf('fish') >= 0; }), 'excluded foods not sent');
+  assert(last.body.slots.length === 3 && last.body.slots[0].name === 'בוקר', 'meal slots sent');
+  assert(last.body.blocked.indexOf('salmon') >= 0 && last.body.prefs.dislikes === undefined, 'blocked ids sent separately, not as prompt text');
   const ids = [].concat.apply([], menu.meals.map(function (m) { return m.foods.map(function (f) { return f.dbId; }); }));
   assert(ids.indexOf('salmon') < 0 && ids.indexOf('nope') < 0, 'excluded/unknown dropped');
   assert(ids.indexOf('chicken') >= 0, 'AI pick kept');
+  // a food disliked in words never reaches the model and is replaced if it comes back
+  reply = { status: 200, body: { reply: 'ok', meals: [
+    { name: 'בוקר', foods: [{ dbId: 'cottage', grams: 200, role: 'bp' }, { dbId: 'wbread', grams: 60, role: 'bc' }] },
+    { name: 'צהריים', foods: [{ dbId: 'tuna', grams: 110, role: 'mp' }, { dbId: 'rice', grams: 200, role: 'mc' }] },
+    { name: 'ערב', foods: [{ dbId: 'egg', grams: 150, role: 'bp' }] }] } };
+  menu = await F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3, excludes: [], dislikes: ['tuna'], note: 'לא אוהב קוטג׳' });
+  const sent = calls[calls.length - 1].body;
+  assert(!sent.catalog.some(function (c) { return c.id === 'tuna' || c.id === 'cottage'; }), 'disliked foods not in catalog');
+  const ids2 = [].concat.apply([], menu.meals.map(function (m) { return m.foods.map(function (f) { return f.dbId; }); }));
+  assert(ids2.indexOf('tuna') < 0 && ids2.indexOf('cottage') < 0, 'disliked foods replaced in AI menu');
+  assert(menu.meals[1].foods.some(function (f) { return f.role === 'mp'; }), 'lunch keeps a protein');
   reply = { status: 503, body: { error: 'busy', message: 'Gemini עמוס כרגע.' } };
   menu = await F.buildMenuAsync(prefs);
   assert(menu && menu.meals.length === 3 && AI.lastMenuReply() === '', 'rule menu on failure');
