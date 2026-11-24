@@ -2355,6 +2355,10 @@ html.av-lock, html.av-lock body { overflow: hidden; }
 .av-x { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg-card); color: var(--text); font-size: 1.3rem; line-height: 1; }
 .av-stage { position: relative; height: min(58dvh, 560px); margin: 4px -16px 8px; display: grid; place-items: center; touch-action: pan-y; }
 .av-stage.small { height: min(40dvh, 380px); }
+.av-stage.compare { height: min(40dvh, 360px); }
+.av-cmp { position: absolute; inset-inline: 0; bottom: 6px; display: flex; justify-content: space-around; pointer-events: none; }
+.av-cmp span { font-size: var(--fs-sm); padding: 3px 10px; border-radius: var(--radius-pill); background: rgba(20, 10, 35, 0.55); color: var(--text); }
+.av-cmp span:last-child { color: var(--hp-green); }
 .av-stage canvas { display: block; position: absolute; inset: 0; }
 .av-stage .av-sil { height: 80%; }
 .av-stage-msg { color: var(--text-muted); font-size: var(--fs-sm); text-align: center; position: absolute; top: 12px; inset-inline: 16px; }

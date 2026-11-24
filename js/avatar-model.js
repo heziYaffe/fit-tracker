@@ -189,6 +189,27 @@
     return { gains: out, detail: detail };
   }
 
+  /** Strength-training rhythm up to `date`: sessions per week over the last 4 weeks and the volume trend
+      (last 4 weeks vs the 4 before). null when nothing with weights was ever logged up to then. */
+  function trainingTrend(state, date) {
+    const E = root.FitEngine;
+    if (!E || !E.setVolume || !E.addDays || !state || !date) return null;
+    const from28 = E.addDays(date, -27), from56 = E.addDays(date, -55);
+    const days = {};
+    let recent = 0, before = 0, any = false;
+    (E.activeWorkouts ? E.activeWorkouts(state) : (state.workouts || [])).forEach(function (w) {
+      if (!w || !w.date || w.date > date) return;
+      let vol = 0;
+      (w.exercises || []).forEach(function (e) { vol += Number(E.setVolume(e, state, w.date)) || 0; });
+      if (!(vol > 0)) return;
+      any = true;
+      if (w.date >= from28) { recent += vol; days[w.date] = true; } else if (w.date >= from56) before += vol;
+    });
+    if (!any) return null;
+    const perWeek = Object.keys(days).length / 4;
+    return { perWeek: round(perWeek, 2), volumeTrend: before > 0 ? round(recent / before - 1, 3) : null };
+  }
+
   /** Everything the body is built from, for one day, with the source of each number. */
   function gatherInputs(state, cfgIn, date) {
     const cfg = normalizeConfig(cfgIn) || normalizeConfig({});
@@ -228,7 +249,9 @@
       if (snap && snap.recoveryPct != null && isFinite(Number(snap.recoveryPct))) recoveryPct = Number(snap.recoveryPct);
     }
     const st = strengthGains(state, date);
+    const training = trainingTrend(state, date || (root.FitEngine && root.FitEngine.todayISO ? root.FitEngine.todayISO() : ''));
     return {
+      training: training,
       date: date || '',
       kind: cfg.kind,
       sex: cfg.sex,
@@ -418,6 +441,66 @@
     return R.zone === 'green' ? 'happy' : 'neutral';
   }
 
+  /* Two independent build axes, 0..1 each (no levels — they only shape the body):
+     FAT    from BMI (height + weight) and waist-to-height; with no waist measurement, BMI only.
+            Muscle mass inflates BMI, so the BMI part is discounted by the muscle axis.
+     MUSCLE from (a) e1RM progress per region (upper body counts double), (b) the training rhythm —
+            weighted sessions per week + 4-week volume trend, (c) arm and chest circumference relative
+            to the waist vs the sex average. Missing parts drop out of the weighted mean; nothing → 0. */
+  function buildAxes(inp, sex, heightCm, weightKg) {
+    const v = (inp && inp.values) || {};
+    const src = (inp && inp.sources) || null;
+    const def = SEX_DEFAULTS[sex];
+    const known = function (k) { return src ? !!src[k] && src[k] !== 'default' : num(v[k]) !== null; };
+    const val = function (k) { const n = num(v[k]); return n === null ? def[k] : clamp(n, RANGES[k][0], RANGES[k][1]); };
+    const parts = [];
+    const g = (inp && inp.strength) || {};
+    const gn = function (r) { return clamp(Number(g[r]) || 0, 0, MAX_GAIN) / MAX_GAIN; };
+    const anyGain = Object.keys(REGIONS).some(function (r) { return gn(r) > 0; });
+    if (anyGain || (inp && inp.training)) {
+      const upper = (gn('chest') + gn('shoulders') + gn('arms') + gn('back')) / 4;
+      const lower = (gn('legs') + gn('core')) / 2;
+      parts.push({ id: 'strength', w: 0.4, v: clamp((2 * upper + lower) / 3 * 1.4, 0, 1) });
+    }
+    const t = inp && inp.training;
+    if (t) {
+      const rhythm = norm01(t.perWeek, 0.5, 3.5);
+      const trend = t.volumeTrend == null ? 0.5 : norm01(t.volumeTrend, -0.3, 0.3);
+      parts.push({ id: 'training', w: 0.25, v: clamp(0.7 * rhythm + 0.3 * trend * rhythm * 1.4, 0, 1) });
+    }
+    if (known('arm') || known('chest')) {
+      const waist = val('waist');
+      const armRel = (val('arm') / waist) / (def.arm / def.waist);
+      const chestRel = (val('chest') / waist) / (def.chest / def.waist);
+      const rel = known('arm') && known('chest') ? (armRel + chestRel) / 2 : known('arm') ? armRel : chestRel;
+      parts.push({ id: 'size', w: 0.35, v: norm01(rel, 1.0, 1.22) });
+    }
+    const wsum = parts.reduce(function (a, x) { return a + x.w; }, 0);
+    const muscle = wsum ? parts.reduce(function (a, x) { return a + x.w * x.v; }, 0) / wsum : 0;
+    const h = heightCm / 100;
+    const bmiAdj = weightKg / (h * h) - 3 * muscle;
+    const bmiPart = norm01(bmiAdj, 21, 32);
+    const waistKnown = known('waist');
+    const fat = waistKnown ? 0.35 * bmiPart + 0.65 * norm01(val('waist') / heightCm, 0.43, 0.6) : bmiPart;
+    return {
+      fat: round(clamp(fat, 0, 1), 3),
+      muscle: round(clamp(muscle, 0, 1), 3),
+      fatFrom: waistKnown ? 'bmi+waist' : 'bmi',
+      muscleFrom: parts.map(function (x) { return x.id; })
+    };
+  }
+
+  /** Plain-words read of the two axes (for the info card). */
+  function buildLabel(ax) {
+    if (!ax) return '';
+    const f = ax.fat, m = ax.muscle;
+    if (m >= 0.5 && f <= 0.35) return 'חטוב — שריר עם מעט שומן';
+    if (m >= 0.5) return 'חזק ורחב';
+    if (f >= 0.6) return 'רך ועגלגל';
+    if (f <= 0.25) return 'רזה';
+    return 'מאוזן';
+  }
+
   function bodyParams(inp) {
     const sex = inp && inp.sex === 'f' ? 'f' : 'm';
     const def = SEX_DEFAULTS[sex];
@@ -440,12 +523,13 @@
     const whtr = waistRaw / heightCm;
     // softness: 0 lean/defined … 1 soft. BMI alone can't tell muscle from fat, so waist-to-height carries
     // almost half the weight (WHtR 0.43 lean → 0.60 high).
-    const softness = clamp(0.55 * norm01(bmi, 21, 32) + 0.45 * norm01(whtr, 0.43, 0.6), 0, 1);
+    const axes = buildAxes(inp, sex, heightCm, weightKg);
+    const softness = axes.fat;
     const g = (inp && inp.strength) || {};
     function gain(r) { return clamp(Number(g[r]) || 0, 0, MAX_GAIN) / MAX_GAIN; }
     function vol(r) { return 1 + MAX_VOLUME * gain(r); }
     const gainsAvg = Object.keys(REGIONS).reduce(function (s, r) { return s + gain(r); }, 0) / Object.keys(REGIONS).length;
-    const definition = clamp(0.3 + 0.45 * (1 - softness) + 0.35 * gainsAvg, 0, 1);
+    const definition = clamp(0.3 + 0.45 * (1 - softness) + 0.35 * Math.max(gainsAvg, axes.muscle), 0, 1);
 
     const chestK = sex === 'f' ? 0.74 : 0.7;
     const waistK = 0.74 + 0.16 * softness;
@@ -466,6 +550,8 @@
       bmi: round(bmi, 1),
       whtr: round(whtr, 3),
       softness: round(softness, 3),
+      axes: { fat: axes.fat, muscle: axes.muscle },
+      axesFrom: { fat: axes.fatFrom, muscle: axes.muscleFrom.join('+') || 'none' },
       definition: round(definition, 3),
       torso: {
         chestW: round(ch.w * backVol, 4), chestD: round(ch.d * chestVol, 4),
@@ -515,7 +601,7 @@
     KINDS, CREATURE_COLORS, faceExpr, CLIP_EXPR, WEIGHT_EXP, STYLE_GAIN, scaleWithWeight, moodFor, creatureShape,
     SKIN_TONES, HAIR_STYLES, HAIR_COLORS, BEARDS, FIELDS, FIELD_LABELS, SEX_DEFAULTS, RANGES,
     REGIONS, REGION_LABELS, MAX_GAIN, MAX_VOLUME,
-    normalizeConfig, prefillConfig, latestOnOrBefore, strengthGains, gatherInputs,
+    normalizeConfig, prefillConfig, latestOnOrBefore, strengthGains, trainingTrend, buildAxes, buildLabel, gatherInputs,
     ellipseAxes, bodyParams, explain, diff
   };
   root.FitAvatarModel = FitAvatarModel;

@@ -7,6 +7,7 @@
   const M = root.FitAvatarModel;
   const SNAP_KEY = 'fit-avatar-snap-v2';
   const THEN_DAYS = 30;
+  const COMPARE = { then: { days: 30, label: 'לפני חודש' }, then90: { days: 90, label: 'לפני 3 חודשים' } };
   const view = { el: null, engine: null, mode: 'now', kind: null, draft: null, loading: null, token: 0, heroKey: '', failed: false };
   const reducedMotion = !!(root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
@@ -161,7 +162,8 @@
         view.engine.update(params, look, { instant: !!instant });
       }
       slot.classList.add('live');
-      if (view.engine.setDay) view.engine.setDay(mode === 'hero' || view.mode !== 'then' ? M.dayState(st(), new Date()) : { tod: M.dayState(st(), new Date()).tod });
+      if (mode === 'hero' && view.engine.setCompare) view.engine.setCompare(null);
+      if (view.engine.setDay) view.engine.setDay(M.dayState(st(), new Date()));
       return view.engine;
     }).catch(function () { view.failed = true; return null; });
   }
@@ -237,7 +239,7 @@
   // keep time-of-day light and day state fresh
   setInterval(function () {
     if (!view.engine || !view.engine.setDay || document.hidden) return;
-    if (view.kind === 'view' && view.mode === 'then') return;
+    if (view.kind === 'view' && view.mode !== 'now') return;
     view.engine.setDay(M.dayState(st(), new Date()));
   }, 5 * 60 * 1000);
 
@@ -277,11 +279,12 @@
     view.token++;
     if (view.engine && view.kind === 'view' && view.snapKey && view.nowParams) {
       try {
+        if (view.engine.setCompare) view.engine.setCompare(null);
         if (view.mode !== 'now') view.engine.update(view.nowParams.params, view.nowParams.look, { instant: true });
         writeSnap(view.snapKey, view.engine.snapshot(220));
       } catch (e) { /* ignore */ }
     }
-    if (view.engine) view.engine.setPaused(true);
+    if (view.engine) { if (view.engine.setCompare) view.engine.setCompare(null); view.engine.setPaused(true); }
     if (view.el && view.el.parentNode) view.el.parentNode.removeChild(view.el);
     const was = !!view.el;
     view.el = null; view.kind = null; view.snapKey = null; view.nowParams = null; view.heroKey = '';
@@ -324,7 +327,7 @@
       '<h2>הדמות שלי</h2><button type="button" class="btn tiny" data-avatar="build">עריכה</button></header>' +
       '<div class="av-stage" id="av-stage"></div>' +
       '<div class="av-seg" role="tablist"><button type="button" class="chip active" data-avatar="mode" data-mode="now">היום</button>' +
-      '<button type="button" class="chip" data-avatar="mode" data-mode="then">לפני ' + THEN_DAYS + ' יום</button></div>' +
+      Object.keys(COMPARE).map(function (k) { return '<button type="button" class="chip" data-avatar="mode" data-mode="' + k + '">' + COMPARE[k].label + '</button>'; }).join('') + '</div>' +
       '<div class="av-info" id="av-info"></div>');
     const d = dataFor(s, cfg, today());
     const look = lookOf(cfg);
@@ -334,27 +337,62 @@
     mountStage(el.querySelector('#av-stage'), d.params, look);
   }
 
+  /* 0..100 for the info card: an index, not a level */
+  function idx(v) { return Math.round((Number(v) || 0) * 100); }
+  /* the day had real numbers (not defaults) to build a body from */
+  function hasRealData(inp) {
+    return !!inp && (inp.sources.weight !== 'default' || M.FIELDS.some(function (k) { return inp.sources[k] !== 'default'; }) || !!inp.training);
+  }
+  function axisChips(thenP, nowP, thenInp) {
+    const out = [];
+    if (thenInp && !hasRealData(thenInp)) return out;
+    const df = idx(nowP.axes.fat) - idx(thenP.axes.fat), dm = idx(nowP.axes.muscle) - idx(thenP.axes.muscle);
+    if (Math.abs(df) >= 2) out.push('<span class="av-chip ' + (df < 0 ? 'up' : 'down') + '">' + (df < 0 ? 'פחות שומן' : 'יותר שומן') + ' ' + ltr((df > 0 ? '+' : '') + df) + '</span>');
+    if (Math.abs(dm) >= 2) out.push('<span class="av-chip ' + (dm > 0 ? 'up' : 'down') + '">' + (dm > 0 ? 'יותר שריר' : 'פחות שריר') + ' ' + ltr((dm > 0 ? '+' : '') + dm) + '</span>');
+    return out;
+  }
+  function compareData(s, cfg, mode) {
+    const c = COMPARE[mode];
+    if (!c) return null;
+    const date = E().addDays(today(), -c.days);
+    const d = dataFor(s, cfg, date);
+    return { date: date, label: c.label, d: d };
+  }
+  /* is there anything from back then that differs from today? (otherwise one figure, and say so) */
+  function hasHistory(thenD, nowD) {
+    return M.diff(thenD.inp, nowD.inp).length > 0 || axisChips(thenD.params, nowD.params, thenD.inp).length > 0;
+  }
+
   function renderInfo() {
     if (!view.el) return;
     const s = st();
     const cfg = cfgOf(s);
     const nowD = dataFor(s, cfg, today());
-    const thenDate = E().addDays(today(), -THEN_DAYS);
-    const thenD = dataFor(s, cfg, thenDate);
-    const cur = view.mode === 'then' ? thenD : nowD;
+    const cmp = view.mode !== 'now' ? compareData(s, cfg, view.mode) : null;
+    const cur = nowD;
     const lines = M.explain(cur.inp);
     let html = '';
-    if (view.mode === 'then') {
+    if (cmp) {
+      const thenD = cmp.d;
       const diffs = M.diff(thenD.inp, nowD.inp);
-      html += '<div class="card av-diff"><h3>מאז ' + esc(E().formatDay ? E().formatDay(thenDate) : thenDate) + '</h3>' +
-        (diffs.length
+      const ax = axisChips(thenD.params, nowD.params, thenD.inp);
+      const has = diffs.length || ax.length;
+      html += '<div class="card av-diff"><h3>מאז ' + esc(E().formatDay ? E().formatDay(cmp.date) : cmp.date) + '</h3>' +
+        (has
           ? '<div class="av-chips">' + diffs.map(function (x) {
             const good = x.key === 'weight' || x.key === 'waist' || x.key === 'hips' ? x.delta < 0 : x.delta > 0;
             return '<span class="av-chip ' + (good ? 'up' : 'down') + '">' + esc(x.label) + ' ' + ltr((x.delta > 0 ? '+' : '') + fmt(x.delta)) + ' ' + esc(x.unit) + '</span>';
-          }).join('') + '</div>'
-          : '<p class="hp-legend">אין מדידות מלפני ' + THEN_DAYS + ' יום להשוואה, אז שתי הדמויות נבנות מאותם ערכים.</p>') +
+          }).join('') + ax.join('') + '</div>' +
+            '<p class="hp-legend">מימין הדמות של ' + esc(cmp.label) + ', משמאל היום. ' + esc(M.buildLabel(thenD.params.axes)) + ' ← ' + esc(M.buildLabel(nowD.params.axes)) + '.</p>'
+          : '<p class="hp-legend">אין נתונים מ' + esc(cmp.label) + ' (משקל, מדידות או אימוני כוח) שונים מהיום, אז אין מה להשוות עדיין.</p>') +
         '</div>';
     }
+    const A = cur.params.axes, AF = cur.params.axesFrom;
+    const mFrom = { strength: 'שיפור בכוח', training: 'קצב אימוני כוח', size: 'היקפי יד וחזה ביחס למותן' };
+    html += '<div class="card"><h3>מבנה הגוף</h3><ul class="av-list">' +
+      '<li><span>מדד שומן</span><b>' + ltr(String(idx(A.fat))) + '</b><em>' + (AF.fat === 'bmi+waist' ? 'משקל, גובה ומותן' : 'משקל וגובה (אין מדידת מותן)') + '</em></li>' +
+      '<li><span>מדד שריר</span><b>' + ltr(String(idx(A.muscle))) + '</b><em>' + esc(AF.muscle === 'none' ? 'אין עדיין נתונים' : AF.muscle.split('+').map(function (k) { return mFrom[k] || k; }).join(' · ')) + '</em></li></ul>' +
+      '<p class="hp-legend">' + esc(M.buildLabel(A)) + '. שומן מעגל את הבטן והלחיים; שריר מרחיב כתפיים, מעבה ידיים ומוסיף קווי בטן כשהשומן נמוך. שני המדדים נפרדים, אז "חטוב" ו"רך" נראים שונה. 0–100, לא שלבים.</p></div>';
     const rec = recoveryText(cur.params.recovery);
     html += '<div class="card"><h3>מה מעצב את הדמות</h3><ul class="av-list">' +
       lines.map(function (l) {
@@ -388,14 +426,24 @@
 
   function setMode(mode) {
     if (!view.el || view.kind !== 'view') return;
-    view.mode = mode === 'then' ? 'then' : 'now';
+    view.mode = COMPARE[mode] ? mode : 'now';
     view.el.querySelectorAll('[data-avatar="mode"]').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === view.mode); });
     const cur = renderInfo();
-    setZzz(view.el.querySelector('#av-stage'), cur.params.recovery);
+    const stage = view.el.querySelector('#av-stage');
+    setZzz(stage, cur.params.recovery);
+    const old = stage && stage.querySelector('.av-cmp');
+    if (old) old.remove();
+    const s = st(), cfg = cfgOf(s);
+    const cmp = view.mode !== 'now' ? compareData(s, cfg, view.mode) : null;
+    const show = cmp && hasHistory(cmp.d, cur);
+    if (stage) stage.classList.toggle('compare', !!show);
+    if (show && stage) stage.insertAdjacentHTML('beforeend', '<div class="av-cmp" aria-hidden="true"><span>' + esc(cmp.label) + '</span><span>היום</span></div>');
     if (view.engine) {
-      view.engine.update(cur.params, lookOf(cfgOf(st())), { dur: 600 });
-      const dn = M.dayState(st(), new Date());
-      view.engine.setDay(view.mode === 'then' ? { tod: dn.tod } : dn);
+      view.engine.update(cur.params, lookOf(cfg), { instant: true });
+      if (view.engine.setCompare) view.engine.setCompare(show ? cmp.d.params : null);
+      const dn = M.dayState(s, new Date());
+      // side by side both stand (no beanbag)
+      view.engine.setDay(show ? Object.assign({}, dn, { rest: null }) : dn);
     }
   }
 
@@ -433,7 +481,7 @@
     const values = {};
     ['height', 'weight'].concat(M.FIELDS).forEach(function (k) { if (d.base[k] !== '') values[k] = d.base[k]; });
     const live = M.gatherInputs(st(), d, today());
-    return M.bodyParams({ kind: d.kind, sex: d.sex, values: values, strength: live.strength, recoveryPct: live.recoveryPct });
+    return M.bodyParams({ kind: d.kind, sex: d.sex, values: values, strength: live.strength, training: live.training, recoveryPct: live.recoveryPct });
   }
 
   function chips(name, list, cur) {

@@ -873,6 +873,8 @@ class Animator {
       let fwd = sd > 0 ? ch.rFwd : ch.lFwd;
       // a human arm is long and has no elbow: bring "hand to face" down to face height instead of overhead
       if (!a.creature && fwd > 1.5) fwd = 1.5 + (fwd - 1.5) * 0.45;
+      // villager: the snack stops under the chin so the chewing mouth stays visible
+      if (a.chibi && fwd > 1.3) fwd = 1.3 + (fwd - 1.3) * 0.25;
       const r0 = arm.g.userData.r0;
       arm.g.rotation.set(r0.x - fwd - seat * 0.25, r0.y, r0.z + sd * raise);
     });
@@ -1001,6 +1003,10 @@ export function mount(container, init) {
   const turntable = new Group();
   scene.add(turntable);
   let halo = null, figure = null, haloZone = 'x';
+  // before/after: a second, read-only figure beside today's (setCompare)
+  const pivot = new Group(), ghostPivot = new Group();
+  turntable.add(pivot); turntable.add(ghostPivot);
+  let ghost = null, ghostAnim = null, ghostParams = null, soloH = 1.75, soloW = 0.6;
   let mode = init.mode || 'full';
   let host = null;
   let shown = init.params;      // what is on screen now (lerped)
@@ -1010,16 +1016,17 @@ export function mount(container, init) {
   let frameH = 1.75, frameW = 0.6;
 
   function makeFigure(params) {
-    if (figure) { turntable.remove(figure); disposeTree(figure); }
+    if (figure) { pivot.remove(figure); disposeTree(figure); }
     const zc = zoneColor(params.recovery.zone);
     figure = buildFigure(params, look, { cloth: cssVar('--bg-soft', '#2a1840'), shoe: '#f3eaff', glow: zc });
     figure.traverse((o) => { o.userData.s0 = o.scale.clone(); o.userData.r0 = o.rotation.clone(); o.userData.p0 = o.position.clone(); });
-    turntable.add(figure);
+    pivot.add(figure);
     animator.bind(figure.userData.anim, figure); animator.setMood(params.recovery, day);
     if (haloZone !== params.recovery.zone) {
       haloZone = params.recovery.zone;
       rim.color.set(zc); rim2.color.set(zc);
-      rim.intensity = params.recovery.zone ? 2.0 : 1.4;
+      rim.intensity = (params.recovery.zone ? 2.0 : 1.4) * (figure.userData.anim && figure.userData.anim.chibi ? 0.6 : 1);
+      rim2.intensity = figure.userData.anim && figure.userData.anim.chibi ? 0.55 : 0.9;
       if (halo) { scene.remove(halo); disposeTree(halo); }
       halo = new Mesh(new CircleGeometry(0.55, 40), new MeshBasicMaterial({ map: haloTexture(zc), transparent: true, depthWrite: false }));
       halo.rotation.x = -Math.PI / 2;
@@ -1028,12 +1035,49 @@ export function mount(container, init) {
     }
     figure.updateMatrixWorld(true);
     const box = new Box3().setFromObject(figure);
-    frameH = Math.max(0.5, box.max.y) * (look.kind && look.kind !== "human" ? 1.08 : 1);
+    const chibi = !!(figure.userData.anim && figure.userData.anim.chibi);
+    // villagers hop: leave headroom so a cheer jump stays in the frame
+    frameH = Math.max(0.5, box.max.y) * (chibi ? 1.14 : look.kind && look.kind !== "human" ? 1.08 : 1);
     frameW = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), 0.7 * Math.abs(box.min.z), 0.7 * Math.abs(box.max.z)) * 2;
+    soloH = frameH; soloW = frameW;
+    layoutCompare();
     halo.scale.setScalar(Math.max(frameH / 1.75, 0.55) * (look.kind && look.kind !== 'human' ? 1.6 : 1));
     if (day && day.rest && seatKind !== null && seatKind !== look.kind) applyDay(); // beanbag sized for the new character
   }
 
+  function makeGhost() {
+    if (ghost) { ghostPivot.remove(ghost); disposeTree(ghost); ghost = null; ghostAnim = null; }
+    if (!ghostParams) return;
+    ghost = buildFigure(ghostParams, look, { cloth: cssVar('--bg-soft', '#2a1840'), shoe: '#f3eaff', glow: zoneColor(ghostParams.recovery.zone) });
+    ghost.traverse((o) => { o.userData.s0 = o.scale.clone(); o.userData.r0 = o.rotation.clone(); o.userData.p0 = o.position.clone(); });
+    ghostPivot.add(ghost);
+    ghostAnim = new Animator(reduced);
+    ghostAnim.nextFidget = 1e9; // the "before" figure only breathes and blinks
+    ghostAnim.bind(ghost.userData.anim, ghost); ghostAnim.setMood(ghostParams.recovery, { tod: day.tod });
+  }
+  /* bounds of what is drawn (hidden props such as the snack or bottle don't count) */
+  function visWidth(obj) {
+    const b = new Box3(), bb = new Box3();
+    obj.updateMatrixWorld(true);
+    obj.traverseVisible((o) => {
+      if (!o.isMesh || !o.geometry) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      bb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      b.union(bb);
+    });
+    return { w: b.isEmpty() ? 0.4 : b.max.x - b.min.x, top: b.isEmpty() ? 1 : b.max.y };
+  }
+  function layoutCompare() {
+    if (!ghost) { pivot.position.x = 0; ghostPivot.position.x = 0; frameH = soloH; frameW = soloW; return; }
+    const a = visWidth(figure), g = visWidth(ghost);
+    const wMax = Math.max(a.w, g.w);
+    const gap = wMax * 0.62;
+    frameH = Math.max(a.top, g.top) * 1.1;
+    frameW = gap * 2 + wMax * 1.05;
+    // RTL: "before" on the right, today on the left
+    pivot.position.x = -gap; ghostPivot.position.x = gap;
+    if (halo) halo.visible = false;
+  }
   function frameCamera() {
     // seated on a rest day the figure is lower: frame the shorter silhouette
     const sa = seatW && figure && figure.userData.anim;
@@ -1100,7 +1144,7 @@ export function mount(container, init) {
     if (seatMesh) { turntable.remove(seatMesh); disposeTree(seatMesh); seatMesh = null; }
     seatW = 0;
     const a = figure && figure.userData.anim;
-    if (day.rest && a && a.seat) {
+    if (day.rest && a && a.seat && !ghost) {
       seatMesh = new Mesh(new SphereGeometry(a.seat.r, 28, 18), new MeshStandardMaterial({ color: new Color(cssVar('--accent', '#d36bff')).lerp(new Color('#3a2450'), 0.55), roughness: 0.95 }));
       seatMesh.scale.set(1.25, 0.72, 1.15);
       seatMesh.position.set(0, a.seat.y, a.seat.z);
@@ -1156,10 +1200,16 @@ export function mount(container, init) {
       yaw = 0.3 + 0.38 * noise1((now - t0) / 1000 * 0.12 + 1.7);
       dirty = true;
     } else yaw = 0.3;
-    if (!reduced || animator.busy() || dirty) { animator.update(dt || 0.016, turntable.rotation.y); dirty = true; }
+    if (!reduced || animator.busy() || dirty) { animator.update(dt || 0.016, turntable.rotation.y); if (ghostAnim) ghostAnim.update(dt || 0.016, yaw); dirty = true; }
     if (dirty && figure) {
-      turntable.rotation.y = yaw;
-      turntable.rotation.x = pitch;
+      if (ghost) {
+        // side by side: each figure turns in place
+        turntable.rotation.y = 0; turntable.rotation.x = pitch;
+        pivot.rotation.y = yaw; ghostPivot.rotation.y = yaw;
+      } else {
+        turntable.rotation.y = yaw; turntable.rotation.x = pitch;
+        pivot.rotation.y = 0; ghostPivot.rotation.y = 0;
+      }
       renderer.render(scene, camera);
       dirty = false;
     }
@@ -1206,6 +1256,16 @@ export function mount(container, init) {
     attach: attach,
     setPaused(p) { paused = !!p; if (!paused) kick(); },
     setDay(d) { day = d || {}; applyDay(); kick(); },
+    /* before/after: show `params` (e.g. a month ago) beside today's figure; null = back to one figure */
+    setCompare(params) {
+      ghostParams = params || null;
+      makeGhost();
+      if (!ghost && halo) halo.visible = true;
+      layoutCompare();
+      if (ghost && seatMesh) { turntable.remove(seatMesh); disposeTree(seatMesh); seatMesh = null; seatW = 0; }
+      frameCamera();
+      dirty = true; kick();
+    },
     /* play a reaction now if the canvas is on screen; returns its length in seconds (0 = not shown) */
     react(type) {
       if (!wants()) return 0;
@@ -1218,7 +1278,9 @@ export function mount(container, init) {
       if (look2) look = look2;
       target = params;
       if (reduced || (opts && opts.instant) || kindChanged) {
-        shown = params; tween = null; makeFigure(shown); frameCamera();
+        shown = params; tween = null; makeFigure(shown);
+        if (kindChanged && ghostParams) { makeGhost(); layoutCompare(); }
+        frameCamera();
       } else {
         tween = { from: shown, start: performance.now(), dur: (opts && opts.dur) || 320 };
       }
@@ -1256,6 +1318,7 @@ export function mount(container, init) {
       el.removeEventListener('pointerdown', onLook);
       if (seatMesh) disposeTree(seatMesh);
       if (figure) disposeTree(figure);
+      if (ghost) disposeTree(ghost);
       if (halo) disposeTree(halo);
       renderer.dispose();
       try { renderer.forceContextLoss(); } catch (e) { /* ignore */ }

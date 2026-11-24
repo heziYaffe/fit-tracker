@@ -75,12 +75,20 @@ export class FacePainter {
     if (!robot) {
       [-1, 1].forEach((sd) => {
         const cx = fx(sd * (eyeX + 7)), cy = fy(10);
-        const g = x.createRadialGradient(cx, cy, 2, cx, cy, 9 * PX);
+        const fk = 1 + 0.45 * (o.fat || 0);
+        const g = x.createRadialGradient(cx, cy, 2, cx, cy, 9 * PX * fk);
         const a = expr === 'joy' || expr === 'happy' ? 0.62 : expr === 'tired' || expr === 'sleepy' ? 0.28 : 0.45;
         g.addColorStop(0, `rgba(255,128,150,${a})`); g.addColorStop(1, 'rgba(255,128,150,0)');
         x.fillStyle = g;
-        this.ell(sd * (eyeX + 7), 10, 9, 5.5); x.fill();
+        this.ell(sd * (eyeX + 7 + 1.5 * (o.fat || 0)), 10, 9 * fk, 5.5 * fk); x.fill();
       });
+    }
+    // a lean face: a soft chin line and cheekbone hints
+    if (o.style === 'human' && o.chin > 0.05) {
+      x.save(); x.globalAlpha = 0.32 * Math.min(1, o.chin * 1.6);
+      this.arc(0, 27, 6.5, 2.2, 0.22 * PI, 0.78 * PI, 6, o.line || '#3b2431');
+      [-1, 1].forEach((sd) => this.arc(sd * 22, 9, 3, 7, sd > 0 ? -0.15 * PI : 0.85 * PI, sd > 0 ? 0.35 * PI : 1.35 * PI, 4, o.line || '#3b2431'));
+      x.restore();
     }
     // beard / stubble (human)
     if (o.style === 'human' && o.beard && o.beard !== 'none') {
@@ -255,6 +263,28 @@ function smooth(pts, n) {
 }
 function lathe(profile, seg) { return new LatheGeometry(smooth(profile, 6).map((p) => new Vector2(Math.max(0.0005, p[0]), p[1])), seg || 48); }
 
+/* stylized ab lines (+ a chest line) on a transparent canvas; stronger for a cut build */
+function absTexture(col, cut, mus) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const x = c.getContext('2d');
+  x.strokeStyle = col; x.lineCap = 'round'; x.lineJoin = 'round';
+  x.globalAlpha = 0.35 + 0.5 * Math.max(cut, (mus - 0.5) * 1.5);
+  x.lineWidth = 7;
+  // chest line: two soft arcs under the collar
+  x.beginPath(); x.moveTo(70, 62); x.quadraticCurveTo(100, 84, 126, 70); x.moveTo(130, 70); x.quadraticCurveTo(156, 84, 186, 62); x.stroke();
+  if (cut > 0.05) {
+    x.lineWidth = 8;
+    x.beginPath(); x.moveTo(128, 96); x.lineTo(128, 218); x.stroke();
+    [116, 152, 188].forEach((y, i) => {
+      const w = 36 - i * 4;
+      x.beginPath(); x.moveTo(128 - w, y - 4); x.quadraticCurveTo(128 - w / 2, y + 4, 124, y); x.moveTo(132, y); x.quadraticCurveTo(128 + w / 2, y + 4, 128 + w, y - 4); x.stroke();
+    });
+  }
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  return t;
+}
+
 /* ---------- the figure ---------- */
 export function buildChibi(p, look, colors, addProps) {
   const M = window.FitAvatarModel;
@@ -286,6 +316,9 @@ export function buildChibi(p, look, colors, addProps) {
   const armK = Math.max(0.7, Math.min(1.7, C.armR / ref.armR));
   const legK = Math.max(0.7, Math.min(1.7, C.legR / ref.legR));
   const soft = p.softness || 0;
+  // build axes: fat (rounder belly, puffier cheeks) and muscle (broad shoulders, V-taper, thick arms, abs)
+  const mus = Math.max(0, Math.min(1, (p.axes && p.axes.muscle) || 0));
+  const cut = Math.max(0, Math.min(1, (mus - 0.4) / 0.4)) * Math.max(0, Math.min(1, (0.5 - soft) / 0.25));
 
   const skinHex = human ? look.skin : look.color;
   const base = new Color(skinHex);
@@ -308,9 +341,10 @@ export function buildChibi(p, look, colors, addProps) {
   const hr = (human ? 0.175 : C.headR / S * 1.02) * S;
   const legH = (human ? 0.15 : C.legLen / S) * S;
   const legR = (human ? 0.042 : C.legR / S * 0.95) * S * (human ? legK : 1);
-  const bw = (human ? 0.105 * widthK : Math.max(C.bellyR, C.bodyR * 0.85) / S) * S;
+  const bw0 = (human ? 0.105 * widthK : Math.max(C.bellyR, C.bodyR * 0.85) / S) * S;
+  const bw = human ? bw0 * (1 - 0.1 * mus * (1 - soft)) : bw0;
   const bodyH = (human ? 0.27 : C.bodyR / S * 1.25 * 1.6) * S;
-  const armR = (human ? 0.034 * armK : C.armR / S) * S;
+  const armR = (human ? 0.034 * Math.min(armK, 1.3) : C.armR / S) * S * (1 + 0.2 * mus);
   const armLen = (human ? 0.17 : C.armLen / S) * S;
   anim.headR = hr;
 
@@ -321,7 +355,7 @@ export function buildChibi(p, look, colors, addProps) {
     add(hip, new CapsuleGeometry(legR, legH * 0.55, 6, 16), human ? bodyM : bodyM, 0, -legH * 0.48, 0);
     if (human) {
       // shorts cuff over the thigh
-      add(hip, new CylinderGeometry(legR * 1.45, legR * 1.6, legH * 0.42, 22), shortsM, 0, -legH * 0.12, 0);
+      if (p.sex !== 'f') add(hip, new CylinderGeometry(legR * 1.45, legR * 1.6, legH * 0.42, 22), shortsM, 0, -legH * 0.12, 0);
       const shoe = add(hip, new SphereGeometry(legR * 1.5, 22, 14), shoeM, 0, -legH + legR * 0.7, legR * 0.5);
       shoe.scale.set(1, 0.72, 1.45);
       const sole = add(hip, new CylinderGeometry(legR * 1.5, legR * 1.5, legR * 0.32, 22), soleM, 0, -legH + legR * 0.16, legR * 0.5);
@@ -342,23 +376,41 @@ export function buildChibi(p, look, colors, addProps) {
   let shoulderY, shoulderX, neckY;
   if (human) {
     const belly = 1 + 0.35 * soft;
-    const top = bw * 0.78 * chestK;
+    const top = bw0 * 0.78 * chestK * (1 + 0.36 * mus);
     // pear: rounded seat → belly → chest → narrow neck
-    const prof = [[0, -0.02 * S], [bw * 0.7, -0.012 * S], [bw * 0.95, 0.02 * S], [bw * belly, bodyH * 0.32], [bw * (0.92 + 0.12 * soft), bodyH * 0.55], [top, bodyH * 0.8], [top * 0.72, bodyH * 0.96], [bw * 0.3, bodyH * 1.02], [0.0005, bodyH * 1.03]];
+    const prof = [[0, -0.02 * S], [bw * 0.7, -0.012 * S], [bw * 0.95, 0.02 * S], [bw * belly, bodyH * 0.32], [bw * (0.92 + 0.12 * soft), bodyH * 0.55], [top, bodyH * (0.8 + 0.03 * mus)], [top * (0.72 + 0.06 * mus), bodyH * 0.96], [bw * 0.3, bodyH * 1.02], [0.0005, bodyH * 1.03]];
     // shorts: the rounded seat; the shirt hangs over it from h0 up
     const h0 = bodyH * 0.17, h1 = bodyH * 0.24;
     const rAt = (h) => { for (let i = 1; i < prof.length; i++) if (prof[i][1] >= h) { const a = prof[i - 1], b = prof[i]; return a[0] + (b[0] - a[0]) * (h - a[1]) / (b[1] - a[1]); } return prof[prof.length - 1][0]; };
     const torsoShorts = add(upper, lathe([prof[0], prof[1], prof[2], [rAt(h1), h1], [rAt(h1) * 0.8, h1 + 0.001], [0.0005, h1 + 0.002]]), shortsM, 0, 0, 0);
     torsoShorts.scale.set(1.0, 1, 0.92);
-    const shirtProf = [[0.0005, h0], [rAt(h0) * 1.035, h0], [rAt(h0 + bodyH * 0.05) * 1.035, h0 + bodyH * 0.05]].concat(prof.slice(3).map((q) => [q[0] * 1.02, q[1]]));
+    if (p.sex === 'f') {
+      // a little A-line skirt over the seat
+      const sk0 = Math.max(rAt(h1) * 1.04, bw * 1.0);
+      const skirt = add(upper, new LatheGeometry([[sk0 * 1.32, -legH * 0.42], [sk0 * 1.22, -legH * 0.3], [sk0 * 1.04, h1 * 0.3], [sk0 * 1.0, h1 + 0.004]].map((q) => new Vector2(q[0], q[1])), 40, 0, PI * 2), shortsM, 0, 0, 0);
+      skirt.scale.set(1, 1, 0.92);
+      skirt.material.side = 2;
+    }
+    const shirtProf = [[0.0005, h0], [rAt(h0) * 1.012, h0], [rAt(h0 + bodyH * 0.05) * 1.018, h0 + bodyH * 0.05]].concat(prof.slice(3).map((q) => [q[0] * 1.02, q[1]]));
     const shirt = add(upper, lathe(shirtProf), shirtM, 0, 0, 0);
     shirt.scale.set(1, 1, 0.92);
     anim.breath.push(shirt);
     // belly bulge for a softer body
     if (soft > 0.05) {
-      const b = add(upper, new SphereGeometry(bw * 0.66, 32, 24), shirtM, 0, bodyH * 0.42, bw * 0.3 * (0.5 + soft));
-      b.scale.set(1.0, 0.9 + 0.15 * soft, 0.5 + 0.35 * soft);
+      const b = add(upper, new SphereGeometry(bw * 0.66, 32, 24), shirtM, 0, bodyH * 0.47, bw * 0.28 * (0.5 + soft));
+      b.scale.set(1.0, 0.85 + 0.12 * soft, 0.5 + 0.32 * soft);
       anim.breath.push(b);
+    }
+    // muscle-tee: ab lines and a chest line drawn on the shirt front for a cut build
+    if (cut > 0.05 || mus > 0.55) {
+      const band = shirtProf.filter((q) => q[1] >= bodyH * 0.3 && q[1] <= bodyH * 0.86).map((q) => [q[0] * 1.012 + 0.0008, q[1]]);
+      if (band.length >= 2) {
+        const tex = absTexture(new Color(shirtHex).multiplyScalar(0.62).getStyle(), cut, mus);
+        const dec = add(upper, new LatheGeometry(smooth(band, 6).map((q) => new Vector2(q[0], q[1])), 24, -0.42, 0.84),
+          new MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, toneMapped: false }), 0, 0, 0);
+        dec.scale.set(1, 1, 0.92); dec.renderOrder = 2;
+        anim.breath.push(dec);
+      }
     }
     // collar
     const collar = add(upper, new TorusGeometry(bw * 0.34, bw * 0.07, 10, 28), whiteM, 0, bodyH * 0.985, 0);
@@ -382,7 +434,22 @@ export function buildChibi(p, look, colors, addProps) {
       tummy.scale.set(bwc * 0.72, bh * 0.72, bwc * 0.62);
       anim.breath.push(tummy);
     }
-    shoulderY = bh * 1.25; shoulderX = bwc * 0.9; neckY = bh * 1.55;
+    if (mus > 0.12) {
+      // beefy: a broad chest yoke on top of the round body
+      const yoke = add(upper, kind === 'robot' ? new CylinderGeometry(bwc * (1.0 + 0.3 * mus), bwc * 0.9, bh * 0.5, 32) : new SphereGeometry(1, 32, 20), bodyM, 0, bh * (kind === 'robot' ? 1.38 : 1.22), 0);
+      if (kind !== 'robot') yoke.scale.set(bwc * (0.82 + 0.32 * mus), bh * 0.5, bwc * (0.74 + 0.12 * mus));
+      anim.breath.push(yoke);
+    }
+    if (kind !== 'robot' && (cut > 0.05 || mus > 0.55)) {
+      const tex = absTexture(base.clone().multiplyScalar(0.55).getStyle(), cut, mus);
+      const cap = new Mesh(new SphereGeometry(1.012, 24, 18, PI * 0.5 - 0.7, 1.4, PI * 0.28, PI * 0.46),
+        new MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, toneMapped: false }));
+      cap.renderOrder = 2;
+      cap.position.set(0, bh * 0.78, bwc * 0.38); cap.scale.set(bwc * 0.72, bh * 0.72, bwc * 0.62);
+      upper.add(cap);
+      anim.breath.push(cap);
+    }
+    shoulderY = bh * 1.25; shoulderX = bwc * (0.9 + 0.22 * mus); neckY = bh * 1.55;
   }
 
   // ---- arms: stubby, a mitten hand
@@ -394,13 +461,19 @@ export function buildChibi(p, look, colors, addProps) {
     arm.rotation.x = -0.12 * slump;
     upper.add(arm);
     if (human) {
-      const sleeve = add(arm, new SphereGeometry(armR * 1.75, 20, 14), shirtM, 0, -armR * 0.4, 0);
+      const tank = mus >= 0.55;
+      const sleeve = add(arm, new SphereGeometry(armR * (tank ? 1.38 : 1.75), 20, 14), tank ? bodyM : shirtM, 0, -armR * 0.4, 0);
       sleeve.scale.set(1, 1.15, 1);
       add(arm, new CapsuleGeometry(armR, armLen * 0.62, 6, 14), bodyM, 0, -armLen * 0.5, 0);
+      if (mus > 0.25) {
+        const bic = add(arm, new SphereGeometry(armR * (0.98 + 0.28 * mus), 18, 14), bodyM, 0, -armLen * 0.4, armR * 0.22);
+        bic.scale.set(1, 1.3, 1);
+      }
       const hand = add(arm, new SphereGeometry(armR * 1.42, 18, 14), bodyM, 0, -armLen * 0.95, 0);
       hand.scale.set(0.95, 1.05, 0.9);
     } else {
       add(arm, new CapsuleGeometry(armR, armLen * 0.7, 6, 14), bodyM, 0, -armLen * 0.5, 0);
+      if (mus > 0.25) add(arm, new SphereGeometry(armR * (1.0 + 0.25 * mus), 16, 12), bodyM, 0, -armLen * 0.2, 0).scale.set(1, 1.2, 1);
       add(arm, new SphereGeometry(armR * 1.12, 14, 12), kind === 'robot' ? darkM : lightM, 0, -armLen * 0.95, 0);
     }
     anim.arms[sd] = { g: arm, handY: -armLen * 0.95, len: armLen };
@@ -417,13 +490,20 @@ export function buildChibi(p, look, colors, addProps) {
     ? add(head, new BoxGeometry(hr * 2, hr * 1.7, hr * 1.7), bodyM)
     : add(head, new SphereGeometry(hr, 48, 32), bodyM);
   if (kind !== 'robot') skull.scale.set(sk[0], sk[1], sk[2]);
+  if (kind !== 'robot' && soft > 0.48) {
+    // puffy cheeks: a wider lower face that shows at the sides
+    const f = (soft - 0.48) / 0.52;
+    const jowl = add(head, new SphereGeometry(hr * 0.84, 32, 20), bodyM, 0, -hr * 0.34, hr * 0.02);
+    jowl.scale.set(1.12 + 0.3 * f, 0.82, 0.92);
+  }
   const hairHex = look.hairColor || '#5a3a26';
   const painter = new FacePainter({
     style: kind, sex: p.sex, skin: human ? look.skin : pastel(skinHex, 0.06), lid: human ? new Color(look.skin).multiplyScalar(0.93).getStyle() : null,
     line: '#3b2431', brow: human ? new Color(hairHex).multiplyScalar(0.8).getStyle() : null,
     beard: human && p.sex !== 'f' ? look.beard : 'none', beardColor: hairHex,
     mouth: !(kind === 'bear' || kind === 'dragon'), glow: new Color(glowHex).getStyle(),
-    iris: human ? 'rgba(130,95,70,0.9)' : 'rgba(120,90,170,0.85)'
+    iris: human ? 'rgba(130,95,70,0.9)' : 'rgba(120,90,170,0.85)',
+    fat: soft, chin: Math.max(0, (0.28 - soft) / 0.28)
   });
   anim.face = painter;
   if (kind === 'robot') {
@@ -446,6 +526,15 @@ export function buildChibi(p, look, colors, addProps) {
       e.scale.set(0.55, 1, 0.8);
     });
     buildHair(head, hr, look.hair || (p.sex === 'f' ? 'long' : 'short'), mat(hairHex), add, sk);
+    if (p.sex === 'f' && look.hair !== 'bald') {
+      // a bow clip above the temple
+      const bow = new Group();
+      bow.position.set(hr * 0.62, hr * 0.68, hr * 0.42); bow.rotation.set(-0.3, 0.5, -0.5);
+      head.add(bow);
+      const bm = mat('#ff6f9f');
+      [-1, 1].forEach((sd) => { const l = add(bow, new ConeGeometry(hr * 0.16, hr * 0.26, 16), bm, sd * hr * 0.13, 0, 0); l.rotation.z = sd * PI / 2; l.scale.set(1, 1, 0.55); });
+      add(bow, new SphereGeometry(hr * 0.07, 12, 10), bm);
+    }
   }
   if (kind === 'bear' || kind === 'dragon') {
     const muzzle = add(head, new SphereGeometry(hr * 0.4, 24, 16), lightM, 0, -hr * 0.3, hr * 0.74);
