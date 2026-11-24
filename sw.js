@@ -1,5 +1,5 @@
 /* פיט — service worker */
-const CACHE = 'fit-tracker-v42';
+const CACHE = 'fit-tracker-v43';
 const ASSETS = [
   './',
   './index.html',
@@ -26,6 +26,7 @@ const ASSETS = [
   './js/avatar-model.js',
   './js/avatar.js',
   './js/avatar3d.js',
+  './js/avatar-rig.js',
   './js/vendor/three-avatar.js',
   './js/ui.js',
   './js/app.js',
@@ -53,6 +54,20 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+
+  // The realistic avatar's models are versioned (?v=) and large: cache-first, fetched only when used.
+  if (url.pathname.indexOf('/assets/avatar/') >= 0) {
+    event.respondWith(
+      caches.match(request).then((hit) => hit || fetch(request).then((response) => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      }))
+    );
+    return;
+  }
 
   // Network-first so updates show immediately; fall back to cache offline.
   event.respondWith(

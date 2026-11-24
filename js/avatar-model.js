@@ -473,6 +473,72 @@
     };
   }
 
+  /* ---------- realistic (rigged) human: body parameters → shape-key influences ----------
+     Per unit of each shape key, the relative change it makes to each girth (belly: metres forward),
+     measured on the MakeHuman-based meshes in assets/avatar (tools/avatar/calib.py). */
+  const RIG_CAL = {
+    m: {
+      weightUp: { waist: 0.096, hips: 0.067, chest: 0.011, thigh: 0.047, arm: 0.1, belly: 0.007 },
+      weightDown: { waist: -0.051, hips: -0.057, chest: -0.014, thigh: -0.081, arm: -0.19, belly: -0.011 },
+      waist: { waist: 0.123, belly: 0.023 }, belly: { waist: 0.088, belly: 0.086 }, chest: { waist: 0.039, chest: 0.084 },
+      hips: { hips: 0.197, thigh: 0.108 }, thighs: { hips: 0.013, thigh: 0.124 }, arms: { arm: 0.329 }
+    },
+    f: {
+      weightUp: { waist: 0.086, hips: 0.093, chest: 0.02, thigh: 0.119, arm: 0.13, belly: 0.018 },
+      weightDown: { waist: -0.073, hips: -0.083, chest: -0.051, thigh: -0.132, arm: -0.104, belly: -0.016 },
+      waist: { waist: 0.144, belly: 0.024 }, belly: { waist: 0.118, belly: 0.094 }, chest: { waist: 0.03, chest: 0.055 },
+      hips: { hips: 0.21, thigh: 0.132 }, thighs: { hips: 0.005, thigh: 0.093 }, arms: { arm: 0.309 }
+    }
+  };
+  const RIG_KEYS = ['weightUp', 'weightDown', 'muscleUp', 'muscleDown', 'waist', 'belly', 'chest', 'hips', 'thighs', 'arms', 'shoulders'];
+  /** bodyParams output → morph influences for the rigged human (relative to the neutral body of that sex).
+      Girths already carry the 1.4× style gain from bodyParams; weight/fat and muscle come from softness
+      and definition, and each girth key then covers what those two did not. */
+  function rigMorphs(p) {
+    const sex = p && p.sex === 'f' ? 'f' : 'm';
+    const cal = RIG_CAL[sex];
+    const ref = bodyParams({ sex: sex, values: {} });
+    const out = {};
+    RIG_KEYS.forEach(function (k) { out[k] = 0; });
+    if (!p || !p.torso || !p.limbs) return out;
+    const fat = (p.softness || 0) - ref.softness;
+    out.weightUp = clamp(fat * 1.8, 0, 1);
+    out.weightDown = clamp(-fat * 2.2, 0, 1);
+    const def = (p.definition || 0) - ref.definition;
+    out.muscleUp = clamp(def * 2.2, 0, 1);
+    out.muscleDown = clamp(-def * 1.2, 0, 0.5);
+    function ratio(a, b) { return b > 0 ? a / b - 1 : 0; }
+    const want = {
+      waist: ratio(p.torso.waistW + p.torso.waistD, ref.torso.waistW + ref.torso.waistD),
+      chest: ratio(p.torso.chestW + p.torso.chestD, ref.torso.chestW + ref.torso.chestD),
+      hips: ratio(p.torso.hipsW + p.torso.hipsD, ref.torso.hipsW + ref.torso.hipsD),
+      thigh: ratio(p.limbs.thighR, ref.limbs.thighR),
+      arm: ratio(p.limbs.upperArmR, ref.limbs.upperArmR),
+      belly: ((p.torso.belly || 0) - (ref.torso.belly || 0)) / ((p.height || 1.75) / 1.75)
+    };
+    function got(region) {
+      let s = 0;
+      Object.keys(out).forEach(function (k) { const c = cal[k]; if (c && c[region]) s += out[k] * c[region]; });
+      return s;
+    }
+    // order matters: the belly key also widens the waist, hips also thicken the thighs
+    out.belly = clamp((want.belly - got('belly')) / cal.belly.belly, -0.4, 1);
+    out.waist = clamp((want.waist - got('waist')) / cal.waist.waist, -1, 1.5);
+    out.chest = clamp((want.chest - got('chest')) / cal.chest.chest, -1, 1.5);
+    out.hips = clamp((want.hips - got('hips')) / cal.hips.hips, -1, 1.5);
+    out.thighs = clamp((want.thigh - got('thigh')) / cal.thighs.thigh, -1, 1.5);
+    out.arms = clamp((want.arm - got('arm')) / cal.arms.arm, -1, 1.5);
+    out.shoulders = clamp(ratio(p.torso.shoulderW, ref.torso.shoulderW) / 0.15, -1, 1.5);
+    Object.keys(out).forEach(function (k) { out[k] = round(out[k], 3); });
+    return out;
+  }
+  /** Which clip a reaction plays on the rigged human, by posture. */
+  function rigClipFor(type, seated) {
+    if (REACTIONS.indexOf(type) < 0) return null;
+    const name = type === 'meal' ? 'eat' : type === 'water' ? 'drink' : type;
+    return name + '_' + (seated ? 'sit' : 'stand');
+  }
+
   /** Short Hebrew lines for the "what shapes your avatar" list. */
   function explain(inp) {
     const lines = [];
@@ -500,7 +566,7 @@
     SKIN_TONES, HAIR_STYLES, HAIR_COLORS, BEARDS, FIELDS, FIELD_LABELS, SEX_DEFAULTS, RANGES,
     REGIONS, REGION_LABELS, MAX_GAIN, MAX_VOLUME,
     normalizeConfig, prefillConfig, latestOnOrBefore, strengthGains, gatherInputs,
-    ellipseAxes, bodyParams, explain, diff
+    ellipseAxes, bodyParams, explain, diff, RIG_CAL, RIG_KEYS, rigMorphs, rigClipFor
   };
   root.FitAvatarModel = FitAvatarModel;
   if (typeof module !== 'undefined' && module.exports) module.exports = FitAvatarModel;

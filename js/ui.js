@@ -2266,7 +2266,11 @@
       '<div class="setting"><div class="grow"><div>צבע לפי התאוששות</div>' +
       '<div class="desc">גוון עדין לפי ההתאוששות של היום מ-Whoop</div></div>' +
       '<label class="toggle"><input type="checkbox" data-action="toggle-recovery-tint"' +
-      (set.recoveryTint !== false ? ' checked' : '') + ' /><span></span></label></div></section>';
+      (set.recoveryTint !== false ? ' checked' : '') + ' /><span></span></label></div>' +
+      '<div class="setting"><div class="grow"><div>דמות ריאליסטית (ניסיוני)</div>' +
+      '<div class="desc">דמות אנושית מפורטת עם אנימציות אמיתיות במקום הדמות המצוירת. נטען רק כשמופעל.</div></div>' +
+      '<label class="toggle"><input type="checkbox" data-action="toggle-avatar-realistic"' +
+      (set.avatarRealistic === true ? ' checked' : '') + ' /><span></span></label></div></section>';
 
     const N = (window.FitNotify && FitNotify.notifOf(s)) || (set.notifications || {});
     const perm = window.FitNotify ? FitNotify.permission() : 'unsupported';
@@ -4069,6 +4073,12 @@
     if (action === 'toggle-recovery-tint') {
       Store.updateSettings({ recoveryTint: !btn.checked ? false : true });
       applyRecoveryTint();
+      render();
+      haptic(8);
+      return;
+    }
+    if (action === 'toggle-avatar-realistic') {
+      Store.updateSettings({ avatarRealistic: !!btn.checked });
       render();
       haptic(8);
       return;
