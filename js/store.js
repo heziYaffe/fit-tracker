@@ -528,13 +528,31 @@
   }
 
   function deleteWorkout(id) {
-    const before = state.workouts.length;
-    state.workouts = state.workouts.filter(function (w) { return w.id !== id; });
-    if (state.workouts.length !== before) commit();
+    const row = state.workouts.find(function (w) { return w.id === id && !w.deletedAt; });
+    if (!row) return null;
+    row.deletedAt = new Date().toISOString();
+    touch(row);
+    commit();
+    return row;
   }
 
   function getWorkout(id) {
-    return state.workouts.find(function (w) { return w.id === id; }) || null;
+    const row = state.workouts.find(function (w) { return w.id === id; }) || null;
+    if (!row || row.deletedAt) return null;
+    return row;
+  }
+
+  function applyCardioWhoopBackfill() {
+    const E = root.FitEngine;
+    if (!E || !E.backfillCardioWorkouts) return 0;
+    const res = E.backfillCardioWorkouts(state.workouts || []);
+    if (!res || !res.changed) return 0;
+    state.workouts = res.workouts;
+    (state.workouts || []).forEach(function (w) {
+      if (w && res.touched && res.touched.indexOf(w.id) >= 0) touch(w);
+    });
+    commit();
+    return (res.touched || []).length;
   }
 
   function upsertNutrition(date, patch) {
@@ -1021,6 +1039,7 @@
     updateWorkout: updateWorkout,
     deleteWorkout: deleteWorkout,
     getWorkout: getWorkout,
+    applyCardioWhoopBackfill: applyCardioWhoopBackfill,
     upsertNutrition: upsertNutrition,
     getNutrition: getNutrition,
     upsertWeight: upsertWeight,

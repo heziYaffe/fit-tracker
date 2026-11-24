@@ -1989,3 +1989,24 @@ button.linkish.add-rest {
 .ql-grams input { width: 72px; text-align: center; }
 .ql-total { font-weight: 700; margin: 10px 0 8px; }
 .chip.strike { text-decoration: line-through; opacity: 0.75; }
+
+.whoop-tag {
+  display: inline-block;
+  margin-inline-start: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-dim);
+  vertical-align: middle;
+}
+.cardio-whoop-metrics { display: grid; gap: 6px; margin: 4px 0 12px; }
+.cardio-metric { color: var(--text-muted); font-size: 0.9rem; }
+.workout-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.workout-card-row .workout-main { flex: 1; min-width: 0; }
+.workout-card-row .btn.tiny { flex-shrink: 0; margin-top: 6px; }

@@ -967,7 +967,7 @@
 
   function renderWorkouts() {
     const s = state();
-    const list = s.workouts.slice().sort(function (a, b) {
+    const list = (E.activeWorkouts ? E.activeWorkouts(s) : (s.workouts || [])).slice().sort(function (a, b) {
       return b.date.localeCompare(a.date) || (b.id < a.id ? -1 : 1);
     });
     let body;
@@ -995,13 +995,21 @@
         if (w.duration) meta.push(w.duration + ' דק׳');
         if (w.distanceKm) meta.push(w.distanceKm + ' ק״מ');
         if (w.avgHr) meta.push(w.avgHr + ' bpm');
+        if (w.maxHr) meta.push('מקס׳ ' + w.maxHr);
+        if (w.kcal) meta.push(w.kcal + ' קק״ל');
+        if (w.strain) meta.push('Strain ' + w.strain);
+        const whoopBadge = (w.source === 'whoop' || (w.fromWhoop && Object.keys(w.fromWhoop).length) || w.whoopId)
+          ? '<span class="whoop-tag">מ-Whoop</span>' : '';
         parts.push(
           '<div class="list-item workout-card">' +
+          '<div class="workout-card-row">' +
           '<button type="button" class="workout-main" data-action="edit-workout" data-id="' + esc(w.id) + '">' +
-          '<div class="meta">' + esc(meta.join(' · ') || 'אימון') + '</div>' +
+          '<div class="meta">' + esc(meta.join(' · ') || 'אימון') + whoopBadge + '</div>' +
           '<div class="title">' + esc(typeLabel(w)) + '</div>' +
           (w.notes ? '<div class="sub">' + esc(w.notes) + '</div>' : '') +
           '</button>' +
+          '<button type="button" class="btn tiny danger" data-action="delete-workout" data-id="' + esc(w.id) + '">מחיקה</button>' +
+          '</div>' +
           (links ? '<div class="ex-links">' + links + '</div>' : '') +
           '</div>'
         );
@@ -2421,6 +2429,54 @@
     return '<button type="button" class="btn primary wide" data-action="resume-cardio" style="margin-bottom:12px">חזרה ל' + esc(name) + ' · ' + ltr(clock) + '</button>';
   }
 
+  function whoopTag(on) {
+    return on ? ' <span class="whoop-tag">מ-Whoop</span>' : '';
+  }
+
+  function formatHrZones(zones) {
+    if (!zones) return '';
+    const labels = ['Z0', 'Z1', 'Z2', 'Z3', 'Z4', 'Z5'];
+    const bits = [];
+    for (let i = 0; i <= 5; i++) {
+      const ms = Number(zones[i] != null ? zones[i] : zones['zone_' + i]);
+      if (!ms || ms < 30000) continue;
+      const mins = Math.max(1, Math.round(ms / 60000));
+      bits.push(labels[i] + ' ' + mins + ' דק׳');
+    }
+    return bits.join(' · ');
+  }
+
+  function applyLocalWhoopToCardio() {
+    loadCardioSession();
+    if (!ui.cardio || !E.applyWhoopToCardioSession) return null;
+    const res = E.applyWhoopToCardioSession(ui.cardio, state().workouts || []);
+    if (res && res.session) {
+      ui.cardio = res.session;
+      persistCardio();
+    }
+    return res;
+  }
+
+  var cardioWhoopPull = null;
+  function pullWhoopIntoCardio() {
+    applyLocalWhoopToCardio();
+    const sync = root.FitSync;
+    if (!sync || !sync.status || !sync.status().signedIn || !sync.whoopReady || !sync.whoopReady()) return Promise.resolve();
+    if (cardioWhoopPull) return cardioWhoopPull;
+    if (!sync.whoopRefresh) return Promise.resolve();
+    const open = !!(ui.modal && (ui.modal.type === 'cardio-log' || ui.modal.type === 'start-cardio'));
+    cardioWhoopPull = sync.whoopRefresh().then(function () {
+      return sync.syncNow ? sync.syncNow() : null;
+    }).then(function () {
+      const res = applyLocalWhoopToCardio();
+      if (open) render();
+      else if (res && res.filled && res.filled.length) render();
+    }).catch(function () { /* keep the unsaved session even if Whoop is late */ }).then(function () {
+      cardioWhoopPull = null;
+    });
+    return cardioWhoopPull;
+  }
+
   function openCardioLog(activityId) {
     loadCardioSession();
     const act = (E.cardioActivityById && E.cardioActivityById(activityId)) || { id: 'other', label: 'אחר' };
@@ -2430,18 +2486,28 @@
         label: act.id === 'other' ? '' : act.label,
         running: false,
         startedAt: null,
+        periodStart: null,
         elapsedMs: 0,
         durationMin: '',
         durationEdited: false,
         distanceKm: '',
         avgHr: '',
+        maxHr: '',
+        strain: '',
+        kcal: '',
+        kilojoule: '',
+        hrZones: null,
         rpe: '',
         notes: '',
+        fromWhoop: {},
+        whoopId: '',
         date: E.todayISO()
       };
     }
     persistCardio();
+    applyLocalWhoopToCardio();
     openModal('cardio-log', { activityId: act.id });
+    pullWhoopIntoCardio();
   }
 
   function toggleCardioTimer() {
@@ -2451,18 +2517,24 @@
       ui.cardio.elapsedMs = E.cardioElapsedMs(ui.cardio, Date.now());
       ui.cardio.running = false;
       ui.cardio.startedAt = null;
+      ui.cardio.endedAt = Date.now();
       if (!ui.cardio.durationEdited) {
         const mins = E.cardioDurationMin(Object.assign({}, ui.cardio, { durationMin: '' }), Date.now());
         if (mins > 0) ui.cardio.durationMin = mins;
       }
       stopCardioClock();
       releaseCardioWake();
-    } else {
-      ui.cardio.running = true;
-      ui.cardio.startedAt = Date.now();
-      startCardioClock();
-      requestCardioWake();
+      persistCardio();
+      applyLocalWhoopToCardio();
+      render();
+      pullWhoopIntoCardio();
+      return;
     }
+    ui.cardio.running = true;
+    ui.cardio.startedAt = Date.now();
+    if (!ui.cardio.periodStart) ui.cardio.periodStart = Date.now();
+    startCardioClock();
+    requestCardioWake();
     persistCardio();
     render();
   }
@@ -2477,7 +2549,23 @@
     } else {
       ui.cardio[key] = el.value;
     }
+    if (ui.cardio.fromWhoop && ui.cardio.fromWhoop[key]) delete ui.cardio.fromWhoop[key];
     persistCardio();
+  }
+
+  function discardCardioSession() {
+    clearCardio();
+    closeModal();
+    toast('האימון בוטל');
+  }
+
+  function pushWorkoutDelete(id) {
+    if (!id) return;
+    Store.deleteWorkout(id);
+    toast('האימון נמחק');
+    if (root.FitSync && FitSync.syncNow && FitSync.status && FitSync.status().signedIn) {
+      FitSync.syncNow().catch(function () {});
+    }
   }
 
   function saveCardioSession() {
@@ -2486,8 +2574,10 @@
     if (ui.cardio.running) {
       ui.cardio.elapsedMs = E.cardioElapsedMs(ui.cardio, Date.now());
       ui.cardio.running = false;
+      ui.cardio.endedAt = Date.now();
       ui.cardio.startedAt = null;
     }
+    applyLocalWhoopToCardio();
     const built = E.buildCardioWorkout(ui.cardio, Date.now());
     if (!built.ok) {
       toast('צריך משך או להפעיל את השעון');
@@ -2495,12 +2585,23 @@
       return;
     }
     Store.addWorkout(built.workout);
-    const label = built.workout.customType || 'אירובי';
-    const mins = built.workout.duration;
+    if (Store.applyCardioWhoopBackfill) Store.applyCardioWhoopBackfill();
+    const saved = built.workout;
+    const label = saved.customType || 'אירובי';
+    const mins = saved.duration;
+    const bits = [mins + ' דק׳'];
+    if (saved.avgHr) bits.push('דופק ' + saved.avgHr);
+    if (saved.kcal) bits.push(saved.kcal + ' קק״ל');
+    const pending = !saved.whoopId;
     clearCardio();
     closeModal();
-    toast(label + ' נשמר · ' + mins + ' דק׳');
+    toast(label + ' נשמר · ' + bits.join(' · ') + (pending ? '. אם Whoop יסנכרן, המדדים ימולאו לבד' : ''));
     haptic(16);
+    if (pending && root.FitSync && FitSync.whoopRefresh && FitSync.status && FitSync.status().signedIn) {
+      FitSync.whoopRefresh().then(function () { return FitSync.syncNow && FitSync.syncNow(); }).catch(function () {});
+    } else if (root.FitSync && FitSync.syncNow && FitSync.status && FitSync.status().signedIn) {
+      FitSync.syncNow().catch(function () {});
+    }
   }
 
   function renderStartKindSheet() {
@@ -2517,7 +2618,8 @@
   }
 
   function renderCardioPickSheet() {
-    const list = E.sortCardioActivities ? E.sortCardioActivities(state().workouts || []) : ((C.CARDIO_ACTIVITIES || []).map(function (a) {
+    const workouts = E.activeWorkouts ? E.activeWorkouts(state()) : (state().workouts || []);
+    const list = E.sortCardioActivities ? E.sortCardioActivities(workouts) : ((C.CARDIO_ACTIVITIES || []).map(function (a) {
       return { id: a.id, label: a.label, count: 0 };
     }));
     const rows = list.map(function (act) {
@@ -2537,6 +2639,7 @@
   function renderCardioLogSheet() {
     loadCardioSession();
     const sess = ui.cardio || {};
+    const from = sess.fromWhoop || {};
     const act = (E.cardioActivityById && E.cardioActivityById(sess.activityId)) || { id: 'other', label: 'אחר' };
     const title = act.id === 'other' ? (sess.label || 'אירובי') : (act.label || 'אירובי');
     const clock = E.formatCardioClock(E.cardioElapsedMs(sess, Date.now()));
@@ -2546,6 +2649,12 @@
       ? ('<label class="field"><span>שם הפעילות</span>' +
         '<input type="text" data-cardio="label" value="' + esc(sess.label || '') + '" placeholder="למשל קיקבוקס" /></label>')
       : '';
+    const extras = [];
+    if (sess.maxHr) extras.push('<div class="cardio-metric">דופק מקסימלי ' + ltr(String(sess.maxHr)) + ' bpm' + whoopTag(from.maxHr) + '</div>');
+    if (sess.kcal) extras.push('<div class="cardio-metric">' + ltr(String(sess.kcal)) + ' קק״ל' + whoopTag(from.kcal || from.kilojoule) + '</div>');
+    if (sess.strain) extras.push('<div class="cardio-metric">Strain ' + ltr(String(sess.strain)) + whoopTag(from.strain) + '</div>');
+    const zones = formatHrZones(sess.hrZones);
+    if (zones) extras.push('<div class="cardio-metric">' + esc(zones) + whoopTag(from.hrZones) + '</div>');
     return '<div class="sheet" role="dialog" aria-label="' + esc(title) + '"><div class="sheet-handle"></div>' +
       '<div class="sheet-head"><h2>' + esc(title) + '</h2>' +
       '<button type="button" class="btn ghost" data-action="start-kind" data-kind="cardio">חזרה</button></div>' +
@@ -2555,18 +2664,20 @@
       '<div class="cardio-clock-actions">' +
       '<button type="button" class="btn ' + (running ? '' : 'primary') + ' wide" data-action="cardio-toggle">' + toggle + '</button>' +
       '</div></div>' +
-      '<p class="hp-legend">המשך נשמר לפי השעון. אפשר גם למלא ידנית.</p>' +
+      '<p class="hp-legend">המשך נשמר לפי השעון. אפשר גם למלא ידנית. דופק, קלוריות ומאמץ יימשכו מ-Whoop כשיסתנכרן.</p>' +
       '<label class="field"><span>משך (דקות)</span>' +
       '<input type="number" min="1" step="1" inputmode="numeric" data-cardio="durationMin" value="' + esc(sess.durationMin || '') + '" placeholder="לפי השעון" /></label>' +
-      '<label class="field"><span>מרחק (ק״מ) · רשות</span>' +
+      '<label class="field"><span>מרחק (ק״מ) · רשות' + whoopTag(from.distanceKm) + '</span>' +
       '<input type="number" min="0" step="0.1" inputmode="decimal" data-cardio="distanceKm" value="' + esc(sess.distanceKm || '') + '" /></label>' +
-      '<label class="field"><span>דופק ממוצע · רשות</span>' +
+      '<label class="field"><span>דופק ממוצע · רשות' + whoopTag(from.avgHr) + '</span>' +
       '<input type="number" min="0" step="1" inputmode="numeric" data-cardio="avgHr" value="' + esc(sess.avgHr || '') + '" /></label>' +
+      (extras.length ? '<div class="cardio-whoop-metrics">' + extras.join('') + '</div>' : '') +
       '<label class="field"><span>RPE (1–10) · רשות</span>' +
       '<input type="number" min="1" max="10" step="1" inputmode="numeric" data-cardio="rpe" value="' + esc(sess.rpe || '') + '" /></label>' +
       '<label class="field"><span>הערות · רשות</span>' +
       '<textarea data-cardio="notes" placeholder="איך הרגשתם…">' + esc(sess.notes || '') + '</textarea></label>' +
-      '<button type="button" class="btn primary wide" data-action="save-cardio" style="margin-top:12px">שמירה</button></div>';
+      '<button type="button" class="btn primary wide" data-action="save-cardio" style="margin-top:12px">שמירה</button>' +
+      '<button type="button" class="btn danger wide" data-action="discard-cardio" style="margin-top:8px">מחיקה</button></div>';
   }
 
   function renderStartSheet() {
@@ -3844,6 +3955,31 @@
     }
     if (action === 'cardio-toggle') { toggleCardioTimer(); return; }
     if (action === 'save-cardio') { saveCardioSession(); return; }
+    if (action === 'discard-cardio') {
+      loadCardioSession();
+      const sess = ui.cardio;
+      const dirty = !!(sess && (sess.running || Number(sess.elapsedMs) > 0 || Number(sess.durationMin) > 0 || sess.distanceKm || sess.avgHr || sess.notes));
+      if (!dirty) { discardCardioSession(); return; }
+      openModal('confirm', {
+        title: 'לבטל את האימון?',
+        message: 'האימון הזה עוד לא נשמר, והנתונים יימחקו.',
+        danger: true,
+        okLabel: 'מחיקה',
+        onOk: function () { discardCardioSession(); }
+      });
+      return;
+    }
+    if (action === 'delete-workout') {
+      const id = btn.dataset.id;
+      openModal('confirm', {
+        title: 'מחיקת אימון',
+        message: 'למחוק את האימון הזה? הפעולה לא ניתנת לביטול.',
+        danger: true,
+        okLabel: 'מחיקה',
+        onOk: function () { pushWorkoutDelete(id); closeModal(); }
+      });
+      return;
+    }
     if (action === 'start-live' || action === 'resume-live') { closeModal(); openLive(); return; }
     if (action === 'start-template') {
       const tpl = Store.getTemplate(btn.dataset.id);
@@ -4647,21 +4783,13 @@
     if (action === 'save-workout') { saveWorkout(); return; }
     if (action === 'confirm-delete-workout') {
       const id = workoutDraft() && workoutDraft().id;
-      ui.modal = {
-        type: 'confirm',
-        props: {
-          title: 'מחיקת אימון',
-          message: 'למחוק את האימון הזה? הפעולה לא ניתנת לביטול.',
-          danger: true,
-          okLabel: 'מחיקה',
-          onOk: function () {
-            if (id) Store.deleteWorkout(id);
-            closeModal();
-            toast('האימון נמחק');
-          }
-        }
-      };
-      renderOverlay();
+      openModal('confirm', {
+        title: 'מחיקת אימון',
+        message: 'למחוק את האימון הזה? הפעולה לא ניתנת לביטול.',
+        danger: true,
+        okLabel: 'מחיקה',
+        onOk: function () { pushWorkoutDelete(id); closeModal(); }
+      });
       return;
     }
     if (action === 'open-weight') {

@@ -505,6 +505,16 @@
     return pull().then(function (remote) {
       const local = root.FitStore.getState();
       const merged = mergeStates(local, remote);
+      if (root.FitEngine && root.FitEngine.backfillCardioWorkouts) {
+        const filled = root.FitEngine.backfillCardioWorkouts(merged.workouts || []);
+        if (filled && filled.changed) {
+          merged.workouts = filled.workouts;
+          const now = new Date().toISOString();
+          (merged.workouts || []).forEach(function (w) {
+            if (w && filled.touched && filled.touched.indexOf(w.id) >= 0) w.updatedAt = now;
+          });
+        }
+      }
       root.FitStore.importJSON({ data: Object.assign({}, local, merged) });
       return push(root.FitStore.getState());
     }).then(function (res) {

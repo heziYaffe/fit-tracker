@@ -490,6 +490,27 @@ function mapCycle(cycle: Record<string, unknown>) {
   };
 }
 
+function kjToKcal(kj: number | null) {
+  if (kj == null || !Number.isFinite(kj) || kj <= 0) return null;
+  return Math.round(kj / 4.184);
+}
+
+function mapHrZones(score: Record<string, unknown>) {
+  const raw = (score.zone_durations || score.zone_duration || null) as Record<string, unknown> | null;
+  if (!raw) return null;
+  const names = ["zero", "one", "two", "three", "four", "five"];
+  const out: Record<string, number> = {};
+  let any = false;
+  names.forEach((name, i) => {
+    const v = numOrNull(raw["zone_" + name + "_milli"]);
+    if (v != null) {
+      out[String(i)] = v;
+      any = true;
+    }
+  });
+  return any ? out : null;
+}
+
 function mapWorkout(w: Record<string, unknown>) {
   const score = (w.score || {}) as Record<string, unknown>;
   const start = String(w.start || "");
@@ -497,6 +518,8 @@ function mapWorkout(w: Record<string, unknown>) {
   const date = localDateFromStart(start, String(w.timezone_offset || ""));
   const ms = start && end ? (new Date(end).getTime() - new Date(start).getTime()) : 0;
   const minutes = ms > 0 ? Math.round(ms / 60000) : null;
+  const distanceM = numOrNull(score.distance_meter);
+  const kj = numOrNull(score.kilojoule);
   return {
     date,
     type: "cardio",
@@ -505,6 +528,17 @@ function mapWorkout(w: Record<string, unknown>) {
     notes: "Whoop" + (score.strain != null ? (" · Strain " + Number(score.strain).toFixed(1)) : ""),
     source: "whoop",
     whoopId: w.id,
+    startedAt: start || null,
+    endedAt: end || null,
+    sportName: w.sport_name != null ? String(w.sport_name) : "",
+    avgHr: numOrNull(score.average_heart_rate),
+    maxHr: numOrNull(score.max_heart_rate),
+    strain: numOrNull(score.strain),
+    kilojoule: kj,
+    kcal: kjToKcal(kj),
+    distanceKm: distanceM != null ? Math.round(distanceM / 10) / 100 : null,
+    hrZones: mapHrZones(score),
+    scoreState: w.score_state != null ? String(w.score_state) : null,
     exercises: [],
   };
 }

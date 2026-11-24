@@ -129,3 +129,98 @@ assert(cons.workoutsDone === 1, 'cardio counts toward workout consistency, got '
 assert(cons.todayQualifies, 'today qualifies after a cardio session');
 
 console.log('ok cardio ' + C.CARDIO_ACTIVITIES.length + ' activities');
+
+// --- Whoop match, enrich, backfill, and hidden/deleted workouts ---
+assert(E.kjToKcal(4184) === 1000, 'kj to kcal');
+
+const whoopRun = {
+  id: 'whoop-wo-abc',
+  source: 'whoop',
+  whoopId: 'abc',
+  type: 'cardio',
+  customType: 'running',
+  date: '2026-11-24',
+  startedAt: '2026-11-24T06:00:00.000Z',
+  endedAt: '2026-11-24T06:40:00.000Z',
+  avgHr: 148,
+  maxHr: 176,
+  strain: 10.2,
+  kilojoule: 2092,
+  kcal: 500,
+  distanceKm: 7.2,
+  hrZones: { 1: 120000, 2: 600000, 3: 480000 }
+};
+const manual = {
+  id: 'id_manual',
+  source: 'manual',
+  type: 'cardio',
+  activityId: 'run',
+  customType: 'ריצה',
+  date: '2026-11-24',
+  startedAt: '2026-11-24T06:05:00.000Z',
+  endedAt: '2026-11-24T06:38:00.000Z',
+  duration: 33
+};
+const hit = E.matchWhoopWorkout(manual, [whoopRun]);
+assert(hit && hit.whoopId === 'abc', 'overlap + sport matches running');
+
+const noOverlap = E.matchWhoopWorkout(Object.assign({}, manual, {
+  startedAt: '2026-11-24T16:00:00.000Z',
+  endedAt: '2026-11-24T16:30:00.000Z'
+}), [whoopRun]);
+assert(!noOverlap, 'non-overlapping evening session does not match morning whoop');
+
+const dateOnly = { id: 'd1', type: 'cardio', activityId: 'run', date: '2026-11-24' };
+assert(E.matchWhoopWorkout(dateOnly, [whoopRun]) && E.matchWhoopWorkout(dateOnly, [whoopRun]).whoopId === 'abc', 'unique same-day fallback');
+const whoopWalk = Object.assign({}, whoopRun, { id: 'whoop-wo-w', whoopId: 'walk1', customType: 'walking', startedAt: '2026-11-24T08:00:00.000Z', endedAt: '2026-11-24T08:20:00.000Z' });
+assert(E.matchWhoopWorkout(dateOnly, [whoopRun, whoopWalk]).whoopId === 'abc', 'same-day picks the matching sport');
+const whoopRun2 = Object.assign({}, whoopRun, { id: 'whoop-wo-r2', whoopId: 'run2', startedAt: '2026-11-24T16:00:00.000Z', endedAt: '2026-11-24T16:30:00.000Z' });
+assert(!E.matchWhoopWorkout(dateOnly, [whoopRun, whoopRun2]), 'two same-sport sessions the same day stay unmatched without times');
+
+const typed = { avgHr: 160, duration: 33, type: 'cardio', activityId: 'run' };
+const enriched = E.enrichCardioFromWhoop(typed, whoopRun);
+assert(enriched.workout.avgHr === 160, 'never overwrite a typed avg HR');
+assert(enriched.workout.maxHr === 176, 'fill missing max HR');
+assert(enriched.workout.kcal === 500, 'fill kcal');
+assert(enriched.workout.distanceKm === 7.2, 'fill distance');
+assert(enriched.workout.fromWhoop.maxHr && !enriched.workout.fromWhoop.avgHr, 'fromWhoop only on auto-filled fields');
+assert(enriched.workout.whoopId === 'abc', 'link whoop id');
+
+const back = E.backfillCardioWorkouts([manual, whoopRun]);
+assert(back.changed, 'backfill writes missing fields later');
+const filledManual = back.workouts.find(function (w) { return w.id === 'id_manual'; });
+assert(filledManual.avgHr === 148 && filledManual.whoopId === 'abc', 'manual session gets whoop metrics');
+
+const deleted = { id: 'gone', date: '2026-11-24', type: 'cardio', deletedAt: '2026-11-24T10:00:00.000Z' };
+const mixed = {
+  settings: { weeklyWorkoutTarget: 4, dailyProteinTarget: 150 },
+  workouts: [filledManual, whoopRun, deleted],
+  nutrition: []
+};
+const active = E.activeWorkouts(mixed);
+assert(active.length === 1 && active[0].id === 'id_manual', 'hide deleted and linked Whoop duplicates, got ' + active.map(function (w) { return w.id; }));
+assert(E.workoutsOn(mixed, '2026-11-24').length === 1, 'consistency day counts the manual session once');
+assert(E.computeConsistency(mixed, E.parseISO('2026-11-24')).workoutsDone === 1, 'deleted/duplicate not in workoutsDone');
+
+const sess = E.applyWhoopToCardioSession({
+  activityId: 'run',
+  date: '2026-11-24',
+  periodStart: Date.parse('2026-11-24T06:05:00.000Z'),
+  elapsedMs: 33 * 60 * 1000,
+  running: false
+}, [whoopRun]);
+assert(sess.filled.indexOf('avgHr') >= 0 && sess.session.avgHr === 148, 'open logger can autofill from whoop');
+
+const built2 = E.buildCardioWorkout({
+  activityId: 'run',
+  durationMin: 33,
+  periodStart: Date.parse('2026-11-24T06:05:00.000Z'),
+  endedAt: Date.parse('2026-11-24T06:38:00.000Z'),
+  avgHr: 148,
+  fromWhoop: { avgHr: true },
+  whoopId: 'abc',
+  date: '2026-11-24'
+}, Date.parse('2026-11-24T06:38:00.000Z'));
+assert(built2.ok && built2.workout.startedAt && built2.workout.whoopId === 'abc', 'saved payload keeps times and whoop link');
+
+console.log('ok cardio whoop match/backfill');

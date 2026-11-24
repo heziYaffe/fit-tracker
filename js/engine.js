@@ -60,15 +60,207 @@
   }
 
   function workoutsOn(state, iso) {
-    return (state.workouts || []).filter(function (w) { return w.date === iso; });
+    return activeWorkouts(state).filter(function (w) { return w.date === iso; });
   }
 
   function workoutsInWeek(state, iso) {
     const start = weekStartSunday(iso);
     const end = addDays(start, 6);
-    return (state.workouts || []).filter(function (w) {
+    return activeWorkouts(state).filter(function (w) {
       return w.date >= start && w.date <= end;
     });
+  }
+
+  function isDeletedWorkout(w) {
+    return !!(w && (w.deletedAt || w.deleted));
+  }
+
+  function whoopWorkoutId(w) {
+    if (!w) return '';
+    if (w.whoopId != null && w.whoopId !== '') return String(w.whoopId);
+    const id = String(w.id || '');
+    if (w.source === 'whoop' && id.indexOf('whoop-wo-') === 0) return id.slice(9);
+    return '';
+  }
+
+  function isLinkedWhoopDuplicate(w, workouts) {
+    const wid = whoopWorkoutId(w);
+    if (!wid || (w && w.source !== 'whoop')) return false;
+    return (workouts || []).some(function (other) {
+      if (!other || other === w || isDeletedWorkout(other)) return false;
+      if (other.source === 'whoop') return false;
+      return String(other.whoopId || '') === wid;
+    });
+  }
+
+  function activeWorkouts(state) {
+    const list = (state && state.workouts) || [];
+    return list.filter(function (w) {
+      return w && !isDeletedWorkout(w) && !isLinkedWhoopDuplicate(w, list);
+    });
+  }
+
+  function kjToKcal(kj) {
+    const n = Number(kj);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.round(n / 4.184);
+  }
+
+  function isEmptyMetric(val) {
+    if (val == null || val === '') return true;
+    if (typeof val === 'object' && !Object.keys(val).length) return true;
+    return false;
+  }
+
+  function parseStamp(v) {
+    if (!v) return 0;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function sessionWindow(w) {
+    if (!w) return null;
+    const start = parseStamp(w.startedAt || w.start);
+    const end = parseStamp(w.endedAt || w.end);
+    if (start && end && end > start) return { start: start, end: end };
+    return null;
+  }
+
+  function overlapMs(a, b) {
+    if (!a || !b) return 0;
+    const s = Math.max(a.start, b.start);
+    const e = Math.min(a.end, b.end);
+    return Math.max(0, e - s);
+  }
+
+  function whoopCandidates(workouts) {
+    return (workouts || []).filter(function (w) {
+      return w && w.source === 'whoop' && !isDeletedWorkout(w) && whoopWorkoutId(w);
+    });
+  }
+
+  function matchWhoopWorkout(target, workouts) {
+    if (!target) return null;
+    const already = whoopWorkoutId(target);
+    if (already) {
+      const found = whoopCandidates(workouts).find(function (w) { return whoopWorkoutId(w) === already; });
+      if (found) return found;
+    }
+    const win = sessionWindow(target);
+    const sportId = inferCardioActivityId(target);
+    const date = target.date;
+    let pool = whoopCandidates(workouts);
+    if (win) {
+      pool = pool.filter(function (w) {
+        const other = sessionWindow(w);
+        if (!other) return false;
+        const ov = overlapMs(win, other);
+        if (ov <= 0) return false;
+        const shorter = Math.min(win.end - win.start, other.end - other.start);
+        return ov >= 5 * 60000 || (shorter > 0 && ov / shorter >= 0.3);
+      });
+    } else if (date) {
+      pool = pool.filter(function (w) { return w.date === date; });
+    } else {
+      return null;
+    }
+    if (!pool.length) return null;
+    function score(w) {
+      let s = 0;
+      if (win) s += overlapMs(win, sessionWindow(w)) / 60000;
+      const sid = inferCardioActivityId(w);
+      if (sportId && sid && sportId === sid) s += 1000;
+      return s;
+    }
+    pool = pool.slice().sort(function (a, b) { return score(b) - score(a); });
+    if (!win && pool.length > 1) {
+      const sportHits = pool.filter(function (w) {
+        return sportId && inferCardioActivityId(w) === sportId;
+      });
+      if (sportHits.length === 1) return sportHits[0];
+      return null;
+    }
+    return pool[0];
+  }
+
+  function whoopMetricsFrom(w) {
+    if (!w) return {};
+    const kj = w.kilojoule != null && w.kilojoule !== '' ? Number(w.kilojoule) : null;
+    const kcal = w.kcal != null && w.kcal !== '' ? Number(w.kcal) : (kj != null ? kjToKcal(kj) : null);
+    return {
+      avgHr: w.avgHr,
+      maxHr: w.maxHr,
+      strain: w.strain,
+      kilojoule: kj,
+      kcal: kcal,
+      distanceKm: w.distanceKm,
+      hrZones: w.hrZones || null
+    };
+  }
+
+  function enrichCardioFromWhoop(workout, whoop) {
+    const next = Object.assign({}, workout || {});
+    const fromWhoop = Object.assign({}, next.fromWhoop || {});
+    const filled = [];
+    const metrics = whoopMetricsFrom(whoop);
+    Object.keys(metrics).forEach(function (k) {
+      const val = metrics[k];
+      if (val == null || val === '' || (k === 'hrZones' && !val)) return;
+      if (!isEmptyMetric(next[k])) return;
+      next[k] = val;
+      fromWhoop[k] = true;
+      filled.push(k);
+    });
+    const wid = whoopWorkoutId(whoop);
+    if (wid && !next.whoopId) {
+      next.whoopId = wid;
+      filled.push('whoopId');
+    }
+    if (Object.keys(fromWhoop).length) next.fromWhoop = fromWhoop;
+    return { workout: next, filled: filled };
+  }
+
+  function backfillCardioWorkouts(workouts) {
+    const list = (workouts || []).slice();
+    const touched = [];
+    list.forEach(function (w, i) {
+      if (!w || isDeletedWorkout(w) || w.source === 'whoop') return;
+      if (w.type !== 'cardio' && !w.activityId) return;
+      const match = matchWhoopWorkout(w, list);
+      if (!match) return;
+      const res = enrichCardioFromWhoop(w, match);
+      if (!res.filled.length) return;
+      list[i] = res.workout;
+      touched.push(res.workout.id || i);
+    });
+    return { workouts: list, changed: touched.length > 0, touched: touched };
+  }
+
+  function applyWhoopToCardioSession(session, workouts) {
+    const sess = Object.assign({}, session || {});
+    const probe = {
+      date: sess.date,
+      type: 'cardio',
+      activityId: sess.activityId,
+      customType: sess.label,
+      startedAt: sess.periodStart || sess.startedAt,
+      endedAt: sess.endedAt || (sess.running ? Date.now() : (sess.periodStart && sess.elapsedMs ? Number(sess.periodStart) + Number(sess.elapsedMs) : '')),
+      whoopId: sess.whoopId,
+      fromWhoop: sess.fromWhoop
+    };
+    ['avgHr', 'maxHr', 'strain', 'kilojoule', 'kcal', 'distanceKm', 'hrZones'].forEach(function (k) {
+      probe[k] = sess[k];
+    });
+    const match = matchWhoopWorkout(probe, workouts);
+    if (!match) return { session: sess, filled: [], match: null };
+    const res = enrichCardioFromWhoop(probe, match);
+    res.filled.forEach(function (k) {
+      if (k === 'whoopId') sess.whoopId = res.workout.whoopId;
+      else sess[k] = res.workout[k];
+    });
+    if (res.workout.fromWhoop) sess.fromWhoop = res.workout.fromWhoop;
+    return { session: sess, filled: res.filled, match: match };
   }
 
   function metricsOn(state, iso) {
@@ -159,7 +351,7 @@
   /** Longest qualifying streak in recorded history (and current). */
   function bestStreak(state, now) {
     const dates = new Set();
-    (state.workouts || []).forEach(function (w) { dates.add(w.date); });
+    activeWorkouts(state).forEach(function (w) { dates.add(w.date); });
     (state.nutrition || []).forEach(function (n) { dates.add(n.date); });
     if (!dates.size) return currentStreak(state, now);
     const sorted = Array.from(dates).sort();
@@ -186,7 +378,7 @@
     const dateSet = new Set(dates);
     const weeklyTarget = Number(state.settings.weeklyWorkoutTarget) || 4;
     const expectedWorkouts = weeklyTarget * (days / 7);
-    const workoutsDone = (state.workouts || []).filter(function (w) {
+    const workoutsDone = activeWorkouts(state).filter(function (w) {
       return dateSet.has(w.date);
     }).length;
     const trainingScore = expectedWorkouts <= 0 ? 1 : Math.min(1, workoutsDone / expectedWorkouts);
@@ -197,7 +389,7 @@
     }
     const nutritionScore = proteinHits / days;
     const combined = (trainingScore + nutritionScore) / 2;
-    const hasData = (state.workouts || []).some(function (w) { return dateSet.has(w.date); })
+    const hasData = activeWorkouts(state).some(function (w) { return dateSet.has(w.date); })
       || (state.nutrition || []).some(function (n) { return dateSet.has(n.date); });
 
     return {
@@ -380,7 +572,7 @@
     const events = [];
     const rules = C.XP_RULES;
 
-    (state.workouts || []).forEach(function (w) {
+    activeWorkouts(state).forEach(function (w) {
       events.push({
         date: w.date,
         type: rules.workoutLogged.id,
@@ -465,7 +657,7 @@
   }
 
   function computeAchievements(state, xpInfo) {
-    const workoutCount = (state.workouts || []).length;
+    const workoutCount = activeWorkouts(state).length;
     const metricsCount = (state.metrics || []).length;
     const longest = xpInfo ? xpInfo.bestStreak : bestStreak(state);
     const level = xpInfo ? xpInfo.level.level : 1;
@@ -694,7 +886,7 @@
     const target = normName(name);
     if (!target) return [];
     const sessions = [];
-    (state.workouts || []).forEach(function (w) {
+    activeWorkouts(state).forEach(function (w) {
       const rows = (w.exercises || []).filter(function (e) {
         return normName(e.name) === target && !isUnworkedSkip(e);
       });
@@ -896,7 +1088,7 @@
 
   function exerciseIndex(state) {
     const map = {};
-    (state.workouts || []).forEach(function (w) {
+    activeWorkouts(state).forEach(function (w) {
       const names = {};
       (w.exercises || []).forEach(function (e) {
         const name = normName(e.name);
@@ -919,7 +1111,7 @@
   function lastPerformance(state, name, beforeDate, exceptWorkoutId) {
     const target = normName(name);
     if (!target) return null;
-    const list = (state.workouts || []).slice().sort(function (a, b) {
+    const list = activeWorkouts(state).slice().sort(function (a, b) {
       return b.date.localeCompare(a.date);
     });
     for (let i = 0; i < list.length; i++) {
@@ -935,7 +1127,7 @@
 
   function exerciseNames(state) {
     const set = {};
-    (state.workouts || []).forEach(function (w) {
+    activeWorkouts(state).forEach(function (w) {
       (w.exercises || []).forEach(function (e) {
         const n = normName(e.name);
         if (n) set[n] = true;
@@ -1116,7 +1308,7 @@
     const today = todayISO(now);
     const ws = weekStartSunday(today);
     const we = addDays(ws, 6);
-    (state.workouts || []).forEach(function (w) {
+    activeWorkouts(state).forEach(function (w) {
       if (w.date < ws || w.date > we) return;
       (w.exercises || []).forEach(function (ex) {
         const map = lookupMuscles(ex.name);
@@ -1477,7 +1669,7 @@
       if (Number.isFinite(c) && c > 0) calByDate[n.date] = c;
     });
     const volumeByDate = {};
-    (state.workouts || []).forEach(function (w) {
+    activeWorkouts(state).forEach(function (w) {
       if (!w || !w.date) return;
       let v = 0;
       (w.exercises || []).forEach(function (e) { v += setVolume(e, state, w.date); });
@@ -1728,12 +1920,31 @@
       exercises: [],
       source: 'manual'
     };
+    const start = parseStamp(session.periodStart || session.startedAt);
+    const endNow = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+    const end = parseStamp(session.endedAt) || endNow;
+    if (start) {
+      row.startedAt = new Date(start).toISOString();
+      row.endedAt = new Date(Math.max(start, end)).toISOString();
+    }
     const dist = Number(session.distanceKm);
     if (Number.isFinite(dist) && dist > 0) row.distanceKm = Math.round(dist * 100) / 100;
     const hr = Number(session.avgHr);
     if (Number.isFinite(hr) && hr > 0) row.avgHr = Math.round(hr);
+    const maxHr = Number(session.maxHr);
+    if (Number.isFinite(maxHr) && maxHr > 0) row.maxHr = Math.round(maxHr);
+    const strain = Number(session.strain);
+    if (Number.isFinite(strain) && strain > 0) row.strain = Math.round(strain * 10) / 10;
+    const kj = Number(session.kilojoule);
+    if (Number.isFinite(kj) && kj > 0) row.kilojoule = kj;
+    const kcal = Number(session.kcal);
+    if (Number.isFinite(kcal) && kcal > 0) row.kcal = Math.round(kcal);
+    else if (row.kilojoule) row.kcal = kjToKcal(row.kilojoule);
+    if (session.hrZones) row.hrZones = session.hrZones;
     const rpe = Number(session.rpe);
     if (Number.isFinite(rpe) && rpe > 0) row.rpe = Math.round(rpe);
+    if (session.whoopId) row.whoopId = session.whoopId;
+    if (session.fromWhoop && typeof session.fromWhoop === 'object') row.fromWhoop = session.fromWhoop;
     return { ok: true, workout: row };
   }
 
@@ -1815,7 +2026,17 @@
     cardioElapsedMs: cardioElapsedMs,
     formatCardioClock: formatCardioClock,
     cardioDurationMin: cardioDurationMin,
-    buildCardioWorkout: buildCardioWorkout
+    buildCardioWorkout: buildCardioWorkout,
+    isDeletedWorkout: isDeletedWorkout,
+    whoopWorkoutId: whoopWorkoutId,
+    activeWorkouts: activeWorkouts,
+    kjToKcal: kjToKcal,
+    sessionWindow: sessionWindow,
+    matchWhoopWorkout: matchWhoopWorkout,
+    enrichCardioFromWhoop: enrichCardioFromWhoop,
+    backfillCardioWorkouts: backfillCardioWorkouts,
+    applyWhoopToCardioSession: applyWhoopToCardioSession,
+    whoopMetricsFrom: whoopMetricsFrom
   };
 
   root.FitEngine = FitEngine;
