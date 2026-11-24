@@ -8,6 +8,7 @@ import {
   MeshStandardMaterial, MeshBasicMaterial, HemisphereLight, DirectionalLight, AmbientLight,
   Color, CanvasTexture, SRGBColorSpace, Vector3, MathUtils, Box3
 } from './vendor/three-avatar.js';
+import { buildChibi } from './avatar-chibi.js';
 
 const TAU = Math.PI * 2;
 
@@ -600,7 +601,11 @@ function addProps(anim, o) {
 }
 
 function buildFigure(p, look, colors) {
-  return look.kind && look.kind !== 'human' ? buildCreature(p, look, colors) : buildHuman(p, look, colors);
+  // the cozy villager look (v44); the older v42 figures only if it fails to build
+  try { return buildChibi(p, look, colors, addProps); } catch (e) {
+    try { console.warn('chibi avatar failed, using the classic figure', e && e.message); } catch (x) { /* ignore */ }
+  }
+  return look.kind && look.kind !== 'human' && look.kind !== 'cat' ? buildCreature(p, look, colors) : buildHuman(p, look, colors);
 }
 
 function disposeTree(obj) {
@@ -653,6 +658,13 @@ const CLIPS = {
   sigh: { dur: 2.6, f: (u) => ({ headX: K(u, [[0, 0], [0.4, 0.3], [0.7, 0.3], [1, 0]]), leanX: K(u, [[0, 0], [0.4, 0.08], [1, 0]]), squash: K(u, [[0, 0], [0.4, -0.03], [1, 0]]), eyeClose: K(u, [[0, 0], [0.4, 0.5], [1, 0]]) }) },
   /* hop with anticipation, stretch on launch, squash on landing */
   hop: { dur: 1.3, f: (u) => ({ rootY: K(u, [[0, 0], [0.2, -0.02], [0.45, 0.075, 'out'], [0.65, 0, 'in'], [0.78, -0.012, 'out'], [1, 0]]), squash: K(u, [[0, 0], [0.2, -0.1], [0.3, 0.09, 'out'], [0.6, 0.02], [0.68, -0.12, 'out'], [0.85, 0.02], [1, 0]]), lRaise: K(u, [[0, 0], [0.35, 0.5], [0.7, 0.1], [1, 0]]), rRaise: K(u, [[0, 0], [0.35, 0.5], [0.7, 0.1], [1, 0]]) }) },
+  /* walk in place: little alternating hops with arm swing */
+  march: { dur: 2.6, f: (u) => {
+    const w = K(u, [[0, 0], [0.12, 1], [0.88, 1], [1, 0]]);
+    const ph = u * 6 * Math.PI;
+    const s = Math.sin(ph);
+    return { rootY: 0.018 * Math.abs(s) * w, squash: -0.05 * Math.abs(Math.cos(ph)) * w + 0.03 * Math.abs(s) * w, legR: 0.55 * Math.max(0, s) * w, legL: 0.55 * Math.max(0, -s) * w, rFwd: 0.6 * s * w, lFwd: -0.6 * s * w, headZ: 0.06 * s * w, leanZ: 0.04 * s * w, mouthOpen: 0 };
+  } },
   // ---- reactions
   workout: { dur: 3.0, react: true, f: (u) => {
     const st = K(u, [[0, 0], [0.2, 1, 'out'], [0.38, 1], [0.48, 0]]);
@@ -727,6 +739,7 @@ class Animator {
   pickFidget() {
     const R = this.mood.recovery || {}, D = this.mood.day || {};
     const pool = ['lookAround', 'lookAround', 'scratch', 'stretch'];
+    if (this.a && this.a.chibi && !this.base.seatTarget && !D.sore) pool.push('march', 'march');
     if (R.zone === 'green' && !this.base.seatTarget) pool.push('hop', 'hop', 'hop');
     if (D.sleepy || R.zone === 'red') pool.push('yawn', 'yawn', 'nod');
     if (D.sore) pool.push('rubBack', 'rubBack');
@@ -760,7 +773,7 @@ class Animator {
     const t = this.t;
 
     // channels
-    const ch = { rootY: 0, shiftX: 0, squash: 0, leanX: B.leanX, leanZ: 0, headX: B.headX, headY: 0, headZ: B.headZ, rRaise: 0, lRaise: 0, rFwd: 0, lFwd: 0, eyeClose: B.eye, mouthOpen: 0, sweat: 0, snack: 0, bottle: 0, sparkle: 0, flame: 0, glow: 0, wingFlap: 0 };
+    const ch = { rootY: 0, shiftX: 0, squash: 0, leanX: B.leanX, leanZ: 0, headX: B.headX, headY: 0, headZ: B.headZ, rRaise: 0, lRaise: 0, rFwd: 0, lFwd: 0, legR: 0, legL: 0, eyeClose: B.eye, mouthOpen: 0, sweat: 0, snack: 0, bottle: 0, sparkle: 0, flame: 0, glow: 0, wingFlap: 0 };
 
     if (!still) {
       // breathing: slower inhale ease-in-out, quicker exhale
@@ -772,6 +785,7 @@ class Animator {
       ch.leanX += -0.012 * br;
       ch.headX += -0.01 * br;
       ch.rRaise += 0.03 * br; ch.lRaise += 0.03 * br;
+      if (a.chibi) { ch.squash += 0.018 * br - 0.006; ch.rootY += 0.0035 * br * (R.zone === 'green' ? 1.4 : 1); }
       // weight shift between feet (critically damped toward a side picked every 2.5–5 s); sore = limp
       if (t > this.nextShift) {
         this.shiftTarget = this.shiftTarget > 0 ? -1 : 1;
@@ -864,13 +878,27 @@ class Animator {
     });
     [1, -1].forEach((sd) => {
       const hip = a.hips && a.hips[sd], knee = a.knees && a.knees[sd];
-      if (hip) hip.rotation.x = hip.userData.r0.x - seat * (a.creature ? 1.25 : 1.5) + (a.creature ? 0 : 0.04 * sd * this.shift * (1 - seat));
+      if (hip) hip.rotation.x = hip.userData.r0.x - seat * (a.creature ? 1.25 : 1.5) + (a.creature ? 0 : 0.04 * sd * this.shift * (1 - seat)) - (sd > 0 ? ch.legR : ch.legL) * (1 - seat);
       if (knee) knee.rotation.x = knee.userData.r0.x + seat * 1.5;
     });
     (a.eyes || []).forEach((e) => {
       const open = Math.max(0.08, 1 - ch.eyeClose);
       e.scale.y = e.userData.s0.y * open;
     });
+    if (a.face) {
+      // expression: the strongest playing clip wins, else the day / recovery mood (pure rule in avatar-model)
+      const AM = window.FitAvatarModel;
+      let best = 0, bc = null, bu = 0;
+      this.clips.forEach((x) => {
+        if (t < x.start || t > x.out + 0.1 || !(AM && AM.CLIP_EXPR[x.name])) return;
+        const u = (t - x.start) / x.c.dur;
+        const w = Math.min(u * 6, (1 - u) * 6, 1);
+        if (w > best) { best = w; bc = x.name; bu = u; }
+      });
+      const expr = AM && AM.faceExpr ? AM.faceExpr(bc, bu, R, D) : 'neutral';
+      const lookX = this.look.w * this.look.x + 0.6 * noise1(t * 0.4 + 2);
+      a.face.update({ close: ch.eyeClose, open: ch.mouthOpen, expr: expr, lx: lookX, ly: this.look.w * this.look.y });
+    }
     if (a.mouthO) {
       const m = MathUtils.clamp(ch.mouthOpen, 0, 1);
       a.mouthO.visible = m > 0.04;
@@ -981,48 +1009,13 @@ export function mount(container, init) {
   let tween = null;             // {from, start, dur}
   let frameH = 1.75, frameW = 0.6;
 
-  /* Experimental realistic human (Settings › מראה): a rigged GLB loaded once, morphed per update.
-     The procedural figure stays the default and the fallback while it loads or if it fails. */
-  let rig = null, rigLoading = null, rigFailed = false;
-  function wantRig() { return !!(look && look.realistic) && (!look.kind || look.kind === 'human') && !rigFailed; }
-  function rigFor(sex) {
-    const s = sex === 'f' ? 'f' : 'm';
-    if (rig && rig.sex === s) return rig;
-    if (!rigLoading) {
-      rigLoading = import('./avatar-rig.js').then((m) => m.loadRig(s)).then((r) => {
-        rigLoading = null;
-        rig = r;
-        if (alive && wantRig()) { makeFigure(shown); frameCamera(); applyDay(); dirty = true; kick(); }
-      }).catch((e) => {
-        rigLoading = null; rigFailed = true;
-        try { console.warn('avatar rig unavailable, using the built-in figure', e && e.message); } catch (x) { /* ignore */ }
-      });
-    }
-    return null;
-  }
-  function rigMorphs(params) {
-    const M = typeof window !== 'undefined' && window.FitAvatarModel;
-    return M && M.rigMorphs ? M.rigMorphs(params) : {};
-  }
-  function activeRig() { return figure && figure.userData.rig ? figure.userData.rig : null; }
-
   function makeFigure(params) {
+    if (figure) { turntable.remove(figure); disposeTree(figure); }
     const zc = zoneColor(params.recovery.zone);
-    const colors = { cloth: cssVar('--bg-soft', '#2a1840'), shoe: '#f3eaff', glow: zc };
-    const r = wantRig() ? rigFor(params.sex) : null;
-    if (figure && !(r && figure === r.group)) { turntable.remove(figure); if (!figure.userData.rig) disposeTree(figure); }
-    if (r) {
-      // live morph: only the shape-key influences and the height scale change
-      if (figure !== r.group) { figure = r.group; turntable.add(figure); r.setDay(day); }
-      r.setLook(look, colors);
-      r.setMorphs(rigMorphs(params), params.height);
-      r.setMood(params.recovery, day);
-    } else {
-      figure = buildFigure(params, look, colors);
-      figure.traverse((o) => { o.userData.s0 = o.scale.clone(); o.userData.r0 = o.rotation.clone(); o.userData.p0 = o.position.clone(); });
-      turntable.add(figure);
-      animator.bind(figure.userData.anim, figure); animator.setMood(params.recovery, day);
-    }
+    figure = buildFigure(params, look, { cloth: cssVar('--bg-soft', '#2a1840'), shoe: '#f3eaff', glow: zc });
+    figure.traverse((o) => { o.userData.s0 = o.scale.clone(); o.userData.r0 = o.rotation.clone(); o.userData.p0 = o.position.clone(); });
+    turntable.add(figure);
+    animator.bind(figure.userData.anim, figure); animator.setMood(params.recovery, day);
     if (haloZone !== params.recovery.zone) {
       haloZone = params.recovery.zone;
       rim.color.set(zc); rim2.color.set(zc);
@@ -1034,14 +1027,9 @@ export function mount(container, init) {
       scene.add(halo);
     }
     figure.updateMatrixWorld(true);
-    if (figure.userData.frame) {
-      // skinned bounds are the T-pose bind pose: frame by height instead
-      frameH = figure.userData.frame.h; frameW = figure.userData.frame.w;
-    } else {
-      const box = new Box3().setFromObject(figure);
-      frameH = Math.max(0.5, box.max.y) * (look.kind && look.kind !== "human" ? 1.08 : 1);
-      frameW = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), 0.7 * Math.abs(box.min.z), 0.7 * Math.abs(box.max.z)) * 2;
-    }
+    const box = new Box3().setFromObject(figure);
+    frameH = Math.max(0.5, box.max.y) * (look.kind && look.kind !== "human" ? 1.08 : 1);
+    frameW = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), 0.7 * Math.abs(box.min.z), 0.7 * Math.abs(box.max.z)) * 2;
     halo.scale.setScalar(Math.max(frameH / 1.75, 0.55) * (look.kind && look.kind !== 'human' ? 1.6 : 1));
     if (day && day.rest && seatKind !== null && seatKind !== look.kind) applyDay(); // beanbag sized for the new character
   }
@@ -1108,7 +1096,6 @@ export function mount(container, init) {
     amb.intensity = L.amb;
     if (day.tod === 'sunset') rim2.color.set('#ff7fb0');
     animator.setMood(shown.recovery, day);
-    if (activeRig()) { activeRig().setMood(shown.recovery, day); activeRig().setDay(day); }
     // rest day: a cozy beanbag to sit on
     if (seatMesh) { turntable.remove(seatMesh); disposeTree(seatMesh); seatMesh = null; }
     seatW = 0;
@@ -1128,9 +1115,7 @@ export function mount(container, init) {
     if (mode !== 'full') return;
     const r = el.getBoundingClientRect();
     if (!r.width) return;
-    const lx = ((e.clientX - r.left) / r.width) * 2 - 1, ly = ((e.clientY - r.top) / r.height) * 2 - 1;
-    animator.lookAt(lx, ly, animator.t);
-    if (activeRig()) activeRig().lookAt(lx, ly);
+    animator.lookAt(((e.clientX - r.left) / r.width) * 2 - 1, ((e.clientY - r.top) / r.height) * 2 - 1, animator.t);
     kick();
   }
   el.addEventListener('pointermove', onLook);
@@ -1150,7 +1135,7 @@ export function mount(container, init) {
     }
     if (needsLoop()) raf = requestAnimationFrame(loop);
   }
-  function needsLoop() { return !reduced || !!tween || dragging || Math.abs(vel) > 0.0005 || dirty || animator.busy() || !!(activeRig() && activeRig().busy()); }
+  function needsLoop() { return !reduced || !!tween || dragging || Math.abs(vel) > 0.0005 || dirty || animator.busy(); }
   function kick() { if (!raf && wants()) { prev = performance.now() - 100; raf = requestAnimationFrame(loop); } }
   function step(now, dt) {
     if (tween) {
@@ -1171,9 +1156,7 @@ export function mount(container, init) {
       yaw = 0.3 + 0.38 * noise1((now - t0) / 1000 * 0.12 + 1.7);
       dirty = true;
     } else yaw = 0.3;
-    const rg = activeRig();
-    if (rg) { if (!reduced || rg.busy() || dirty) { rg.update(dt || 0.016, turntable.rotation.y, reduced && !rg.busy()); dirty = true; } }
-    else if (!reduced || animator.busy() || dirty) { animator.update(dt || 0.016, turntable.rotation.y); dirty = true; }
+    if (!reduced || animator.busy() || dirty) { animator.update(dt || 0.016, turntable.rotation.y); dirty = true; }
     if (dirty && figure) {
       turntable.rotation.y = yaw;
       turntable.rotation.x = pitch;
@@ -1220,21 +1203,18 @@ export function mount(container, init) {
   return {
     get host() { return host; },
     get mode() { return mode; },
-    /* 'rig' when the realistic human is on screen, 'loading', 'failed', or '' (built-in figure) */
-    get rigState() { return activeRig() ? 'rig' : rigLoading ? 'loading' : rigFailed ? 'failed' : ''; },
     attach: attach,
     setPaused(p) { paused = !!p; if (!paused) kick(); },
     setDay(d) { day = d || {}; applyDay(); kick(); },
     /* play a reaction now if the canvas is on screen; returns its length in seconds (0 = not shown) */
     react(type) {
       if (!wants()) return 0;
-      const rg = activeRig();
-      const d = rg ? rg.play(type) : animator.play(type);
+      const d = animator.play(type);
       dirty = true; kick();
       return d;
     },
     update(params, look2, opts) {
-      const kindChanged = look2 && (look2.kind !== look.kind || !!look2.realistic !== !!look.realistic);
+      const kindChanged = look2 && (look2.kind !== look.kind);
       if (look2) look = look2;
       target = params;
       if (reduced || (opts && opts.instant) || kindChanged) {
@@ -1275,8 +1255,7 @@ export function mount(container, init) {
       el.removeEventListener('pointermove', onLook);
       el.removeEventListener('pointerdown', onLook);
       if (seatMesh) disposeTree(seatMesh);
-      if (figure && !figure.userData.rig) disposeTree(figure);
-      else if (figure) turntable.remove(figure); // the rig is cached for the next mount
+      if (figure) disposeTree(figure);
       if (halo) disposeTree(halo);
       renderer.dispose();
       try { renderer.forceContextLoss(); } catch (e) { /* ignore */ }

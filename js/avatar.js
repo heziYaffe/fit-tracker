@@ -22,13 +22,11 @@
   function cfgOf(s) { return M.normalizeConfig(s && s.settings && s.settings.avatar); }
   function hexOf(list, id) { const x = (list || []).find(function (i) { return i.id === id; }); return x ? x.hex : (list && list[0] ? list[0].hex : '#cccccc'); }
   function kindOf(id) { return M.KINDS.find(function (k) { return k.id === id; }) || M.KINDS[0]; }
-  function realisticOn() { const s = st(); return !!(s && s.settings && s.settings.avatarRealistic === true); }
   function lookOf(cfg) {
     return {
       kind: cfg.kind || 'human',
       color: hexOf(M.CREATURE_COLORS[cfg.kind], cfg.color),
-      skin: hexOf(M.SKIN_TONES, cfg.skin), hair: cfg.hair, hairColor: hexOf(M.HAIR_COLORS, cfg.hairColor), beard: cfg.beard,
-      realistic: realisticOn()
+      skin: hexOf(M.SKIN_TONES, cfg.skin), hair: cfg.hair, hairColor: hexOf(M.HAIR_COLORS, cfg.hairColor), beard: cfg.beard
     };
   }
   function fmt(n) { return String(Math.round(n * 10) / 10); }

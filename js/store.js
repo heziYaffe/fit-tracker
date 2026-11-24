@@ -247,7 +247,6 @@
       ? Math.max(15, Math.min(600, Math.round(restT)))
       : ((C.REST_DEFAULT_SEC) || 90);
     set.recoveryTint = set.recoveryTint !== false;
-    set.avatarRealistic = set.avatarRealistic === true;
     set.seenMilestones = Array.isArray(set.seenMilestones)
       ? set.seenMilestones.filter(function (id) { return id != null && id !== ''; }).map(String)
       : [];
