@@ -9,7 +9,7 @@
   const CONSISTENCY_DAYS = 14;
   const INSTALL_DISMISS_KEY = 'hazi-fit-install-dismissed';
   const THEME_KEY = 'hazi-fit-theme';
-  const APP_VERSION = '39';
+  const APP_VERSION = '40';
 
   const WORKOUT_TYPES = [
     { id: 'chest', label: 'חזה' },

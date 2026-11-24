@@ -1135,6 +1135,7 @@
       renderMilestoneCard(s) +
       smartBtn +
       renderHomeDashboard(s, info, cons) +
+      (root.FitAvatar ? root.FitAvatar.homeCard(s) : '') +
       todayCard +
       renderWeeklyCard(s);
   }
@@ -2359,7 +2360,7 @@
       ui.aiUsageFetched = true;
       root.FitAI.refreshUsage().then(function () { if (ui.tab === 'settings') render(); });
     }
-    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + notifyCard + accountCard + whoopCard + aiCard +
+    return pageHead('<h1>הגדרות</h1>', '', { noGear: true }) + demoCard + themeCard + (root.FitAvatar ? root.FitAvatar.settingsCard(s) : '') + notifyCard + accountCard + whoopCard + aiCard +
       '<section class="card">' +
       '<label class="field"><span>שם תצוגה</span>' +
       '<input type="text" data-action="setting" data-key="displayName" value="' + esc(set.displayName || '') + '" /></label>' +
