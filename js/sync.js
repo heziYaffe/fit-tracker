@@ -665,20 +665,23 @@
     return whoopStatus().then(function (s) {
       if (!(s && s.connected)) return s;
       const due = force || (Date.now() - lastWhoopPullAt() >= WHOOP_PULL_EVERY_MS);
-      if (due) {
+      const stamp = s && s.link && (s.link.last_sync_at || s.last_sync_at);
+      const serverHasNew = !!stamp && stamp !== lastWhoopSyncSeen;
+      // The server pulls Whoop by itself every morning. Bring down whatever is
+      // already there first, so a slow or failed on-demand pull can never leave
+      // the app without the morning's data.
+      const first = (serverHasNew || due)
+        ? syncNow().then(function () { if (stamp) lastWhoopSyncSeen = stamp; }).catch(function () {})
+        : Promise.resolve();
+      return first.then(function () {
+        if (!due) return s;
         return whoopRefresh().then(function () {
           return syncNow().then(function () { return s; });
         }).catch(function (err) {
           status.whoop = Object.assign({}, s, { error: err && err.message });
           return s;
         });
-      }
-      const stamp = s && s.link && (s.link.last_sync_at || s.last_sync_at);
-      if (stamp && stamp !== lastWhoopSyncSeen) {
-        lastWhoopSyncSeen = stamp;
-        return syncNow().then(function () { return s; }).catch(function () { return s; });
-      }
-      return s;
+      });
     });
   }
 

@@ -633,7 +633,66 @@ function mergeRecordsById(groups: Array<{ records?: Record<string, unknown>[] }>
   return Object.values(map);
 }
 
+// Batched writers: a 90-day pull used to do ~600 sequential round trips (each
+// metric = a select + an upsert) and was killed by the platform before it
+// finished, so the app's pull-on-open never completed. Collect patches in
+// memory and write them with one select and one upsert.
+function cleanPatch(patch: Record<string, unknown>) {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== null && v !== undefined) clean[k] = v;
+  }
+  return clean;
+}
+
+function queueMetric(queue: Map<string, Record<string, unknown>>, patch: Record<string, unknown>) {
+  if (!patch.date) return;
+  const key = String(patch.date);
+  queue.set(key, { ...(queue.get(key) || {}), ...cleanPatch(patch) });
+}
+
+async function flushMetrics(sb: ReturnType<typeof admin>, userId: string, queue: Map<string, Record<string, unknown>>) {
+  if (!queue.size) return;
+  const ids = Array.from(queue.keys()).map((d) => "whoop-" + d);
+  const prevById: Record<string, Record<string, unknown>> = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await sb.from("fit_records")
+      .select("record_id, data")
+      .eq("user_id", userId)
+      .eq("collection", "metrics")
+      .in("record_id", ids.slice(i, i + 100));
+    if (error) throw error;
+    for (const row of data || []) prevById[String(row.record_id)] = (row.data || {}) as Record<string, unknown>;
+  }
+  const now = new Date().toISOString();
+  const rows = Array.from(queue.entries()).map(([date, patch]) => {
+    const recordId = "whoop-" + date;
+    const prev = prevById[recordId] || { id: recordId, date, source: "whoop" };
+    const next = { ...prev, ...patch, source: "whoop", id: recordId, date, updatedAt: now };
+    return { user_id: userId, collection: "metrics", record_id: recordId, data: next, updated_at: now, deleted_at: null };
+  });
+  const { error } = await sb.from("fit_records").upsert(rows);
+  if (error) throw error;
+}
+
+async function flushWorkouts(sb: ReturnType<typeof admin>, userId: string, list: Record<string, unknown>[]) {
+  if (!list.length) return;
+  const now = new Date().toISOString();
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const w of list) {
+    const recordId = "whoop-wo-" + String(w.whoopId || w.id || crypto.randomUUID());
+    byId.set(recordId, {
+      user_id: userId, collection: "workouts", record_id: recordId,
+      data: { ...w, id: recordId, updatedAt: now }, updated_at: now, deleted_at: null,
+    });
+  }
+  const rows = Array.from(byId.values());
+  const { error } = await sb.from("fit_records").upsert(rows);
+  if (error) throw error;
+}
+
 async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: string, days = 90) {
+  const queue = new Map<string, Record<string, unknown>>();
   const end = new Date();
   const start = new Date(end.getTime() - Math.max(14, days) * 86400000);
   const q = "?start=" + start.toISOString() + "&end=" + end.toISOString() + "&limit=25";
@@ -663,14 +722,14 @@ async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: 
       sleepDateById[String(s.id)] = { date: mapped.date, cycleId: s.cycle_id != null ? String(s.cycle_id) : undefined };
     }
     if (s.cycle_id != null && mapped.date) sleepDateByCycle[String(s.cycle_id)] = mapped.date;
-    await upsertMetric(sb, userId, mapped);
+    queueMetric(queue, mapped);
   }
   // Strain belongs on the wake-up day of the cycle's sleep, not bedtime (cycle.start).
   for (const c of cycleList) {
     const mapped = mapCycle(c);
     const fromSleep = c.id != null ? sleepDateByCycle[String(c.id)] : undefined;
     if (fromSleep) mapped.date = fromSleep;
-    await upsertMetric(sb, userId, mapped);
+    queueMetric(queue, mapped);
   }
   const recs = await whoopGetAll(access, "/v2/recovery" + q).catch((e) => {
     console.error("recovery", e);
@@ -680,26 +739,27 @@ async function pullRecent(sb: ReturnType<typeof admin>, userId: string, access: 
   for (const r of recs.records || []) {
     if (r.cycle_id != null) recByCycle[String(r.cycle_id)] = r;
     const date = recoveryDayDate(r, sleepDateById, cycleById);
-    await upsertMetric(sb, userId, mapRecovery(r, date));
+    queueMetric(queue, mapRecovery(r, date));
   }
   // Per-cycle recovery for the current / recent cycles if the list endpoint omitted them.
+  let fallbackCalls = 0;
   for (const c of cycleList) {
     const id = c.id != null ? String(c.id) : "";
     if (!id || recByCycle[id]) continue;
+    if (++fallbackCalls > 4) break;
     try {
       const rec = await whoopGet(access, "/v2/cycle/" + id + "/recovery");
       if (rec) {
         const date = recoveryDayDate(rec, sleepDateById, cycleById);
-        await upsertMetric(sb, userId, mapRecovery(rec, date));
+        queueMetric(queue, mapRecovery(rec, date));
       }
     } catch (err) {
       console.error("cycle recovery " + id, err);
     }
   }
+  await flushMetrics(sb, userId, queue);
   const workouts = await whoopGetAll(access, "/v2/activity/workout" + q).catch(() => ({ records: [] as Record<string, unknown>[] }));
-  for (const w of workouts.records || []) {
-    await upsertWorkout(sb, userId, mapWorkout(w));
-  }
+  await flushWorkouts(sb, userId, (workouts.records || []).map((w) => mapWorkout(w)));
   await sb.from("whoop_links").upsert({
     user_id: userId,
     last_sync_at: new Date().toISOString(),
@@ -822,7 +882,12 @@ Deno.serve(async (req) => {
         const before = await tokenMeta(sb, user.id);
         const tok = await getValidToken(sb, user.id);
         if (!tok) return json({ error: "not_connected" }, 400);
-        await pullRecent(sb, user.id, tok.access_token as string);
+        // Opening the app must be quick: a 14-day window is plenty once the
+        // link has synced before; only the very first pull backfills 90 days.
+        const { data: linkRow } = await sb.from("whoop_links").select("last_sync_at").eq("user_id", user.id).maybeSingle();
+        const asked = Number(url.searchParams.get("days") || 0);
+        const days = asked > 0 ? Math.min(asked, 180) : (linkRow && linkRow.last_sync_at ? 14 : 90);
+        await pullRecent(sb, user.id, tok.access_token as string, days);
         const meta = await tokenMeta(sb, user.id);
         return json({ ok: true, refreshed: before.token_updated_at !== meta.token_updated_at, ...meta });
       } catch (err) {
@@ -853,7 +918,7 @@ Deno.serve(async (req) => {
           if (!tok || !tok.access_token) { failed += 1; continue; }
           const after = await tokenMeta(sb, userId);
           if (before.token_updated_at !== after.token_updated_at) refreshed += 1;
-          await pullRecent(sb, userId, String(tok.access_token), 7);
+          await pullRecent(sb, userId, String(tok.access_token), Math.min(Number(url.searchParams.get("days") || 0) || 7, 180));
           pulled += 1;
         } catch (err) {
           if (isDefinitiveAuthLoss(err)) reconnect += 1;
@@ -862,6 +927,20 @@ Deno.serve(async (req) => {
             console.error("whoop cron user failed", String((err as Error).message || err).slice(0, 200));
           }
         }
+      }
+      // Leave a trace of every scheduled run (and whether today's recovery has
+      // landed yet) so a missing morning can be diagnosed from the database.
+      try {
+        const today = jerusalemToday();
+        const summary = { at: new Date().toISOString(), pulled, refreshed, reconnect, failed, today, today_recovery: [] as boolean[] };
+        for (const row of rows || []) {
+          const { data: m } = await sb.from("fit_records").select("data").eq("user_id", String(row.user_id))
+            .eq("collection", "metrics").eq("record_id", "whoop-" + today).maybeSingle();
+          summary.today_recovery.push(!!(m && m.data && (m.data as Record<string, unknown>).recoveryPct != null));
+        }
+        await sb.from("app_private_settings").upsert({ key: "whoop_last_cron", value: JSON.stringify(summary), updated_at: new Date().toISOString() });
+      } catch (err) {
+        console.error("whoop cron log failed", String((err as Error).message || err).slice(0, 200));
       }
       return json({ ok: true, pulled, refreshed, reconnect, failed });
     }
