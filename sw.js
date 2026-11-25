@@ -1,5 +1,5 @@
 /* פיט — service worker */
-const CACHE = 'fit-tracker-v47';
+const CACHE = 'fit-tracker-v48';
 const ASSETS = [
   './',
   './index.html',
@@ -23,6 +23,7 @@ const ASSETS = [
   './js/planparse.js',
   './js/food.js',
   './js/ai.js',
+  './js/menu-chat.js',
   './js/avatar-model.js',
   './js/avatar.js',
   './js/avatar3d.js',

@@ -7,6 +7,7 @@
 //   GET  /usage                 → { month_usd, cap_usd, today_calls, daily_limit }
 //   POST /food   { text, names } → { items: [{ name, qty, unit, grams }] }
 //   POST /menu   { prefs, catalog, current? } → { reply, meals: [...] }
+//   POST /menuchat { messages, memory, targets, catalog, blocked, current? } → { reply, action, meals, memory:{add,remove} }
 //   POST /plan   { prefs, messages, known, recovery, current? } → { reply, plan }
 // Every reply carries `usage` (this call) and `month_usd`. Errors are JSON
 // { error, message } with a Hebrew message; the app then falls back to rules.

@@ -271,6 +271,28 @@
     return Number(state.settings.dailyProteinTarget) || 150;
   }
 
+  // Daily macro targets for the menu (v48). Settings win; empty values are
+  // derived: calories from body weight ×30 (goal-adjusted), fat 27% of
+  // calories, carbs the rest after protein and fat.
+  function nutritionTargets(state) {
+    const set = (state && state.settings) || {};
+    const protein = proteinTarget(state);
+    let calories = Number(set.dailyCalorieTarget) || 0;
+    const auto = { calories: !calories, carbs: false, fat: false };
+    if (!calories) {
+      const ws = ((state && state.weights) || []).slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      const kg = ws.length ? Number(ws[ws.length - 1].weight) || 0 : 0;
+      const goal = set.menuPrefs && set.menuPrefs.goal;
+      const mult = goal === 'cut' ? 0.85 : (goal === 'bulk' ? 1.1 : 1);
+      calories = Math.round((kg > 30 ? kg * 30 : 2200) * mult / 50) * 50;
+    }
+    let fat = Number(set.dailyFatTarget) || 0;
+    if (!fat) { auto.fat = true; fat = Math.round(calories * 0.27 / 9 / 5) * 5; }
+    let carbs = Number(set.dailyCarbTarget) || 0;
+    if (!carbs) { auto.carbs = true; carbs = Math.max(50, Math.round((calories - protein * 4 - fat * 9) / 4 / 5) * 5); }
+    return { protein: protein, calories: calories, carbs: carbs, fat: fat, auto: auto };
+  }
+
   function waterVessel(state) {
     const set = (state && state.settings) || {};
     const kind = set.waterVessel === 'bottle' ? 'bottle' : 'cup';
@@ -2670,6 +2692,7 @@
     computeXP: computeXP,
     computeAchievements: computeAchievements,
     proteinTarget: proteinTarget,
+    nutritionTargets: nutritionTargets,
     waterTarget: waterTarget,
     waterVessel: waterVessel,
     formatLiters: formatLiters,

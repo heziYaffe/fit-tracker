@@ -908,6 +908,11 @@
     return clone;
   }
 
+  function clearDayMenu(date) {
+    state.dayMenus = (state.dayMenus || []).filter(function (d) { return d.date !== date; });
+    commit();
+  }
+
   function updateDayMenu(date, patch) {
     const row = getDayMenu(date);
     if (!row) return null;
@@ -1108,6 +1113,7 @@
     deleteMenu: deleteMenu,
     duplicateMenu: duplicateMenu,
     getDayMenu: getDayMenu,
+    clearDayMenu: clearDayMenu,
     applyMenuToDate: applyMenuToDate,
     updateDayMenu: updateDayMenu,
     setMealStatus: setMealStatus,

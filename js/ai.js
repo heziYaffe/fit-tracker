@@ -122,6 +122,11 @@
       return r;
     }, function (e) { throw e; }); // the menu screen shows its own failure card
   }
+  // (2b) the menu chat (v48): one message → reply, action, menu, memory ops
+  function menuChat(body) {
+    if (!available()) return Promise.reject(aiError('off', 'הצ׳אט עם ה-AI זמין אחרי התחברות לחשבון.'));
+    return call('menuchat', body, { timeoutMs: 28000 });
+  }
   function excludeLabels(ids) {
     const opts = (root.FitFood && root.FitFood.EXCLUDE_OPTIONS) || [];
     return (ids || []).map(function (id) { const o = opts.find(function (x) { return x.id === id; }); return o ? o.label : id; });
@@ -326,7 +331,7 @@
   root.FitAI = {
     available: available, call: call, usageLine: usageLine, lastUsage: lastUsage, refreshUsage: refreshUsage,
     disabled: disabled, setDisabled: setDisabled,
-    foodProvider: foodProvider, menuProvider: menuProvider, lastMenuReply: function () { return lastMenuReply; },
+    foodProvider: foodProvider, menuProvider: menuProvider, menuChat: menuChat, lastMenuReply: function () { return lastMenuReply; },
     planState: planState, resetPlan: resetPlan, askPlan: askPlan, planToTemplates: planToTemplates, savePlan: savePlan,
     knownExercises: knownExercises, renderPlanSheet: renderPlanSheet, handlePlanAction: handlePlanAction
   };

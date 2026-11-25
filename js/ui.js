@@ -1331,60 +1331,162 @@
       }).join('') + '</section>';
   }
 
-  // ---------- Menu wizard (built together, step by step) ----------
-  function menuPrefs() {
-    const s = state();
-    return Object.assign({ excludes: [], dislikes: [], meals: 4 }, s.settings.menuPrefs || {});
+  // ---------- Menu chat (v48): the one AI flow for the menu ----------
+  function MCx() { return root.FitMenuChat || null; }
+  function memoryPrefs() { return MCx() ? MCx().prefs(state()) : {}; }
+
+  // «מה אני יודע עליך»: collapsed by default, editable, auto-filled from chat.
+  function renderMemoryCard() {
+    const M = MCx();
+    if (!M) return '';
+    const list = M.memory(state());
+    const open = !!ui.memOpen;
+    let body = '';
+    if (open) {
+      body = M.CATS.map(function (c) {
+        const items = list.filter(function (m) { return m.cat === c[0]; });
+        if (!items.length) return '';
+        return '<div class="mem-cat"><span class="kicker">' + esc(c[1]) + '</span>' + items.map(function (m) {
+          if (ui.memEdit === m.id) {
+            return '<div class="mem-item editing"><input type="text" id="mem-edit-input" maxlength="60" value="' + esc(ui.memEditDraft != null ? ui.memEditDraft : m.text) + '" />' +
+              '<button type="button" class="linkish" data-action="mem-save" data-id="' + esc(m.id) + '">שמירה</button>' +
+              '<button type="button" class="linkish" data-action="mem-cancel">ביטול</button></div>';
+          }
+          return '<div class="mem-item"><span>' + esc(m.text) + '</span><span class="mem-acts">' +
+            '<button type="button" class="linkish" data-action="mem-edit" data-id="' + esc(m.id) + '">עריכה</button>' +
+            '<button type="button" class="icon-btn" data-action="mem-del" data-id="' + esc(m.id) + '" aria-label="מחיקה">×</button></span></div>';
+        }).join('') + '</div>';
+      }).join('') || '<p class="hp-legend">עוד ריק. ספר בצ׳אט מה אתה אוהב, מה לא ומה ההרגלים שלך, וזה יישמר כאן.</p>';
+      const cat = ui.memAddCat || 'avoid';
+      body += '<div class="mem-add"><select id="mem-add-cat" aria-label="קטגוריה">' + M.CATS.map(function (c) {
+        return '<option value="' + c[0] + '"' + (c[0] === cat ? ' selected' : '') + '>' + esc(c[1]) + '</option>';
+      }).join('') + '</select><input type="text" id="mem-add-text" maxlength="60" placeholder="למשל: טונה" value="' + esc(ui.memDraft || '') + '" />' +
+        '<button type="button" class="btn" data-action="mem-add">הוספה</button></div>' +
+        '<p class="hp-legend">מתעדכן לבד ממה שאתה כותב בצ׳אט ונשלח ל-AI עם כל הודעה, בלי פרטים מזהים. מה שב«לא אוכל» לא ייכנס לתפריט.</p>';
+    }
+    const sum = list.length ? list.slice(0, 3).map(function (m) { return m.text; }).join(' · ') + (list.length > 3 ? ' …' : '') : 'עוד ריק';
+    return '<section class="card mem-card' + (open ? ' open' : '') + '"><button type="button" class="mem-head" data-action="mem-toggle" aria-expanded="' + open + '">' +
+      '<span class="mem-title"><strong>מה אני יודע עליך</strong> <span class="mem-count">' + list.length + '</span>' +
+      (open ? '' : '<span class="mem-sum">' + esc(sum) + '</span>') + '</span><span class="chev" aria-hidden="true">‹</span></button>' + body + '</section>';
   }
 
-  function startWizard() {
-    const s = state();
-    const p = menuPrefs();
-    const w = Store.latestWeight ? Store.latestWeight() : null;
-    const kg = w && (w.kg || w.weight || w.value);
-    const cal = Number(s.settings.dailyCalorieTarget) || (root.FitFood ? root.FitFood.estimateCalories(kg, p.goal || 'keep') : 2200);
-    ui.wiz = {
-      step: 1, goal: p.goal || 'keep', protein: E.proteinTarget(s), calories: cal, calAuto: !Number(s.settings.dailyCalorieTarget), kg: kg || 0,
-      meals: p.meals || 4, excludes: (p.excludes || []).slice(), dislikes: (p.dislikes || []).slice(),
-      dislikeTerms: (p.dislikeTerms || []).slice(), seed: 0, menu: null,
-      // Saved preferences → one summary screen instead of 4 steps.
-      quick: !!s.settings.menuPrefs, note: ''
-    };
-    ui.tab = 'nutrition';
-    render();
-    try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+  function chatMsgHtml(m, isLast) {
+    const M = MCx();
+    if (m.role === 'user') return '<div class="mc-msg user">' + esc(m.text) + '</div>';
+    if (m.error) {
+      return '<div class="mc-msg model err"><p>ה-AI לא הצליח לענות. ' + esc(m.text) + '</p>' +
+        (isLast ? '<div class="mc-row"><button type="button" class="btn primary sm" data-action="mc-retry" data-id="' + esc(m.id) + '">נסה שוב</button>' +
+          (M.currentMeals() ? '' : '<button type="button" class="btn sm" data-action="mc-basic">תפריט בסיסי בלי AI</button>') + '</div>' : '') + '</div>';
+    }
+    let extra = '';
+    const ch = m.change ? M.change(m.change) : null;
+    if (ch) {
+      const names = M.changedNames(ch);
+      extra += '<div class="mc-note">' + (ch.before ? 'שונו: ' + esc(names.join(', ')) : 'נבנה תפריט חדש') +
+        (ch.undone ? ' · <span class="muted">בוטל</span>' : ' · <button type="button" class="linkish" data-action="mc-undo" data-id="' + esc(ch.id) + '">ביטול השינוי</button>') + '</div>';
+      if (m.today === false && !ch.undone) extra += '<div class="mc-note muted">היום כבר סימנת ארוחה, אז השינוי יחול ממחר.</div>';
+    }
+    if (m.mem && m.mem.length) {
+      extra += '<div class="mc-note mem">' + m.mem.map(function (op) {
+        return (op.op === 'add' ? 'נוסף לזיכרון: ' : 'הוסר מהזיכרון: ') + esc((M.CAT_LABEL[op.item.cat] || '') + ' · ' + op.item.text);
+      }).join('<br>') + (m.memUndone ? ' · <span class="muted">בוטל</span>' : ' · <button type="button" class="linkish" data-action="mc-mem-undo" data-id="' + esc(m.id) + '">בטל</button>') + '</div>';
+    }
+    return '<div class="mc-msg model' + (m.ask ? ' ask' : '') + '">' + esc(m.text) + extra + '</div>';
   }
 
-  // Rule-based menu now; a registered menu provider (FitFood.setMenuProvider)
-  // takes over automatically and falls back to the rules on any failure.
-  function wizBuild() {
-    const w = ui.wiz;
-    const prefs = { protein: w.protein, calories: w.calories, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes, seed: w.seed, goal: w.goal,
-      dislikeTerms: w.dislikeTerms || [], note: w.note || '', change: w.change || '', current: w.change ? w.prevMenu : null };
-    w.aiReply = '';
-    w.aiFail = null;
-    if (!root.FitFood.hasMenuProvider()) { w.menu = root.FitFood.buildMenu(prefs); return; }
-    const isChange = !!prefs.change;
-    if (!isChange) w.menu = null;
-    w.loading = true;
-    w.loadingStart = Date.now();
-    const token = (w.token = (w.token || 0) + 1);
-    root.FitFood.buildMenuAsync(prefs, { timeoutMs: 30000 }).then(function (menu) {
-      if (ui.wiz !== w || w.token !== token) return;
-      w.loading = false;
-      if (menu && menu.fallback) {
-        // Say it plainly; never pass the basic menu off as the AI's.
-        w.aiFail = { change: isChange ? prefs.change : '', basic: isChange ? null : menu, reason: menu.fallback.reason || '' };
-        if (isChange) w.menu = w.prevMenu;
-        render();
-        return;
+  function renderChatSheet() {
+    const M = MCx();
+    const msgs = M.messages();
+    const busy = M.isBusy();
+    const avail = M.available();
+    const open = ui.mcOpen !== false;
+    const hasMenu = !!M.currentMeals();
+    const shown = open ? msgs.slice(-40) : msgs.slice(-1);
+    let log = '';
+    if (!msgs.length) {
+      log = '<div class="mc-msg model">' + (hasMenu
+        ? 'התפריט שלך למעלה. כתוב מה לשנות, למשל «ערב קל יותר», ואעדכן אותו מיד.'
+        : 'היי! ספר לי מה אתה אוהב, מה לא ומה ההרגלים שלך, ואבנה תפריט. אפשר גם ללחוץ על הצעה.') + '</div>';
+    }
+    log += shown.map(function (m, i) { return chatMsgHtml(m, i === shown.length - 1 && !busy); }).join('');
+    if (busy) log += '<div class="mc-msg model typing"><span class="spin" aria-hidden="true"></span> חושב…</div>';
+    const chips = avail && !busy ? '<div class="mc-chips">' + M.chips().map(function (c) {
+      return '<button type="button" class="chip" data-action="mc-chip" data-text="' + esc(c) + '">' + esc(c) + '</button>';
+    }).join('') + (hasMenu ? '<button type="button" class="chip" data-action="mc-fresh">תפריט חדש מאפס</button>' : '') + '</div>' : '';
+    const form = avail
+      ? '<div class="mc-form"><textarea id="mc-input" rows="1" maxlength="500" enterkeyhint="send" placeholder="' + (hasMenu ? 'מה לשנות?' : 'מה בא לך לאכול?') + '">' + esc(ui.mcDraft || '') + '</textarea>' +
+        '<button type="button" class="btn primary mc-send" data-action="mc-send"' + (busy ? ' disabled' : '') + '>שליחה</button></div>'
+      : '<div class="mc-off"><p class="hp-legend">הצ׳אט עם ה-AI זמין אחרי התחברות לחשבון (הגדרות ← סנכרון).</p>' +
+        (hasMenu ? '' : '<button type="button" class="btn" data-action="mc-basic">תפריט בסיסי בלי AI</button>') + '</div>';
+    return '<div class="mc-sheet' + (open ? ' open' : '') + '" id="mc-sheet">' +
+      '<button type="button" class="mc-handle" data-action="mc-toggle" aria-expanded="' + open + '"><span class="mc-grip"></span>' +
+      '<span>' + (open ? 'הקטנת השיחה' : 'הצגת השיחה' + (msgs.length ? ' (' + msgs.length + ')' : '')) + '</span></button>' +
+      '<div class="mc-log" id="mc-log" aria-live="polite">' + log + '</div>' + chips + form + '</div>';
+  }
+
+  // Menu on top (dish titles, tap for ingredients), chat as a bottom sheet
+  // that rides above the keyboard, so the menu stays in view while talking.
+  function renderMenuChat() {
+    const M = MCx();
+    const meals = M.currentMeals();
+    const t = M.targets(state());
+    const hl = M.highlights();
+    let menuHtml;
+    if (meals) {
+      const tot = Store.menuTotals({ meals: meals });
+      const r = Math.round;
+      const stat = function (label, v, goal) {
+        const off = goal ? Math.abs(v - goal) / goal > 0.12 : false;
+        return '<span class="mc-stat' + (off ? ' off' : '') + '"><b>' + ltr(String(r(v))) + '</b><small>/' + ltr(String(goal)) + '</small><em>' + label + '</em></span>';
+      };
+      menuHtml = '<div class="mc-macros">' + stat('חלבון', tot.protein, t.protein) + stat('קק״ל', tot.calories, t.calories) +
+        stat('פחמימה', tot.carbs, t.carbs) + stat('שומן', tot.fat, t.fat) + '</div>' +
+        (M.canUndoAll() ? '<button type="button" class="linkish mc-undo-all" data-action="mc-undo-all">↺ ביטול כל השינויים מהשיחה</button>' : '') +
+        meals.map(function (meal, i) {
+          return mealDishCard(meal, 'c' + i, { cls: hl[i] ? 'mc-' + hl[i] : '', badge: hl[i] === 'fresh' ? 'עודכן' : '' });
+        }).join('');
+    } else {
+      menuHtml = '<div class="card empty mc-empty"><p>עוד אין תפריט. כתוב למטה מה בא לך, או לחץ «תבנה לי תפריט».</p></div>';
+    }
+    return pageHead('<div><p class="kicker">התפריט שלי · כל השבוע</p><h1>תפריט בצ׳אט</h1></div>',
+      '<button type="button" class="btn" data-action="mc-close">סיום</button>', { noGear: true }) +
+      renderMemoryCard() + '<div class="mc-menu">' + menuHtml + '</div><div class="mc-spacer"></div>' + renderChatSheet();
+  }
+
+  function afterMenuChatRender(keep) {
+    const log = document.getElementById('mc-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    const sheet = document.getElementById('mc-sheet');
+    if (sheet) document.documentElement.style.setProperty('--mc-pad', (sheet.offsetHeight + 12) + 'px');
+    const ta = document.getElementById('mc-input');
+    if (ta) { ta.style.height = 'auto'; ta.style.height = Math.min(96, ta.scrollHeight) + 'px'; }
+    if (keep) {
+      const el = document.getElementById(keep.id);
+      if (el) {
+        try { el.focus({ preventScroll: true }); if (keep.s != null) el.setSelectionRange(keep.s, keep.e); } catch (e) { /* ignore */ }
       }
-      w.aiReply = root.FitAI ? root.FitAI.lastMenuReply() : '';
-      w.menu = menu;
-      w.change = '';
-      if (ui.mealOpen) Object.keys(ui.mealOpen).forEach(function (k) { if (k[0] === 'w') delete ui.mealOpen[k]; });
-      render();
-    });
+    }
+  }
+
+  function syncViewport() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    const de = document.documentElement;
+    de.style.setProperty('--kb', kb + 'px');
+    de.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+    document.body.classList.toggle('kb-open', kb > 80);
+    const log = document.getElementById('mc-log');
+    if (log) log.scrollTop = log.scrollHeight;
+  }
+
+  function sendMenuChat(text, opts) {
+    const M = MCx();
+    if (!M || !String(text || '').trim()) return;
+    if (M.isBusy()) { toast('רגע, עוד עונה על ההודעה הקודמת'); return; }
+    ui.mcOpen = true;
+    M.send(text, opts);
+    haptic(8);
   }
 
   // One meal: header, the dish name as a button, and (when open) the
@@ -1401,7 +1503,7 @@
         '<div class="meal-food-side">' + Math.round((f.protein || 0) * q) + ' חל׳ · ' + Math.round((f.calories || 0) * q) + ' קק״ל' +
         (opts.itemAction ? ' ' + opts.itemAction(f, fi) : '') + '</div></div>';
     }).join('');
-    const head = '<div class="meal-head"><div><strong>' + esc(meal.name) + '</strong>' +
+    const head = '<div class="meal-head"><div><strong>' + esc(meal.name) + '</strong>' + (opts.badge ? ' <span class="mc-badge">' + esc(opts.badge) + '</span>' : '') +
       (meal.time ? '<div class="kicker">' + esc(meal.time) + '</div>' : '') + '</div>' +
       '<div class="meal-totals">' + fmtMacros(mt, true) + '</div></div>';
     const dishBtn = dish
@@ -1412,152 +1514,6 @@
       : '';
     return '<div class="meal-card ' + (opts.cls || '') + '">' + head + dishBtn +
       (open ? '<div class="meal-foods">' + foods + '</div>' : '') + (opts.footer || '') + '</div>';
-  }
-
-  function wizLoadingHtml(w) {
-    const n = w.meals || 4;
-    let cards = '';
-    for (let i = 0; i < n; i++) cards += '<div class="meal-card skel"><div class="skel-line w40"></div><div class="skel-line w70"></div><div class="skel-line w55"></div></div>';
-    return '<section class="card wiz-wait"><p><span class="spin" aria-hidden="true"></span> ' + (w.change ? 'מעדכן את התפריט…' : 'בונה תפריט…') + '</p>' +
-      '<p class="hp-legend">בדרך כלל כמה שניות.</p></section>' + (w.change ? '' : cards);
-  }
-
-  function wizFailHtml(w) {
-    const f = w.aiFail;
-    return '<section class="card wiz-fail" role="alert"><h2>ה-AI לא הצליח ' + (f.change ? 'לעדכן את התפריט' : 'לבנות תפריט') + ' כרגע</h2>' +
-      '<p class="hp-legend">' + esc((f.reason && f.reason.length < 90 ? f.reason + ' ' : 'השירות של Google עמוס. ') + 'בדרך כלל זה עובר תוך דקה.') + '</p>' +
-      '<div class="btn-row" style="grid-template-columns:1fr 1fr">' +
-      '<button type="button" class="btn primary" data-action="wiz-retry">נסה שוב</button>' +
-      (f.basic ? '<button type="button" class="btn" data-action="wiz-basic">הצעה בסיסית בלי AI</button>'
-        : '<button type="button" class="btn" data-action="wiz-fail-close">השאר כמו שהיה</button>') +
-      '</div></section>';
-  }
-
-  // Returning users: everything on one card, «בנה» right away.
-  function renderWizSummary(w) {
-    const F = root.FitFood;
-    const goals = [['cut', 'חיטוב'], ['keep', 'שמירה'], ['bulk', 'מסה']];
-    const blocked = [];
-    (w.excludes || []).forEach(function (id) { const o = F.EXCLUDE_OPTIONS.find(function (x) { return x.id === id; }); if (o) blocked.push(o.label); });
-    (w.dislikes || []).forEach(function (id) { const f = F.DB.find(function (x) { return x.id === id; }); if (f) blocked.push(f.name); });
-    (w.dislikeTerms || []).forEach(function (t) { if (blocked.indexOf(t) < 0) blocked.push(t); });
-    return '<section class="card wiz-summary">' +
-      '<div class="field"><span class="kicker">מטרה</span><div class="chips">' + goals.map(function (g) {
-        return '<button type="button" class="chip' + (w.goal === g[0] ? ' active' : '') + '" data-action="wiz-goal" data-val="' + g[0] + '">' + g[1] + '</button>';
-      }).join('') + '</div></div>' +
-      '<div class="wiz-two">' +
-      '<label class="field"><span>חלבון (ג׳)</span><input type="number" id="wiz-protein" inputmode="numeric" value="' + esc(w.protein) + '" /></label>' +
-      '<label class="field"><span>קלוריות</span><input type="number" id="wiz-calories" inputmode="numeric" value="' + esc(w.calories) + '" /></label></div>' +
-      '<div class="field"><span class="kicker">ארוחות ביום</span><div class="chips">' + [3, 4, 5].map(function (n) {
-        return '<button type="button" class="chip' + (w.meals === n ? ' active' : '') + '" data-action="wiz-meals" data-val="' + n + '">' + n + '</button>';
-      }).join('') + '</div></div>' +
-      '<div class="field"><span class="kicker">לא בתפריט</span><p class="wiz-blocked">' + (blocked.length ? esc(blocked.join(', ')) : 'אין הגבלות') +
-      ' <button type="button" class="linkish" data-action="wiz-edit-prefs">שינוי</button></p></div>' +
-      (root.FitAI && root.FitAI.available()
-        ? '<label class="field"><span>משהו מיוחד הפעם? (לא חובה)</span><textarea id="wiz-note" rows="2" placeholder="למשל: אין לי זמן לבשל בבוקר">' + esc(w.note || '') + '</textarea></label>'
-        : '') +
-      '</section>';
-  }
-
-  function renderWizard() {
-    const w = ui.wiz;
-    const F = root.FitFood;
-    const dots = w.quick ? '' : '<p class="kicker">שלב ' + w.step + ' מתוך 4</p>';
-    const back = w.step > 1 ? '<button type="button" class="btn" data-action="wiz-back">חזרה</button>' : '';
-    let body = '';
-    if (w.quick && w.step === 1) {
-      body = renderWizSummary(w);
-    } else if (w.step === 1) {
-      const goals = [['cut', 'חיטוב'], ['keep', 'שמירה'], ['bulk', 'מסה']];
-      body = '<section class="card"><h2>מה המטרה?</h2><div class="chips">' + goals.map(function (g) {
-        return '<button type="button" class="chip' + (w.goal === g[0] ? ' active' : '') + '" data-action="wiz-goal" data-val="' + g[0] + '">' + g[1] + '</button>';
-      }).join('') + '</div>' +
-        '<label class="field"><span>חלבון ביום (גרם)</span><input type="number" id="wiz-protein" inputmode="numeric" value="' + esc(w.protein) + '" /></label>' +
-        '<label class="field"><span>קלוריות ביום</span><input type="number" id="wiz-calories" inputmode="numeric" value="' + esc(w.calories) + '" /></label>' +
-        (w.calAuto ? '<p class="hp-legend">הערכה לפי ' + (w.kg ? 'משקל ' + w.kg + ' ק״ג' : 'ממוצע') + ' ×30, מותאם למטרה. אפשר לשנות.</p>' : '') +
-        '</section>';
-    } else if (w.step === 2) {
-      body = '<section class="card"><h2>כמה ארוחות ביום?</h2><div class="chips">' + [3, 4, 5].map(function (n) {
-        return '<button type="button" class="chip' + (w.meals === n ? ' active' : '') + '" data-action="wiz-meals" data-val="' + n + '">' + n + '</button>';
-      }).join('') + '</div><p class="hp-legend">' + (w.meals === 3 ? 'בוקר, צהריים, ערב' : w.meals === 4 ? 'בוקר, צהריים, ביניים, ערב' : 'בוקר, ביניים, צהריים, ביניים, ערב') + '</p></section>';
-    } else if (w.step === 3) {
-      const groups = [['חלבונים', ['bp', 'mp', 'sp']], ['פחמימות', ['bc', 'mc']], ['ירקות, פירות ותוספות', ['veg', 'fruit', 'fat', 'nut']]];
-      const shown = {};
-      body = '<section class="card"><h2>מה לא בתפריט?</h2><div class="chips">' + F.EXCLUDE_OPTIONS.map(function (o) {
-        return '<button type="button" class="chip' + (w.excludes.indexOf(o.id) >= 0 ? ' active' : '') + '" data-action="wiz-excl" data-val="' + o.id + '">' + esc(o.label) + '</button>';
-      }).join('') + '</div></section>' +
-        '<section class="card"><h2>מה אתה לא אוהב?</h2><p class="hp-legend">לחיצה מסמנת מאכל שלא ייכנס לתפריט.</p>' +
-        groups.map(function (g) {
-          const foods = F.choosable().filter(function (f) {
-            if (shown[f.id]) return false;
-            const hit = f.roles.some(function (r) { return g[1].indexOf(r) >= 0; });
-            if (hit) shown[f.id] = 1;
-            return hit;
-          });
-          return '<div class="field"><span class="kicker">' + g[0] + '</span><div class="chips">' + foods.map(function (f) {
-            const off = w.dislikes.indexOf(f.id) >= 0;
-            return '<button type="button" class="chip' + (off ? ' active strike' : '') + '" data-action="wiz-dislike" data-val="' + f.id + '">' + esc(f.name) + '</button>';
-          }).join('') + '</div></div>';
-        }).join('') + '</section>' +
-        (root.FitAI && root.FitAI.available()
-          ? '<label class="field"><span>במילים שלך (לא חובה)</span><textarea id="wiz-note" rows="2" placeholder="למשל: אין לי זמן לבשל בבוקר, אוהב עוף ואורז">' + esc(w.note || '') + '</textarea></label>'
-          : '');
-    } else if (!w.menu) {
-      if (!w.loading && !w.aiFail) wizBuild();
-      body = w.menu ? '' : (w.aiFail ? wizFailHtml(w) : wizLoadingHtml(w));
-    }
-    if (w.step === 4 && w.menu) {
-      const tot = Store.menuTotals(w.menu);
-      body = '<p class="plan-progress">חלבון ' + Math.round(tot.protein) + ' מתוך ' + w.protein + ' ג׳ · ' + Math.round(tot.calories) + ' מתוך ' + w.calories + ' קק״ל</p>' +
-        wizBlockedLine(w) +
-        '<p class="hp-legend">לחיצה על מנה מציגה מרכיבים וכמויות; «החלפה» ליד פריט מציעה חלופה עם ערכים דומים.</p>' +
-        (w.loading ? wizLoadingHtml(w) : '') + (w.aiFail ? wizFailHtml(w) : '') +
-        w.menu.meals.map(function (meal, mi) {
-          return mealDishCard(meal, 'w' + mi, {
-            itemAction: function (f, fi) { return '<button type="button" class="linkish" data-action="wiz-swap" data-mi="' + mi + '" data-fi="' + fi + '">החלפה</button>'; }
-          });
-        }).join('') +
-        '<button type="button" class="btn wide" data-action="wiz-again">הצעה אחרת</button>' +
-        (root.FitAI && root.FitAI.available()
-          ? ((w.aiReply ? '<p class="hp-legend" style="margin-top:10px">✨ ' + esc(w.aiReply) + '</p>' : '') +
-            '<label class="field" style="margin-top:10px"><span>מה לשנות? (AI)</span><textarea id="wiz-change" rows="2" placeholder="למשל: בלי קוטג׳, ארוחת ערב קלה יותר"></textarea></label>' +
-            '<button type="button" class="btn wide" data-action="wiz-ai-change">עדכן את התפריט</button>')
-          : '');
-    }
-    const next = (w.quick && w.step === 1) ? '<button type="button" class="btn primary wide" data-action="wiz-next">בנה</button>'
-      : (w.quick && w.step === 3) ? '<button type="button" class="btn primary wide" data-action="wiz-prefs-done">שמירה</button>'
-      : (w.step === 4 && !w.menu) ? ''
-      : w.step < 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">המשך</button>'
-      : (w.step === 3 ? '<button type="button" class="btn primary wide" data-action="wiz-next">בנה לי תפריט</button>'
-        : '<button type="button" class="btn primary wide" data-action="wiz-save">שמירה כתפריט שלי</button>');
-    const title = (w.quick && w.step === 1) ? 'תפריט חדש' : ['', 'יעדים', 'ארוחות', 'העדפות', 'התפריט שלך'][w.step];
-    return pageHead('<div><p class="kicker">בונים תפריט יחד</p><h1>' + title + '</h1></div>',
-      '<button type="button" class="btn" data-action="wiz-cancel">ביטול</button>', { noGear: true }) +
-      dots + body + '<div class="live-actions">' + back + next + '</div>';
-  }
-
-  // "בלי: טונה, קוטג׳" — what the menu keeps out (chips + what you wrote).
-  function wizBlockedLine(w) {
-    const F = root.FitFood;
-    const names = [];
-    (w.dislikes || []).forEach(function (id) { const f = F.DB.find(function (x) { return x.id === id; }); if (f) names.push(f.name); });
-    const written = (w.dislikeTerms || []).concat(F.extractDislikes ? F.extractDislikes(w.note || '') : []);
-    written.forEach(function (t) { if (names.indexOf(t) < 0) names.push(t); });
-    return names.length ? '<p class="hp-legend">בלי: ' + esc(names.slice(0, 12).join(', ')) + '</p>' : '';
-  }
-
-  function wizCollect() {
-    const w = ui.wiz;
-    if (!w) return;
-    const p = document.getElementById('wiz-protein');
-    const c = document.getElementById('wiz-calories');
-    const nt = document.getElementById('wiz-note');
-    if (nt) w.note = String(nt.value || '').slice(0, 500);
-    if (p && Number(p.value) > 0) w.protein = Math.round(Number(p.value));
-    if (c && Number(c.value) > 0) {
-      if (Math.round(Number(c.value)) !== w.calories) w.calAuto = false;
-      w.calories = Math.round(Number(c.value));
-    }
   }
 
   function renderNutrition() {
@@ -2460,6 +2416,13 @@
       '<input type="number" min="1" step="5" inputmode="numeric" data-action="setting" data-key="dailyProteinTarget" value="' + (Number(set.dailyProteinTarget) || 150) + '" style="width:90px" /></div>' +
       '<div class="setting"><div class="grow"><div>יעד קלוריות יומי</div><div class="desc">אופציונלי — השאירו ריק כדי להסתיר</div></div>' +
       '<input type="number" min="0" step="50" inputmode="numeric" data-action="setting" data-key="dailyCalorieTarget" value="' + esc(set.dailyCalorieTarget == null ? '' : set.dailyCalorieTarget) + '" placeholder="אין" style="width:90px" /></div>' +
+      (function () {
+        const nt = E.nutritionTargets(s);
+        return '<div class="setting"><div class="grow"><div>יעד פחמימות יומי</div><div class="desc">גרם · ריק = לפי הקלוריות והחלבון (' + nt.carbs + ')</div></div>' +
+          '<input type="number" min="0" step="5" inputmode="numeric" data-action="setting" data-key="dailyCarbTarget" value="' + esc(set.dailyCarbTarget == null ? '' : set.dailyCarbTarget) + '" placeholder="' + nt.carbs + '" style="width:90px" /></div>' +
+          '<div class="setting"><div class="grow"><div>יעד שומן יומי</div><div class="desc">גרם · ריק = 27% מהקלוריות (' + nt.fat + ')</div></div>' +
+          '<input type="number" min="0" step="5" inputmode="numeric" data-action="setting" data-key="dailyFatTarget" value="' + esc(set.dailyFatTarget == null ? '' : set.dailyFatTarget) + '" placeholder="' + nt.fat + '" style="width:90px" /></div>';
+      })() +
       '<div class="setting"><div class="grow"><div>יעד מנוחה</div><div class="desc">צפצוף אחרי זמן זה אם לא הוגדרה מנוחה לתרגיל. הטיימר ממשיך לרוץ.</div></div>' +
       '<input type="number" min="15" step="15" inputmode="numeric" data-action="setting" data-key="restTargetSec" value="' + (Number(set.restTargetSec) || (C.REST_DEFAULT_SEC || 90)) + '" style="width:90px" /></div>' +
       '</section>' +
@@ -2682,11 +2645,11 @@
     const day = Store.getDayMenu(date);
     const menus = Store.listMenus();
     const header = '<div class="section-title"><h2>תפריט היום</h2>' +
-      '<button type="button" class="linkish" data-action="wiz-start">' + (menus.length ? 'בנייה מחדש' : '+ תפריט') + '</button></div>';
+      '<button type="button" class="linkish" data-action="mc-open">✨ ' + (menus.length ? 'שינוי בצ׳אט' : 'בונים בצ׳אט') + '</button></div>' + renderMemoryCard();
     if (!day) {
       return header + (menus.length ? renderMenuList() : '<div class="empty card">' + emptyArt('food') +
-        '<p>אין עדיין תפריט. נבנה אחד יחד ב-4 שלבים קצרים: יעדים, מספר ארוחות, מה לא אוכלים, ואז הצעה שאפשר להחליף בה כל פריט.</p>' +
-        '<button type="button" class="btn primary" data-action="wiz-start">בונים תפריט יחד</button>' +
+        '<p>אין עדיין תפריט. ספר לי בצ׳אט מה אתה אוהב, מה לא ומה ההרגלים שלך, ונבנה אחד יחד.</p>' +
+        '<button type="button" class="btn primary" data-action="mc-open">בונים תפריט בצ׳אט</button>' +
         '<button type="button" class="linkish" data-action="new-menu">או בנייה ידנית</button></div>');
     }
     const eaten = (day.meals || []).filter(function (m) { return m.status === 'eaten'; }).length;
@@ -3119,31 +3082,24 @@
     if (sm && root.FitFood) {
       let item = null;
       let mealFoods = [];
-      if (sm.wiz && ui.wiz && ui.wiz.menu) {
-        const meal = ui.wiz.menu.meals[sm.mi];
-        mealFoods = meal ? meal.foods : [];
-        item = mealFoods[sm.fi];
-      } else {
-        const day = Store.getDayMenu(sm.date);
-        const meal = day && (day.meals || []).find(function (m) { return m.id === sm.mealId; });
-        mealFoods = meal ? meal.foods : [];
-        item = mealFoods.find(function (f) { return f.id === sm.foodId; });
-      }
-      const w = ui.wiz;
-      const prefs = sm.wiz && w ? { excludes: w.excludes, dislikes: w.dislikes, dislikeTerms: w.dislikeTerms || [], note: w.note || '' } : menuPrefs();
+      const day = Store.getDayMenu(sm.date);
+      const meal = day && (day.meals || []).find(function (m) { return m.id === sm.mealId; });
+      mealFoods = meal ? meal.foods : [];
+      item = mealFoods.find(function (f) { return f.id === sm.foodId; });
+      const prefs = memoryPrefs();
       if (item && item.dbId) alts = root.FitFood.swapOptions(item, prefs, mealFoods);
       sm.alts = alts;
     }
     return '<div class="sheet" role="dialog" aria-label="החלפת מאכל"><div class="sheet-handle"></div>' +
-      '<div class="sheet-head"><h2>' + (sm && sm.wiz ? 'החלפת פריט' : 'החלפת מאכל להיום') + '</h2>' +
+      '<div class="sheet-head"><h2>החלפת מאכל להיום</h2>' +
       '<button type="button" class="btn ghost" data-action="close">סגירה</button></div>' +
       (alts.length ? '<div class="section-title"><h2>חלופות עם ערכים דומים</h2></div><div class="list">' + alts.map(function (f, i) {
         return '<button type="button" class="list-item" data-action="pick-swap-alt" data-idx="' + i + '">' +
           '<div class="title">' + esc(f.name) + '</div>' + cookAltHtml(f) +
           '<div class="sub">' + Math.round(f.protein) + 'ג׳ חלבון · ' + Math.round(f.calories) + ' קק״ל</div></button>';
       }).join('') + '</div>' : '') +
-      (sm && sm.wiz ? '' : '<div class="section-title"><h2>מהקבועים שלך</h2></div>') +
-      (sm && sm.wiz ? '' : '<div class="list">' + foods.map(function (f) {
+      '<div class="section-title"><h2>מהקבועים שלך</h2></div>' +
+      ('<div class="list">' + foods.map(function (f) {
         return '<button type="button" class="list-item" data-action="pick-swap-food" data-id="' + esc(f.id) + '">' +
           '<div class="title">' + esc(f.name) + '</div>' +
           '<div class="sub">' + (f.protein || 0) + 'ג׳ · ' + (f.calories || 0) + ' קק״ל</div></button>';
@@ -3667,7 +3623,7 @@
     else if (liveOn) html += renderLive();
     else if (ui.editingTemplate) html += renderTemplateEditor();
     else if (ui.editingMenu) html += renderMenuEditor();
-    else if (ui.wiz && ui.tab === 'nutrition') html += renderWizard();
+    else if (ui.menuChat && ui.tab === 'nutrition' && MCx()) html += renderMenuChat();
     else if (ui.view === 'summary') html += renderSummary();
     else if (ui.view === 'body') html += renderBody();
     else if (ui.exerciseName) html += renderExerciseDetail();
@@ -3676,10 +3632,17 @@
     else if (ui.tab === 'nutrition') html += renderNutrition();
     else if (ui.tab === 'progress') html += renderProgress();
     else if (ui.tab === 'settings') html += renderSettings();
+    const ae = document.activeElement;
+    const keep = ae && ae.id && /^(mc-input|mem-add-text|mem-edit-input)$/.test(ae.id)
+      ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
     main.innerHTML = html;
+    const chatOn = !!(ui.menuChat && ui.tab === 'nutrition' && MCx()) && !ui.editingTemplate && !ui.editingMenu && !liveOn && !ui.liveSummary;
+    document.body.classList.toggle('is-chat', chatOn);
+    if (chatOn) afterMenuChatRender(keep);
+    else if (keep) { const el = document.getElementById(keep.id); if (el) { try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ } } }
     document.body.classList.toggle('is-demo', Store.isDemoMode());
     document.body.classList.toggle('is-live', liveOn);
-    document.body.classList.toggle('is-builder', !!(ui.editingTemplate || ui.editingMenu || (ui.wiz && ui.tab === 'nutrition')));
+    document.body.classList.toggle('is-builder', !!(ui.editingTemplate || ui.editingMenu || (ui.menuChat && ui.tab === 'nutrition')));
     paintSummaryPreview();
 
     document.querySelectorAll('.tab').forEach(function (btn) {
@@ -5019,19 +4982,72 @@
       toast('נשמר בקבועים · לחיצה אחת להוספה');
       return;
     }
-    // ---------- menu wizard ----------
-    if (action === 'wiz-start') { closeModal(); startWizard(); return; }
-    if (action === 'wiz-cancel') { ui.wiz = null; render(); return; }
-    if (action === 'wiz-back') {
-      wizCollect();
-      // the quick flow has only the summary behind the result / preference editor
-      ui.wiz.step = ui.wiz.quick ? 1 : Math.max(1, ui.wiz.step - 1);
-      ui.wiz.aiFail = null;
+    // ---------- menu chat + memory card ----------
+    if (action === 'mc-open' || action === 'wiz-start') {
+      closeModal();
+      ui.menuChat = true;
+      ui.tab = 'nutrition';
+      render();
+      try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+      return;
+    }
+    if (action === 'mc-close') { ui.menuChat = false; render(); return; }
+    if (action === 'mc-toggle') { ui.mcOpen = !(ui.mcOpen !== false); render(); return; }
+    if (action === 'mc-send') {
+      const ta = document.getElementById('mc-input');
+      const txt = ta ? String(ta.value || '').trim() : '';
+      if (!txt) { toast('כתוב משהו'); return; }
+      ui.mcDraft = '';
+      sendMenuChat(txt);
+      return;
+    }
+    if (action === 'mc-chip') { sendMenuChat(btn.dataset.text || ''); return; }
+    if (action === 'mc-fresh') {
+      openModal('confirm', {
+        title: 'תפריט חדש מאפס',
+        message: 'השיחה תתחיל מחדש והזיכרון נשמר. אפשר לחזור לתפריט הנוכחי עם «ביטול כל השינויים».',
+        okLabel: 'בנה תפריט חדש',
+        onOk: function () { closeModal(); sendMenuChat('תבנה לי תפריט חדש מאפס', { fresh: true }); }
+      });
+      return;
+    }
+    if (action === 'mc-retry') { if (MCx()) MCx().retry(btn.dataset.id); return; }
+    if (action === 'mc-basic') { if (MCx()) { MCx().applyBasic(); toast('נבנה תפריט בסיסי בלי AI'); } return; }
+    if (action === 'mc-undo') {
+      const r = MCx() ? MCx().undoChange(btn.dataset.id) : { ok: false };
+      toast(r.ok ? (r.partial ? 'בוטל חלקית: חלק מהארוחות שונו שוב אחר כך' : 'השינוי בוטל') : 'אי אפשר לבטל: הארוחות האלה שונו שוב אחר כך');
+      return;
+    }
+    if (action === 'mc-undo-all') { if (MCx() && MCx().undoAll()) toast('התפריט חזר למה שהיה לפני השיחה'); return; }
+    if (action === 'mc-mem-undo') { if (MCx() && MCx().undoMemory(btn.dataset.id)) toast('הזיכרון חזר למה שהיה'); return; }
+    if (action === 'mem-toggle') { ui.memOpen = !ui.memOpen; ui.memEdit = null; render(); return; }
+    if (action === 'mem-edit') { ui.memEdit = btn.dataset.id; ui.memEditDraft = null; render(); const el = document.getElementById('mem-edit-input'); if (el) el.focus(); return; }
+    if (action === 'mem-cancel') { ui.memEdit = null; ui.memEditDraft = null; render(); return; }
+    if (action === 'mem-save') {
+      const el = document.getElementById('mem-edit-input');
+      const v = el ? String(el.value || '').trim() : '';
+      ui.memEdit = null; ui.memEditDraft = null;
+      if (MCx()) { if (v) MCx().updateMemory(btn.dataset.id, { text: v }); else MCx().removeMemory(btn.dataset.id); }
       render();
       return;
     }
-    if (action === 'wiz-edit-prefs') { wizCollect(); ui.wiz.step = 3; render(); try { window.scrollTo(0, 0); } catch (e) { /* ignore */ } return; }
-    if (action === 'wiz-prefs-done') { wizCollect(); ui.wiz.step = 1; render(); return; }
+    if (action === 'mem-del') {
+      const it = MCx() ? MCx().removeMemory(btn.dataset.id) : null;
+      if (it) toast('נמחק מהזיכרון: ' + it.text);
+      return;
+    }
+    if (action === 'mem-add') {
+      const tx = document.getElementById('mem-add-text');
+      const cs = document.getElementById('mem-add-cat');
+      const v = tx ? String(tx.value || '').trim() : '';
+      if (!v) { toast('כתוב מה להוסיף'); return; }
+      ui.memAddCat = cs ? cs.value : 'avoid';
+      ui.memDraft = '';
+      const it = MCx() ? MCx().addMemory(ui.memAddCat, v, 'manual') : null;
+      toast(it ? 'נוסף לזיכרון' : 'כבר בזיכרון');
+      render();
+      return;
+    }
     if (action === 'meal-toggle') {
       ui.mealOpen = ui.mealOpen || {};
       ui.mealOpen[btn.dataset.key] = !ui.mealOpen[btn.dataset.key];
@@ -5039,102 +5055,10 @@
       render();
       return;
     }
-    if (action === 'wiz-retry') {
-      const w = ui.wiz;
-      if (!w || !w.aiFail) return;
-      if (w.aiFail.change) { w.change = w.aiFail.change; w.prevMenu = w.menu; }
-      w.aiFail = null;
-      wizBuild();
-      render();
-      return;
-    }
-    if (action === 'wiz-basic') {
-      const w = ui.wiz;
-      if (w && w.aiFail && w.aiFail.basic) { w.menu = w.aiFail.basic; delete w.menu.fallback; w.aiFail = null; w.aiReply = ''; }
-      render();
-      return;
-    }
-    if (action === 'wiz-fail-close') { if (ui.wiz) { ui.wiz.aiFail = null; ui.wiz.change = ''; } render(); return; }
-    if (action === 'wiz-next') {
-      wizCollect();
-      if (ui.wiz.quick && ui.wiz.step === 1) ui.wiz.step = 3;
-      ui.wiz.step = Math.min(4, ui.wiz.step + 1);
-      if (ui.wiz.step === 4) wizBuild();
-      render();
-      try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
-      return;
-    }
-    if (action === 'wiz-goal') {
-      wizCollect();
-      const w = ui.wiz;
-      w.goal = btn.dataset.val;
-      if (w.calAuto) w.calories = root.FitFood.estimateCalories(w.kg, w.goal);
-      render();
-      return;
-    }
-    if (action === 'wiz-meals') { wizCollect(); ui.wiz.meals = Number(btn.dataset.val); render(); return; }
-    if (action === 'wiz-excl' || action === 'wiz-dislike') {
-      wizCollect();
-      const arr = action === 'wiz-excl' ? ui.wiz.excludes : ui.wiz.dislikes;
-      const v = btn.dataset.val;
-      const i = arr.indexOf(v);
-      if (i >= 0) arr.splice(i, 1); else arr.push(v);
-      render();
-      return;
-    }
-    if (action === 'wiz-again') { ui.wiz.seed += 1; wizBuild(); render(); return; }
-    if (action === 'wiz-ai-change') {
-      const ta = document.getElementById('wiz-change');
-      const txt = ta ? String(ta.value || '').trim() : '';
-      if (!txt) { toast('כתוב מה לשנות'); return; }
-      ui.wiz.change = txt.slice(0, 500);
-      // "בלי קוטג׳" stays out of every later version too, not only this round
-      const said = root.FitFood.extractDislikes ? root.FitFood.extractDislikes(txt) : [];
-      ui.wiz.dislikeTerms = (ui.wiz.dislikeTerms || []).concat(said.filter(function (t) { return (ui.wiz.dislikeTerms || []).indexOf(t) < 0; }));
-      ui.wiz.prevMenu = ui.wiz.menu;
-      wizBuild();
-      render();
-      return;
-    }
-    if (action === 'wiz-swap') {
-      ui.swapMeal = { wiz: true, mi: Number(btn.dataset.mi), fi: Number(btn.dataset.fi) };
-      openModal('swap-food');
-      return;
-    }
-    if (action === 'wiz-save') {
-      const w = ui.wiz;
-      if (!w || !w.menu) return;
-      const existing = Store.listMenus().find(function (m) { return m.name === 'התפריט שלי'; });
-      const data = { name: 'התפריט שלי', days: [0, 1, 2, 3, 4, 5, 6], applyOn: '', meals: w.menu.meals };
-      const menu = existing ? Store.updateMenu(existing.id, data) : Store.addMenu(data);
-      Store.updateSettings({
-        dailyProteinTarget: w.protein, dailyCalorieTarget: w.calories,
-        menuPrefs: { goal: w.goal, meals: w.meals, excludes: w.excludes, dislikes: w.dislikes,
-          dislikeTerms: (w.dislikeTerms || []).concat((root.FitFood.extractDislikes ? root.FitFood.extractDislikes(w.note || '') : []).filter(function (t) { return (w.dislikeTerms || []).indexOf(t) < 0; })) }
-      });
-      const date = ui.nutritionDate || E.todayISO();
-      const day = Store.getDayMenu(date);
-      const eatenAny = day && (day.meals || []).some(function (m) { return m.status === 'eaten'; });
-      if (menu && !eatenAny) Store.applyMenuToDate(menu.id, date);
-      ui.wiz = null;
-      haptic(16);
-      toast('התפריט נשמר · כל ארוחה: «אכלתי כמתוכנן»');
-      setTab('nutrition');
-      return;
-    }
     if (action === 'pick-swap-alt') {
       const sm = ui.swapMeal;
       const alt = sm && sm.alts && sm.alts[Number(btn.dataset.idx)];
-      if (alt && sm.wiz && ui.wiz && ui.wiz.menu) {
-        const meal = ui.wiz.menu.meals[sm.mi];
-        if (meal) {
-          meal.foods[sm.fi] = Object.assign({}, alt);
-          // the AI's dish title described the old food
-          meal.dish = root.FitFood.dishName ? root.FitFood.dishName(meal.foods) : '';
-          meal.prep = '';
-        }
-        toast('הוחלף');
-      } else if (alt && sm) {
+      if (alt && sm) {
         Store.replaceDayMealFood(sm.date, sm.mealId, sm.foodId, alt);
         toast('המאכל הוחלף להיום בלבד');
       }
@@ -5436,6 +5360,7 @@
   function onChange(ev) {
     const el = ev.target;
     if (!el) return;
+    if (el.id === 'mem-add-cat') { ui.memAddCat = el.value; return; }
     if (el.dataset && el.dataset.qlGrams != null && ui.quick) {
       const i = Number(el.dataset.qlGrams);
       const it = ui.quick.items[i];
@@ -5519,8 +5444,10 @@
     if (el.dataset.action === 'setting') {
       const key = el.dataset.key;
       let val = el.value;
-      if (key === 'dailyCalorieTarget' && val === '') {
-        Store.updateSettings({ dailyCalorieTarget: '' });
+      if ((key === 'dailyCalorieTarget' || key === 'dailyCarbTarget' || key === 'dailyFatTarget') && val === '') {
+        const patch = {};
+        patch[key] = '';
+        Store.updateSettings(patch);
         return;
       }
       if (key === 'displayName') {
@@ -5695,6 +5622,29 @@
       runPasswordAuth('signin');
     });
     document.addEventListener('change', onChange);
+    document.addEventListener('keydown', function (ev) {
+      const el = ev.target;
+      if (!el || ev.isComposing) return;
+      if (el.id === 'mc-input' && ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        const txt = String(el.value || '').trim();
+        if (txt) { ui.mcDraft = ''; sendMenuChat(txt); }
+      } else if (el.id === 'mem-add-text' && ev.key === 'Enter') {
+        ev.preventDefault();
+        const b = document.querySelector('[data-action="mem-add"]');
+        if (b) b.click();
+      } else if (el.id === 'mem-edit-input' && ev.key === 'Enter') {
+        ev.preventDefault();
+        const b = document.querySelector('[data-action="mem-save"]');
+        if (b) b.click();
+      }
+    });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncViewport);
+      window.visualViewport.addEventListener('scroll', syncViewport);
+      syncViewport();
+    }
+    if (root.FitMenuChat) root.FitMenuChat.onChange(function () { if (ui.tab === 'nutrition') render(); });
     document.addEventListener('input', function (ev) {
       const el = ev.target;
       if (el && el.dataset.cardio) { syncCardioField(el); return; }
@@ -5709,6 +5659,9 @@
       if (el && el.id === 'live-ex-name') updateLiveExSuggest(el);
       if (el && el.dataset.tex != null) onTexInput(el);
       if (el && el.dataset.meal != null) syncMeal(el);
+      if (el && el.id === 'mc-input') { ui.mcDraft = el.value; el.style.height = 'auto'; el.style.height = Math.min(96, el.scrollHeight) + 'px'; return; }
+      if (el && el.id === 'mem-add-text') { ui.memDraft = el.value; return; }
+      if (el && el.id === 'mem-edit-input') { ui.memEditDraft = el.value; return; }
       if (el && el.id === 'ql-text') { qlState().text = el.value; return; }
       if (el && el.id === 'ql-code') { qlState().code = el.value; return; }
       if (el && el.id === 'swap-query') {

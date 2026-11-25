@@ -706,9 +706,59 @@
     return t;
   }
 
+  function sumMacros(meals) {
+    const t = { k: 0, p: 0, c: 0, f: 0 };
+    meals.forEach(function (m) {
+      m.items.forEach(function (it) {
+        const r = it.grams / 100;
+        t.k += it.food.k * r; t.p += it.food.p * r; t.c += (it.food.c || 0) * r; t.f += (it.food.f || 0) * r;
+      });
+    });
+    return t;
+  }
+
+  // How far a day is from the targets (0 = inside every tolerance). Protein
+  // short of target weighs most; carbs/fat only count when there is a target.
+  function portionError(t, target) {
+    const pT = Number(target.protein) || 0, kT = Number(target.calories) || 0;
+    const cT = Number(target.carbs) || 0, fT = Number(target.fat) || 0;
+    let e = 0;
+    if (pT) { if (t.p < pT - 4) e += 3 * (pT - 4 - t.p) / pT; else if (t.p > pT + 20) e += (t.p - pT - 20) / pT; }
+    if (kT) { const d = Math.abs(t.k - kT) - 60; if (d > 0) e += 2 * d / kT; }
+    if (cT) { const d = Math.abs(t.c - cT) - 0.08 * cT; if (d > 0) e += 0.7 * d / cT; }
+    if (fT) { const d = Math.abs(t.f - fT) - 0.1 * fT; if (d > 0) e += 0.7 * d / fT; }
+    return e;
+  }
+
+  // Day-level carbs/fat (v48): after the protein/calorie pass, single portion
+  // steps that bring the day closer to all four targets.
+  function refineMacros(meals, items, target) {
+    let err = portionError(sumMacros(meals), target);
+    for (let n = 0; n < 160 && err > 0; n++) {
+      let best = null;
+      items.forEach(function (it) {
+        const st = it.food.st || 25;
+        [st, -st].forEach(function (d) {
+          const ng = it.grams + d;
+          if (ng > it.food.mx || ng < it.food.mn) return;
+          const old = it.grams;
+          it.grams = ng;
+          const e = portionError(sumMacros(meals), target);
+          it.grams = old;
+          if (e < err - 1e-4 && (!best || e < best.e)) best = { it: it, ng: ng, e: e };
+        });
+      });
+      if (!best) break;
+      best.it.grams = best.ng;
+      err = best.e;
+    }
+  }
+
   function fitPortions(meals, target) {
     const all = [];
-    meals.forEach(function (m) { m.items.forEach(function (it) { all.push(it); }); });
+    // locked items (meals the user did not ask to change) count toward the
+    // totals but keep their grams
+    meals.forEach(function (m) { m.items.forEach(function (it) { if (!it.locked) all.push(it); }); });
     const prot = all.filter(function (it) { return PROTEIN_ROLES[it.role]; });
     const carbs = all.filter(function (it) { return CARB_ROLES[it.role]; });
     const fats = all.filter(function (it) { return it.role === 'fat'; });
@@ -765,6 +815,10 @@
       }
     }
     all.forEach(function (it) { it.grams = snap(it.food, it.grams); });
+    if (Number(target.carbs) || Number(target.fat)) {
+      refineMacros(meals, all, target);
+      all.forEach(function (it) { it.grams = snap(it.food, it.grams); });
+    }
   }
 
   function toMenuFood(food, grams, role) {
@@ -920,8 +974,12 @@
   // foods that were in the catalog, nothing disliked/excluded, no meat+dairy
   // in one meal, no duplicates in a meal. A dropped food is replaced by an
   // allowed food with the same role so the meal stays balanced.
-  function menuFromSpec(spec, prefs) {
+  // opts.locked: { specMealIndex: true } — meals kept as they are (their
+  // grams are not re-fitted) unless a food in them had to be replaced.
+  function menuFromSpec(spec, prefs, opts) {
     prefs = prefs || {};
+    opts = opts || {};
+    const locked = opts.locked || {};
     const okIds = {};
     catalog(prefs).forEach(function (c) { okIds[c.id] = 1; });
     const used = {};
@@ -949,7 +1007,10 @@
       // The AI's dish title/prep only if every food it named is still there
       // and the title does not mention something blocked.
       const keepText = replaced.length === replacedBefore && !mentionsBlocked(m && m.dish, prefs) && !mentionsBlocked(m && m.prep, prefs);
+      const lock = !!locked[i] && replaced.length === replacedBefore;
+      if (lock) items.forEach(function (it) { it.locked = true; });
       return {
+        src: i, locked: lock,
         name: String((m && m.name) || ('ארוחה ' + (i + 1))), time: (m && m.time) || '', items: items,
         dish: keepText ? String((m && m.dish) || '').trim().slice(0, 50) : '',
         prep: keepText ? String((m && m.prep) || '').trim().slice(0, 140) : ''
@@ -962,7 +1023,9 @@
       replaced: replaced,
       meals: meals.map(function (m) {
         const foods = m.items.map(function (it) { return toMenuFood(it.food, it.grams, it.role); });
-        return { name: m.name, time: m.time, dish: m.dish || dishName(foods), prep: m.prep, foods: foods };
+        const out = { name: m.name, time: m.time, dish: m.dish || dishName(foods), prep: m.prep, foods: foods };
+        if (opts.locked) { out.src = m.src; out.locked = m.locked; }
+        return out;
       })
     };
   }
@@ -1009,7 +1072,7 @@
     EXCLUDE_OPTIONS: EXCLUDE_OPTIONS, choosable: choosable, unitGrams: unitGrams,
     parseFoodText: parseFoodText, setTextProvider: setTextProvider, resolveSpec: resolveSpec,
     buildMenuAsync: buildMenuAsync, setMenuProvider: setMenuProvider, menuFromSpec: menuFromSpec, catalog: catalog,
-    slotsFor: slotsFor, blockedIds: blockedIds, dishName: dishName, mentionsBlocked: mentionsBlocked, extractDislikes: extractDislikes, termIds: termIds,
+    slotsFor: slotsFor, blockedIds: blockedIds, fitPortions: fitPortions, sumMacros: sumMacros, textExcludes: textExcludes, dishName: dishName, mentionsBlocked: mentionsBlocked, extractDislikes: extractDislikes, termIds: termIds,
     COOK: COOK, cookInfo: cookInfo, cookAlt: cookAlt, cookStateOf: cookStateOf,
     hasTextProvider: function () { return !!textProvider; }, hasMenuProvider: function () { return !!menuProvider; }
   };

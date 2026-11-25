@@ -112,6 +112,8 @@ export const TASKS: Record<string, Task> = {
   // flash-lite answers a menu in ~3 s; gemini-3.8-flash never finished in 14 s
   // on the free tier, so it is no longer in the chain.
   menu: { models: ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], attemptMs: 9000, deadlineMs: 24000, maxOut: 4000, thinking: "low" },
+  // v48: the menu chat (one flow: build, edit, ask, with memory updates)
+  menuchat: { models: ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], attemptMs: 10000, deadlineMs: 24000, maxOut: 4000, thinking: "low" },
   plan: { models: ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3-flash-preview"], attemptMs: 18000, deadlineMs: 55000, maxOut: 8000, thinking: "low" },
 };
 
@@ -226,6 +228,98 @@ function menuSchema(input: Record<string, unknown>) {
   });
 }
 
+export const MEMORY_CATS: Record<string, string> = { avoid: "לא אוכל", like: "מועדף", habit: "הרגלים", logistics: "לוגיסטיקה", goal: "מטרות" };
+
+function catalogLines(input: Record<string, unknown>) {
+  return menuCatalog(input).map((f) => {
+    const n = (f.per100 || {}) as Record<string, unknown>;
+    const range = f.min && f.max ? Number(f.min) + "-" + Number(f.max) : "";
+    return [clip(f.id, 30), clip(f.name, 40), arr(f.roles, 6).join("/"), arr(f.tags, 6).join("/"), range, clip(f.state, 8),
+      n.kcal + "/" + n.protein + "/" + n.carbs + "/" + n.fat].join("|");
+  }).join("\n");
+}
+
+// The menu chat. Only what the user wrote about food habits (memory), the
+// targets, the current menu and the catalog: no name, weight or account data.
+function menuChatPrompt(input: Record<string, unknown>) {
+  const t = (input.targets || {}) as Record<string, unknown>;
+  const r = (v: unknown) => Math.round(Number(v) || 0);
+  const mem = (arr(input.memory, 40) as Array<Record<string, unknown>>)
+    .map((m) => "- " + (MEMORY_CATS[String(m && m.cat)] || "הערה") + ": " + clip(m && m.text, 80)).join("\n");
+  const cur = input.current ? clip(JSON.stringify(input.current), 3500) : "";
+  return {
+    system: "אתה דיאטן ספורט ישראלי שמנהל בצ'אט קצר בעברית את התפריט הקבוע של המשתמש (יום אחד שחוזר כל השבוע), מתוך קטלוג סגור.\n" +
+      "בכל תור בחר action:\n" +
+      "- build: תפריט חדש ומלא (כשאין תפריט, או כשביקש תפריט חדש).\n" +
+      "- edit: שינוי בתפריט הקיים. החזר את כל הארוחות; ארוחה שלא ביקשו לשנות – העתק אותה בדיוק (אותם dbId, grams, dish, prep, name, time).\n" +
+      "- ask: חסר מידע שבלעדיו אי אפשר לבנות טוב – שאלה קצרה אחת ב-reply ו-meals ריק. אל תשאל סתם; אם אפשר לנחש בסבירות, בנה.\n" +
+      "- none: רק תשובה או הסבר, meals ריק.\n" +
+      "חוקים מחייבים בכל תפריט (הפרה פוסלת את התשובה):\n" +
+      "1. dbId רק מהקטלוג, מועתק בדיוק. מאכל שלא בקטלוג אסור – המשתמש לא אוכל אותו. אל תציע אותו גם ב-reply.\n" +
+      "2. בתפריט חדש: מספר הארוחות לפי הזיכרון או הבקשה, אחרת 4 (בוקר 08:00, צהריים 13:00, ביניים 16:30, ערב 20:00). בעריכה: אותן ארוחות, שמות ושעות, אלא אם ביקש אחרת.\n" +
+      "3. אין בשר (meat) ומוצרי חלב (dairy) באותה ארוחה.\n" +
+      "4. grams בתוך טווח הגרמים של המאכל, במצב שבעמודת המצב (מבושל = משקל אחרי בישול, יבש = לפני). בלי מצב = כפי שנאכל.\n" +
+      "5. ארוחה עיקרית: מקור חלבון (bp/mp) + פחמימה (bc/mc) + ירק (veg), ואפשר שומן (fat). ביניים: 1-2 פריטים (sp/fruit/nut).\n" +
+      "6. אותו מקור חלבון עיקרי לא חוזר ביותר מארוחה אחת; לא אותו מאכל פעמיים באותה ארוחה.\n" +
+      "יעדים: התקרב ליעדים היומיים; האפליקציה מכווננת גרמים בסוף, אז העיקר לבחור מאכלים שמאפשרים להגיע אליהם.\n" +
+      "הזיכרון הוא מה שהמשתמש סיפר על עצמו – כבד אותו תמיד. העדפות נוספות: אוכל ישראלי יומיומי מהסופר, הכנה קצרה, גיוון.\n" +
+      "memory: עדכוני זיכרון רק ממה שהמשתמש כתב בהודעה האחרונה. add: העדפה קבועה חדשה שלא מופיעה כבר, טקסט קצר עד 6 מילים בלי 'המשתמש' " +
+      "(cat: avoid = לא אוכל – רק שם המאכל, למשל 'טונה'; like = מועדף; habit = הרגלים, למשל 'אין זמן לבשל בבוקר'; logistics = לוגיסטיקה, למשל 'צהריים בעבודה'; goal = מטרות). " +
+      "לא דברים זמניים (היום, הערב, השבוע) ולא פרטים מזהים (שם, גיל, משקל, מקום). remove: הטקסט המדויק של פריטי זיכרון שהמשתמש ביטל או סתר. אם אין – מערכים ריקים.\n" +
+      "לכל ארוחה: dish = שם מנה טבעי בעברית כמו שאומרים בבית, שמתאר רק את המאכלים שבחרת; prep = שורה אחת קצרה איך מכינים (בלי כמויות).\n" +
+      "role = התפקיד של המאכל מהקטלוג. reply: משפט-שניים חמים בעברית – מה שינית ולמה, או השאלה – בלי מספרים.",
+    user: "יעדים יומיים: " + r(t.calories) + " קק״ל, " + r(t.protein) + " ג׳ חלבון, " + r(t.carbs) + " ג׳ פחמימה, " + r(t.fat) + " ג׳ שומן." +
+      "\nזיכרון:\n" + (mem || "(ריק)") +
+      "\n" + (cur ? "התפריט הנוכחי:\n" + cur : "אין עדיין תפריט.") +
+      "\n\nקטלוג (id|שם|תפקידים|תגיות|גרם מינ׳-מקס׳|מצב|ל-100 ג׳: קק״ל/חלבון/פחמימה/שומן):\n" + catalogLines(input),
+  };
+}
+
+function menuChatSchema(input: Record<string, unknown>) {
+  const ids = menuCatalog(input).map((f) => clip(f.id, 30)).filter(Boolean);
+  const food = ids.length
+    ? S("OBJECT", {
+      properties: {
+        dbId: S("STRING", { format: "enum", enum: ids }),
+        grams: S("NUMBER"),
+        role: S("STRING", { format: "enum", enum: ["bp", "bc", "mp", "mc", "veg", "fat", "sp", "fruit", "nut"] }),
+      },
+      required: ["dbId", "grams", "role"],
+    })
+    : S("OBJECT", { properties: { dbId: S("STRING"), grams: S("NUMBER"), role: S("STRING") }, required: ["dbId", "grams"] });
+  return S("OBJECT", {
+    properties: {
+      reply: S("STRING", { description: "משפט-שניים בעברית: מה עשית, או שאלה אחת" }),
+      action: S("STRING", { format: "enum", enum: ["build", "edit", "ask", "none"] }),
+      meals: S("ARRAY", {
+        items: S("OBJECT", {
+          properties: {
+            name: S("STRING"),
+            time: S("STRING", { description: "HH:MM" }),
+            dish: S("STRING", { description: "שם מנה קצר וטבעי בעברית, 2-6 מילים" }),
+            prep: S("STRING", { description: "שורה אחת, עד 14 מילים: איך מכינים" }),
+            foods: S("ARRAY", { items: food }),
+          },
+          required: ["name", "time", "dish", "prep", "foods"],
+        }),
+      }),
+      memory: S("OBJECT", {
+        properties: {
+          add: S("ARRAY", {
+            items: S("OBJECT", {
+              properties: { cat: S("STRING", { format: "enum", enum: Object.keys(MEMORY_CATS) }), text: S("STRING") },
+              required: ["cat", "text"],
+            }),
+          }),
+          remove: S("ARRAY", { items: S("STRING") }),
+        },
+        required: ["add", "remove"],
+      }),
+    },
+    required: ["reply", "action", "meals", "memory"],
+  });
+}
+
 function planPrompt(input: Record<string, unknown>) {
   const p = (input.prefs || {}) as Record<string, unknown>;
   const known = arr(input.known, 150).map((x) => clip(x, 40)).join(", ");
@@ -246,9 +340,9 @@ function planPrompt(input: Record<string, unknown>) {
 
 export function buildRequest(task: string, input: Record<string, unknown>, model: string) {
   const spec = TASKS[task];
-  const pr = task === "food" ? foodPrompt(input) : task === "menu" ? menuPrompt(input) : planPrompt(input);
+  const pr = task === "food" ? foodPrompt(input) : task === "menu" ? menuPrompt(input) : task === "menuchat" ? menuChatPrompt(input) : planPrompt(input);
   const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [{ role: "user", parts: [{ text: pr.user }] }];
-  if (task === "plan" || task === "menu") {
+  if (task === "plan" || task === "menu" || task === "menuchat") {
     // earlier turns of the conversation (short), newest last
     const msgs = arr(input.messages, 12) as Array<{ role?: string; text?: string }>;
     for (const m of msgs) {
@@ -258,7 +352,7 @@ export function buildRequest(task: string, input: Record<string, unknown>, model
     }
     if (contents[contents.length - 1].role !== "user") contents.push({ role: "user", parts: [{ text: "המשך." }] });
   }
-  const schema = task === "food" ? FOOD_SCHEMA : task === "menu" ? menuSchema(input) : PLAN_SCHEMA;
+  const schema = task === "food" ? FOOD_SCHEMA : task === "menu" ? menuSchema(input) : task === "menuchat" ? menuChatSchema(input) : PLAN_SCHEMA;
   const thinking = model.indexOf("lite") >= 0 ? "minimal" : spec.thinking;
   return {
     systemInstruction: { parts: [{ text: pr.system }] },
@@ -267,7 +361,7 @@ export function buildRequest(task: string, input: Record<string, unknown>, model
       responseMimeType: "application/json",
       responseSchema: schema,
       maxOutputTokens: spec.maxOut,
-      temperature: task === "food" ? 0.1 : task === "menu" ? 0.5 : 0.6,
+      temperature: task === "food" ? 0.1 : (task === "menu" || task === "menuchat") ? 0.5 : 0.6,
       thinkingConfig: { thinkingLevel: thinking },
     },
   };
@@ -278,6 +372,20 @@ const num = (v: unknown, lo: number, hi: number, d: number) => {
   if (!Number.isFinite(n)) return d;
   return Math.min(hi, Math.max(lo, n));
 };
+
+function validMeals(list: unknown, input?: Record<string, unknown>) {
+  const cat = input ? menuCatalog(input) : [];
+  const allowedIds = cat.length ? new Set(cat.map((f) => String(f.id))) : null;
+  return arr(list, 8).map((m: Record<string, unknown>) => ({
+    name: clip(m && m.name, 30),
+    time: /^\d{1,2}:\d{2}$/.test(String(m && m.time)) ? String(m.time) : "",
+    dish: clip(m && m.dish, 50).trim(),
+    prep: clip(m && m.prep, 140).trim(),
+    foods: arr(m && m.foods, 12).map((f: Record<string, unknown>) => ({
+      dbId: clip(f && f.dbId, 40), grams: num(f && f.grams, 0, 1500, 0), role: clip(f && f.role, 10),
+    })).filter((f) => f.dbId && (!allowedIds || allowedIds.has(f.dbId))),
+  })).filter((m) => m.foods.length);
+}
 
 export function validateOutput(task: string, out: unknown, input?: Record<string, unknown>): unknown {
   if (!out || typeof out !== "object") return null;
@@ -291,18 +399,24 @@ export function validateOutput(task: string, out: unknown, input?: Record<string
     })).filter((x) => x.name);
     return { items };
   }
+  if (task === "menuchat") {
+    const acts = ["build", "edit", "ask", "none"];
+    const meals = validMeals(o.meals, input);
+    let action = acts.indexOf(String(o.action)) >= 0 ? String(o.action) : (meals.length ? "edit" : "none");
+    if ((action === "ask" || action === "none") && meals.length && !clip(o.reply, 600).trim()) action = "edit";
+    if ((action === "build" || action === "edit") && !meals.length) return null;
+    const reply = clip(o.reply, 600).trim();
+    if ((action === "ask" || action === "none") && !reply) return null;
+    const mem = (o.memory || {}) as Record<string, unknown>;
+    const add = (arr(mem.add, 6) as Array<Record<string, unknown>>).map((a) => ({
+      cat: MEMORY_CATS[String(a && a.cat)] ? String(a.cat) : "habit",
+      text: clip(a && a.text, 60).trim(),
+    })).filter((a) => a.text);
+    const remove = arr(mem.remove, 6).map((x) => clip(x, 60).trim()).filter(Boolean);
+    return { reply, action, meals: action === "build" || action === "edit" ? meals : [], memory: { add, remove } };
+  }
   if (task === "menu") {
-    const cat = input ? menuCatalog(input) : [];
-    const allowedIds = cat.length ? new Set(cat.map((f) => String(f.id))) : null;
-    const meals = arr(o.meals, 8).map((m: Record<string, unknown>) => ({
-      name: clip(m && m.name, 30),
-      time: /^\d{1,2}:\d{2}$/.test(String(m && m.time)) ? String(m.time) : "",
-      dish: clip(m && m.dish, 50).trim(),
-      prep: clip(m && m.prep, 140).trim(),
-      foods: arr(m && m.foods, 12).map((f: Record<string, unknown>) => ({
-        dbId: clip(f && f.dbId, 40), grams: num(f && f.grams, 0, 1500, 0), role: clip(f && f.role, 10),
-      })).filter((f) => f.dbId && (!allowedIds || allowedIds.has(f.dbId))),
-    })).filter((m) => m.foods.length);
+    const meals = validMeals(o.meals, input);
     if (!meals.length) return null;
     return { reply: clip(o.reply, 600), meals };
   }
