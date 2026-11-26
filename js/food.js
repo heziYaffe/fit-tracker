@@ -14,12 +14,10 @@
         rules left something unmatched (or opts.always). Specs are resolved
         against the table with resolveSpec(); unknown names stay unmatched.
         Provider errors/timeouts fall back to the rule-based result.
-   2) Menu builder:
-        FitFood.setMenuProvider(fn); FitFood.buildMenuAsync(prefs) → Promise<menu>
-        fn(prefs, { catalog }) → Promise<{ meals: [{ name, time?, foods: [{ dbId, grams?, role? }] }] }>
-        catalog = [{ id, name, roles, tags, per100 }] (the only allowed dbIds).
-        The result is validated (unknown dbIds dropped, prefs re-applied,
-        portions re-fitted to targets); on failure the rule-based buildMenu runs.
+   2) Menu chat (js/menu-chat.js): the model's meals go through
+        FitFood.menuFromSpec(spec, prefs, { locked }) → menu: unknown dbIds
+        dropped, meat/dairy kept apart, portions re-fitted to the targets.
+        catalog(prefs) = [{ id, name, roles, tags, per100 }] (allowed dbIds).
    registerResolver(fn) is the older per-segment hook (fn(unmatchedItem) →
    item|null) and still works. */
 (function (root) {
@@ -900,9 +898,7 @@
   // ---------- Hooks for an optional (LLM) provider ----------
   const UNIT_ALIASES = { 'יחידה': 'unit', 'unit': 'unit', 'piece': 'unit', 'g': 'g', 'גרם': 'g', 'ml': 'ml' };
   let textProvider = null;
-  let menuProvider = null;
   function setTextProvider(fn) { textProvider = typeof fn === 'function' ? fn : null; }
-  function setMenuProvider(fn) { menuProvider = typeof fn === 'function' ? fn : null; }
 
   // Turn a provider spec into a table-backed item (or an unmatched item).
   function resolveSpec(spec) {
@@ -1046,23 +1042,6 @@
   }
   const ROLE_NAMES = { bp: 1, bc: 1, mp: 1, mc: 1, veg: 1, fat: 1, sp: 1, fruit: 1, nut: 1 };
 
-  function buildMenuAsync(prefs, opts) {
-    opts = opts || {};
-    prefs = prefs || {};
-    const provider = opts.provider || menuProvider;
-    if (!provider) return Promise.resolve(buildMenu(prefs));
-    // When the AI fails the basic menu is still returned, but marked, so the
-    // screen can say so and offer «נסה שוב» instead of passing it off as AI.
-    function basic(err) {
-      const m = buildMenu(prefs);
-      m.fallback = { reason: (err && err.message) || 'ה-AI לא החזיר תפריט', code: (err && err.code) || 'empty' };
-      return m;
-    }
-    return withTimeout(Promise.resolve(provider(prefs, { catalog: catalog(prefs), slots: slotsFor(prefs) })), opts.timeoutMs || 20000)
-      .then(function (spec) { return menuFromSpec(spec, prefs) || basic(null); })
-      .catch(basic);
-  }
-
   const FitFood = {
     DB: DB, byId: byId, norm: norm, splitSegments: splitSegments, matchFood: matchFood,
     parse: parse, parseAsync: parseAsync, parseSegment: parseSegment, registerResolver: registerResolver,
@@ -1071,10 +1050,10 @@
     buildMenu: buildMenu, swapOptions: swapOptions, estimateCalories: estimateCalories,
     EXCLUDE_OPTIONS: EXCLUDE_OPTIONS, choosable: choosable, unitGrams: unitGrams,
     parseFoodText: parseFoodText, setTextProvider: setTextProvider, resolveSpec: resolveSpec,
-    buildMenuAsync: buildMenuAsync, setMenuProvider: setMenuProvider, menuFromSpec: menuFromSpec, catalog: catalog,
+    menuFromSpec: menuFromSpec, catalog: catalog,
     slotsFor: slotsFor, blockedIds: blockedIds, fitPortions: fitPortions, sumMacros: sumMacros, textExcludes: textExcludes, dishName: dishName, mentionsBlocked: mentionsBlocked, extractDislikes: extractDislikes, termIds: termIds,
     COOK: COOK, cookInfo: cookInfo, cookAlt: cookAlt, cookStateOf: cookStateOf,
-    hasTextProvider: function () { return !!textProvider; }, hasMenuProvider: function () { return !!menuProvider; }
+    hasTextProvider: function () { return !!textProvider; }
   };
   root.FitFood = FitFood;
   if (typeof module !== 'undefined' && module.exports) module.exports = FitFood;

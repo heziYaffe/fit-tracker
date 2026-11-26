@@ -27,65 +27,53 @@ assert(pr.generationConfig.responseSchema.properties.plan, "plan schema");
 
 let v = validateOutput("food", { items: [{ name: " ביצה ", qty: 2 }, { name: "" }, { name: "x", qty: -3, grams: 99999 }] });
 assert(v.items.length === 2 && v.items[0].name === "ביצה" && v.items[1].qty === 1 && v.items[1].grams === 3000, "food clamps");
-assert(validateOutput("menu", { reply: "x", meals: [{ name: "a", foods: [] }] }) === null, "empty menu rejected");
-v = validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "8:00", foods: [{ dbId: "egg", grams: 100 }] }] });
-assert(v.meals[0].time === "8:00" && v.meals[0].foods[0].dbId === "egg", "menu ok");
-// menu prompt: blocked foods filtered out server-side too, enum schema, meal targets
+assert(!TASKS.menu, "v49: the one-shot /menu task is gone");
+assert(validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "8:00", foods: [{ dbId: "egg", grams: 100 }] }] }) === null, "no menu validation either");
 const catalog = [
   { id: "egg", name: "ביצה", roles: ["bp"], tags: ["egg"], per100: { kcal: 155, protein: 12.6, carbs: 1.1, fat: 10.6 }, min: 50, max: 200, state: "" },
   { id: "tuna", name: "טונה במים", roles: ["mp"], tags: ["fish"], per100: { kcal: 116, protein: 25.5, carbs: 0, fat: 0.8 }, min: 110, max: 220, state: "" },
   { id: "rice", name: "אורז", roles: ["mc"], tags: [], per100: { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3 }, min: 100, max: 300, state: "מבושל" },
   { id: "cottage", name: "קוטג׳ 5%", roles: ["bp"], tags: ["dairy"], per100: { kcal: 95, protein: 11, carbs: 1.5, fat: 5 }, min: 100, max: 250, state: "" },
 ];
-const mIn = { prefs: { protein: 160, calories: 2400, meals: 4, goal: "cut", note: "בוקר מהיר", dislikes: ["cottage"] }, blocked: ["tuna"], catalog,
-  slots: [{ name: "בוקר", time: "08:00", kind: "breakfast" }, { name: "צהריים", time: "13:00", kind: "lunch" }, { name: "ביניים", time: "16:30", kind: "snack" }, { name: "ערב", time: "20:00", kind: "dinner" }] };
-const mr = buildRequest("menu", mIn, "gemini-flash-lite-latest");
-const mText = mr.contents[0].parts[0].text, sys = mr.systemInstruction.parts[0].text;
-assert(!/tuna|טונה|cottage|קוטג/.test(mText), "blocked foods never appear in the prompt");
-assert(/rice\|אורז\|mc\|\|100-300\|מבושל\|130/.test(mText), "catalog line has range and cooked state");
-assert(/בוקר 08:00: ~600 קק״ל, ~40 ג׳ חלבון/.test(mText) && /צהריים 13:00: ~840/.test(mText), "per-meal targets");
-assert(/חיטוב/.test(mText) && /בוקר מהיר/.test(mText), "goal + note");
-assert(/חוקים מחייבים/.test(sys) && /העדפות \(רכות/.test(sys), "hard rules vs soft preferences");
-const enumIds = mr.generationConfig.responseSchema.properties.meals.items.properties.foods.items.properties.dbId.enum;
-assert(enumIds.join() === "egg,rice", "dbId enum = allowed catalog only: " + enumIds);
-v = validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "08:00", foods: [{ dbId: "cottage", grams: 200 }, { dbId: "egg", grams: 100 }] }] }, mIn);
-assert(v.meals[0].foods.length === 1 && v.meals[0].foods[0].dbId === "egg", "server drops blocked ids");
-const legacy = buildRequest("menu", { prefs: { protein: 150, calories: 2200, meals: 3 }, catalog }, "gemini-3.8-flash");
-assert(/ערב 19:30/.test(legacy.contents[0].parts[0].text), "default slots when an older app sends none");
 
-// v46: fast model first, dish + prep per meal
-assert(TASKS.menu.models[0] === "gemini-flash-lite-latest" && TASKS.menu.models.indexOf("gemini-3.8-flash") < 0, "menu leads with flash-lite");
-assert(TASKS.menu.deadlineMs <= 25000 && TASKS.menu.attemptMs <= 10000, "menu fails fast");
-const mealProps = mr.generationConfig.responseSchema.properties.meals.items;
-assert(mealProps.properties.dish && mealProps.properties.prep && mealProps.required.indexOf("dish") >= 0, "dish + prep required");
-assert(/dish = שם מנה/.test(sys), "prompt asks for a dish name");
-v = validateOutput("menu", { reply: "x", meals: [{ name: "בוקר", time: "08:00", dish: " שקשוקה ", prep: "א".repeat(300), foods: [{ dbId: "egg", grams: 100 }] }] }, mIn);
-assert(v.meals[0].dish === "שקשוקה" && v.meals[0].prep.length === 140, "dish/prep clipped");
-
-// v48: the menu chat
+// v48/v49: the menu chat. Memory is free text (the user's standing notes);
+// no code-level blocking any more, the whole catalog goes to the model.
+const memText = "לא אוכל טונה\nאין לי זמן לבשל בבוקר";
 const cIn = { messages: [{ role: "user", text: "תבנה לי תפריט" }, { role: "model", text: "כמה ארוחות?" }, { role: "user", text: "4" }],
-  memory: [{ cat: "avoid", text: "טונה" }, { cat: "habit", text: "אין זמן לבשל בבוקר" }],
-  targets: { protein: 160, calories: 2300, carbs: 260, fat: 70 }, catalog, blocked: ["tuna"], current: null };
-assert(TASKS.menuchat && TASKS.menuchat.models[0] === "gemini-flash-lite-latest" && TASKS.menuchat.deadlineMs <= 25000, "menuchat task");
-assert(TASKS.menuchat.models.every((m) => PRICES[m]), "menuchat models priced");
+  memory: memText, targets: { protein: 160, calories: 2300, carbs: 260, fat: 70 }, catalog, current: null };
+assert(TASKS.menuchat && TASKS.menuchat.models[0] === "gemini-flash-lite-latest" && TASKS.menuchat.deadlineMs <= 30000 && TASKS.menuchat.attemptMs <= 10000, "menuchat task");
+assert(TASKS.menuchat.models.every((m) => PRICES[m]) && TASKS.menuchat.models.indexOf("gemini-3.8-flash") < 0, "menuchat models priced, fast chain");
 const cr = buildRequest("menuchat", cIn, "gemini-flash-lite-latest");
 const cUser = cr.contents[0].parts[0].text, cSys = cr.systemInstruction.parts[0].text;
-assert(/לא אוכל: טונה/.test(cUser) && /הרגלים: אין זמן לבשל בבוקר/.test(cUser), "memory in prompt");
+assert(/ההוראות הקבועות שלי[^\n]*:\nלא אוכל טונה\nאין לי זמן לבשל בבוקר\n/.test(cUser), "memory text verbatim in prompt");
 assert(/2300 קק״ל, 160 ג׳ חלבון, 260 ג׳ פחמימה, 70 ג׳ שומן/.test(cUser) && /אין עדיין תפריט/.test(cUser), "targets + no menu");
-assert(!/\ntuna\|/.test(cUser) && /\negg\|/.test(cUser), "blocked food not in catalog");
+assert(/\ntuna\|/.test(cUser) && /\negg\|/.test(cUser), "whole catalog sent (no blocking)");
+assert(/rice\|אורז\|mc\|\|100-300\|מבושל\|130/.test(cUser), "catalog line has range and cooked state");
 assert(cr.contents.length === 4 && cr.contents[3].role === "user" && cr.contents[2].role === "model", "conversation turns");
-assert(/action/.test(cSys) && /ask/.test(cSys) && /memory/.test(cSys) && /פרטים מזהים/.test(cSys), "chat rules");
+assert(/action/.test(cSys) && /ask/.test(cSys) && /memory/.test(cSys) && /suggestions/.test(cSys) && /פרטים מזהים/.test(cSys) && /dish = שם מנה/.test(cSys), "chat rules");
+assert(/לעולם לא בתפריט/.test(cSys), "standing notes are binding");
 const cs = cr.generationConfig.responseSchema;
-assert(cs.properties.action.enum.join() === "build,edit,ask,none" && cs.required.indexOf("memory") >= 0, "chat schema");
-assert(cs.properties.meals.items.properties.foods.items.properties.dbId.enum.indexOf("tuna") < 0, "enum excludes blocked");
+assert(cs.properties.action.enum.join() === "build,edit,ask,none" && cs.required.indexOf("memory") >= 0 && cs.required.indexOf("suggestions") >= 0, "chat schema");
+assert(cs.propertyOrdering[0] === "reply" && cs.propertyOrdering[cs.propertyOrdering.length - 1] === "meals", "reply streams first, meals last");
+assert(cs.properties.memory.properties.add.items.type === "STRING", "memory ops are lines");
+assert(cs.properties.meals.items.properties.foods.items.properties.dbId.enum.join() === "egg,tuna,rice,cottage", "enum = catalog");
+const mealProps = cs.properties.meals.items;
+assert(mealProps.properties.dish && mealProps.properties.prep && mealProps.required.indexOf("dish") >= 0, "dish + prep required");
 const withMenu = Object.assign({}, cIn, { current: [{ name: "בוקר", time: "08:00", dish: "שקשוקה", foods: [{ dbId: "egg", grams: 150 }] }] });
 assert(/התפריט הנוכחי:/.test(buildRequest("menuchat", withMenu, "gemini-flash-lite-latest").contents[0].parts[0].text), "current menu sent");
-v = validateOutput("menuchat", { reply: "באיזו ארוחה?", action: "ask", meals: [{ name: "x", foods: [{ dbId: "egg", grams: 1 }] }], memory: { add: [{ cat: "weird", text: "  אוהב חריף " }], remove: ["טונה"] } }, cIn);
-assert(v.action === "ask" && v.meals.length === 0 && v.memory.add[0].cat === "habit" && v.memory.add[0].text === "אוהב חריף" && v.memory.remove[0] === "טונה", "ask + memory ops");
+// a cached v48 app still sends memory items and `blocked`
+const old = buildRequest("menuchat", Object.assign({}, cIn, { memory: [{ cat: "avoid", text: "טונה" }, { cat: "habit", text: "בוקר מהיר" }], blocked: ["tuna"] }), "gemini-flash-lite-latest");
+assert(/\nטונה\nבוקר מהיר\n/.test(old.contents[0].parts[0].text) && !/\ntuna\|/.test(old.contents[0].parts[0].text), "v48 memory array still readable");
+assert(/\(ריק\)/.test(buildRequest("menuchat", Object.assign({}, cIn, { memory: "" }), "gemini-flash-lite-latest").contents[0].parts[0].text), "empty memory marked");
+v = validateOutput("menuchat", { reply: "באיזו ארוחה?", action: "ask", suggestions: [" ערב קל ", "", "בלי בישול", "x", "y"], meals: [{ name: "x", foods: [{ dbId: "egg", grams: 1 }] }], memory: { add: ["  אוהב   חריף "], remove: ["לא אוכל טונה"] } }, cIn);
+assert(v.action === "ask" && v.meals.length === 0 && v.memory.add[0] === "אוהב חריף" && v.memory.remove[0] === "לא אוכל טונה", "ask + memory line ops");
+assert(v.suggestions.join("|") === "ערב קל|בלי בישול|x", "suggestions trimmed to 3");
+assert(validateOutput("menuchat", { reply: "x", action: "none", meals: [], memory: {} }, cIn).suggestions.length === 0, "missing suggestions ok");
 assert(validateOutput("menuchat", { reply: "x", action: "build", meals: [], memory: {} }, cIn) === null, "build without meals is bad output");
 assert(validateOutput("menuchat", { reply: "", action: "ask", meals: [], memory: {} }, cIn) === null, "empty question is bad output");
-v = validateOutput("menuchat", { reply: "ok", action: "edit", meals: [{ name: "ערב", time: "20:00", dish: "ד", prep: "", foods: [{ dbId: "tuna", grams: 100 }, { dbId: "egg", grams: 100 }] }], memory: { add: [], remove: [] } }, cIn);
-assert(v.meals[0].foods.length === 1 && v.meals[0].foods[0].dbId === "egg", "blocked food dropped on the server");
+v = validateOutput("menuchat", { reply: "ok", action: "edit", meals: [{ name: "ערב", time: "20:00", dish: " שקשוקה ", prep: "א".repeat(300), foods: [{ dbId: "nope", grams: 100 }, { dbId: "egg", grams: 100 }] }], memory: { add: [], remove: [] } }, cIn);
+assert(v.meals[0].foods.length === 1 && v.meals[0].foods[0].dbId === "egg", "unknown food dropped on the server");
+assert(v.meals[0].dish === "שקשוקה" && v.meals[0].prep.length === 140, "dish/prep clipped");
 assert(!/Hazi|weight|משקל גוף/.test(JSON.stringify(cr)), "nothing identifying");
 
 v = validateOutput("plan", { reply: "שאלה?", plan: { name: "", days: [] } });

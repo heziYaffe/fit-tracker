@@ -3,7 +3,7 @@
    to the rule-based behaviour: if the user is signed out, the cap or the free
    quota is reached, or Gemini is busy, callers get an error and keep going.
    Uses: (1) FitFood text provider (only for food the rules did not match),
-   (2) FitFood menu provider (menu wizard), (3) the workout plan builder sheet.
+   (2) the menu chat (streamed), (3) the workout plan builder sheet.
    The model never produces numbers we store: nutrition comes from the food
    table, weights from FitEngine.recommendNextLoad. */
 (function (root) {
@@ -97,44 +97,87 @@
       .then(function (r) { return (r && r.items) || []; }, function (e) { notice(e); return []; });
   }
 
-  // ---------- (2) menu wizard ----------
-  let lastMenuReply = '';
-  function menuProvider(prefs, ctx) {
-    lastMenuReply = '';
-    if (!available()) return Promise.reject(aiError('off'));
-    const F = root.FitFood;
-    // Disliked/excluded foods are already removed from the catalog (and are
-    // re-checked on the reply), so the model never sees them. `blocked` lets
-    // the server drop them too, without putting them in the prompt.
-    const blocked = F && F.blockedIds ? Object.keys(F.blockedIds(prefs)) : (prefs.dislikes || []);
-    const body = {
-      prefs: {
-        protein: prefs.protein, calories: prefs.calories, meals: prefs.meals, goal: prefs.goal,
-        excludes: excludeLabels(prefs.excludes), note: prefs.note || '', change: prefs.change || ''
+  // ---------- (2) the menu chat ----------
+  // One message → { reply, action, suggestions, memory:{add,remove}, meals }.
+  // With hooks.onText the reply is streamed (server-sent events): `chunk`
+  // events carry the raw JSON as the model writes it (`reply` first), `reset`
+  // means a fallback model starts over, `done`/`error` end the stream.
+  function sseParser(onEvent) {
+    let buf = '';
+    function flush(block) {
+      const data = block.split('\n').filter(function (l) { return l.indexOf('data:') === 0; })
+        .map(function (l) { return l.slice(5).trim(); }).join('');
+      if (!data) return;
+      let ev = null;
+      try { ev = JSON.parse(data); } catch (e) { return; }
+      if (ev) onEvent(ev);
+    }
+    return {
+      push: function (text) {
+        buf += String(text || '').replace(/\r/g, '');
+        let k;
+        while ((k = buf.indexOf('\n\n')) >= 0) { flush(buf.slice(0, k)); buf = buf.slice(k + 2); }
       },
-      slots: (ctx && ctx.slots) || [],
-      blocked: blocked,
-      catalog: (ctx && ctx.catalog) || [],
-      current: prefs.current ? compactMenu(prefs.current) : null
+      end: function () { if (buf.trim()) flush(buf); buf = ''; }
     };
-    return call('menu', body, { timeoutMs: 28000 }).then(function (r) {
-      lastMenuReply = (r && r.reply) || '';
-      return r;
-    }, function (e) { throw e; }); // the menu screen shows its own failure card
   }
-  // (2b) the menu chat (v48): one message → reply, action, menu, memory ops
-  function menuChat(body) {
+
+  function menuChat(body, hooks) {
     if (!available()) return Promise.reject(aiError('off', 'הצ׳אט עם ה-AI זמין אחרי התחברות לחשבון.'));
-    return call('menuchat', body, { timeoutMs: 28000 });
-  }
-  function excludeLabels(ids) {
-    const opts = (root.FitFood && root.FitFood.EXCLUDE_OPTIONS) || [];
-    return (ids || []).map(function (id) { const o = opts.find(function (x) { return x.id === id; }); return o ? o.label : id; });
-  }
-  function compactMenu(menu) {
-    return ((menu && menu.meals) || []).map(function (m) {
-      return { name: m.name, foods: (m.foods || []).map(function (f) { return { dbId: f.dbId, grams: f.grams, name: f.name }; }) };
-    });
+    const canStream = hooks && hooks.onText && typeof TextDecoder !== 'undefined' && typeof ReadableStream !== 'undefined';
+    if (!canStream) return call('menuchat', body, { timeoutMs: 32000 });
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let timer = null;
+    // no event for 20 s (or 40 s in all) → give up; the server's own deadline is 30 s
+    function arm(ms) { clearTimeout(timer); timer = setTimeout(function () { if (ctl) ctl.abort(); }, ms); }
+    const hardStop = setTimeout(function () { if (ctl) ctl.abort(); }, 40000);
+    arm(20000);
+    return sync().authedFetch(fnUrl() + '/menuchat?stream=1', {
+      method: 'POST', body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined
+    }).then(function (res) {
+      const type = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
+      if (type.indexOf('text/event-stream') < 0 || !res.body || !res.body.getReader) {
+        // budget/auth errors come back as plain JSON before any streaming
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (data && data.month_usd != null) saveUsage(data);
+          if (!res.ok || (data && data.error)) throw aiError((data && data.error) || ('http' + res.status), data && data.message);
+          return data;
+        });
+      }
+      return new Promise(function (resolve, reject) {
+        let result = null, failure = null;
+        const parser = sseParser(function (ev) {
+          arm(20000);
+          if (ev.t === 'chunk') hooks.onText(String(ev.text || ''));
+          else if (ev.t === 'reset') { if (hooks.onReset) hooks.onReset(); }
+          else if (ev.t === 'done') {
+            saveUsage(ev);
+            result = Object.assign({}, ev.data || {}, { usage: ev.usage, month_usd: ev.month_usd, cap_usd: ev.cap_usd });
+          } else if (ev.t === 'error') {
+            saveUsage(ev);
+            failure = aiError(ev.error || 'busy', ev.message);
+          }
+        });
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        function pump() {
+          return reader.read().then(function (r) {
+            if (r.done) {
+              parser.push(dec.decode());
+              parser.end();
+              if (result) resolve(result);
+              else reject(failure || aiError('busy', 'החיבור ל-AI נקטע. נסה שוב.'));
+              return;
+            }
+            parser.push(dec.decode(r.value, { stream: true }));
+            return pump();
+          });
+        }
+        pump().catch(function () { reject(failure || aiError('busy', 'החיבור ל-AI נקטע. נסה שוב.')); });
+      });
+    }, function () {
+      throw aiError('busy', 'אין חיבור ל-AI כרגע. ממשיכים בלי AI.');
+    }).finally(function () { clearTimeout(timer); clearTimeout(hardStop); });
   }
 
   // ---------- (3) workout plan builder ----------
@@ -324,14 +367,13 @@
     const F = root.FitFood;
     if (!F) return;
     if (F.setTextProvider) F.setTextProvider(function (ctx) { return foodProvider(ctx); });
-    if (F.setMenuProvider) F.setMenuProvider(function (prefs, ctx) { return menuProvider(prefs, ctx); });
   }
   install();
 
   root.FitAI = {
     available: available, call: call, usageLine: usageLine, lastUsage: lastUsage, refreshUsage: refreshUsage,
     disabled: disabled, setDisabled: setDisabled,
-    foodProvider: foodProvider, menuProvider: menuProvider, menuChat: menuChat, lastMenuReply: function () { return lastMenuReply; },
+    foodProvider: foodProvider, menuChat: menuChat, sseParser: sseParser,
     planState: planState, resetPlan: resetPlan, askPlan: askPlan, planToTemplates: planToTemplates, savePlan: savePlan,
     knownExercises: knownExercises, renderPlanSheet: renderPlanSheet, handlePlanAction: handlePlanAction
   };

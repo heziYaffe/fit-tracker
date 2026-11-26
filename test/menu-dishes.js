@@ -37,18 +37,7 @@ assert(m.meals[0].dish === 'שקשוקה עם לחם מלא' && /עגבניות/
 assert(!/טונה/.test(m.meals[1].dish) && m.meals[1].dish && m.meals[1].prep === '', 'replaced food → rule title, no stale prep: ' + m.meals[1].dish);
 assert(!/טונה/.test(m.meals[2].dish), 'a title naming a blocked food is not shown');
 
-// AI failure is marked, not silent
 (async function () {
-  let menu = await F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3 }, { provider: () => Promise.reject(Object.assign(new Error('Gemini עמוס כרגע.'), { code: 'busy' })) });
-  assert(menu.fallback && menu.fallback.code === 'busy' && /עמוס/.test(menu.fallback.reason), 'failure flagged with reason');
-  assert(menu.meals.length === 3, 'basic menu still available as an explicit choice');
-  menu = await F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3 }, { provider: () => Promise.resolve({ meals: [] }) });
-  assert(menu.fallback, 'empty AI reply flagged too');
-  menu = await F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3 }, { provider: () => Promise.resolve(spec) });
-  assert(!menu.fallback && menu.meals[0].dish === 'שקשוקה עם לחם מלא', 'good reply not flagged');
-  menu = await F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3 }, { provider: () => new Promise(() => {}), timeoutMs: 50 });
-  assert(menu.fallback && menu.fallback.reason === 'timeout', 'timeout flagged');
-
   // dish/prep survive save + apply; a swap on the day renames the dish
   const saved = Store.addMenu({ name: 'התפריט שלי', days: [0, 1, 2, 3, 4, 5, 6], meals: m.meals });
   const day = Store.applyMenuToDate(saved.id, '2026-11-24');

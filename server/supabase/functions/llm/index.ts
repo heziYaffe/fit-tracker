@@ -6,8 +6,9 @@
 // Routes:
 //   GET  /usage                 → { month_usd, cap_usd, today_calls, daily_limit }
 //   POST /food   { text, names } → { items: [{ name, qty, unit, grams }] }
-//   POST /menu   { prefs, catalog, current? } → { reply, meals: [...] }
-//   POST /menuchat { messages, memory, targets, catalog, blocked, current? } → { reply, action, meals, memory:{add,remove} }
+//   POST /menuchat { messages, memory, targets, catalog, current? } → { reply, action, suggestions, memory:{add,remove}, meals }
+//   POST /menuchat?stream=1 → text/event-stream: {t:'chunk',text} (raw JSON as Gemini writes it,
+//        `reply` first), {t:'reset'} (a fallback model starts over), then {t:'done',data,usage,...} or {t:'error',...}
 //   POST /plan   { prefs, messages, known, recovery, current? } → { reply, plan }
 // Every reply carries `usage` (this call) and `month_usd`. Errors are JSON
 // { error, message } with a Hebrew message; the app then falls back to rules.
@@ -146,6 +147,129 @@ async function runTask(sb: ReturnType<typeof admin>, userId: string, task: strin
   return { ok: false as const, code: anyBad && !anyQuota ? "bad_output" : (anyQuota ? "quota" : "busy"), usage };
 }
 
+// ---------- streaming (menu chat) ----------
+const enc = new TextEncoder();
+const sse = (o: unknown) => enc.encode("data: " + JSON.stringify(o) + "\n\n");
+
+type StreamAttempt = Attempt & { streamed: boolean };
+
+// One model, streamed. `firstMs` bounds the wait for the first text (so a
+// stuck model falls through to the next one), `totalMs` the whole answer.
+async function streamModel(model: string, body: unknown, firstMs: number, totalMs: number, onText: (t: string) => void): Promise<StreamAttempt> {
+  const ctl = new AbortController();
+  const first = setTimeout(() => ctl.abort(), firstMs);
+  const hard = setTimeout(() => ctl.abort(), totalMs);
+  let text = "", inTok = 0, outTok = 0, streamed = false, err = "";
+  const handle = (ev: string) => {
+    for (const line of ev.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      let j: Record<string, any>;
+      try { j = JSON.parse(line.slice(5).trim()); } catch (_e) { continue; }
+      if (j.error) { err = String(j.error.status || j.error.code || "error"); continue; }
+      const um = j.usageMetadata || {};
+      if (um.promptTokenCount) inTok = Number(um.promptTokenCount) || inTok;
+      const o = (Number(um.candidatesTokenCount) || 0) + (Number(um.thoughtsTokenCount) || 0);
+      if (o) outTok = o;
+      const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+      const t = parts.filter((p: { thought?: boolean }) => !p.thought).map((p: { text?: string }) => p.text || "").join("");
+      if (t) {
+        if (!streamed) { streamed = true; clearTimeout(first); }
+        text += t;
+        onText(t);
+      }
+    }
+  };
+  try {
+    const res = await fetch(GEMINI + model + ":streamGenerateContent?alt=sse", {
+      method: "POST",
+      headers: { "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") || "", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    if (!res.ok || !res.body) {
+      const j = await res.json().catch(() => ({}));
+      return { model, status: res.status || 500, inTok: 0, outTok: 0, text: "", err: String((j.error && j.error.status) || res.status), streamed: false };
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
+      let k;
+      while ((k = buf.indexOf("\n\n")) >= 0) { handle(buf.slice(0, k)); buf = buf.slice(k + 2); }
+    }
+    if (buf.trim()) handle(buf);
+    return { model, status: err ? 500 : 200, inTok, outTok, text, err, streamed };
+  } catch (e) {
+    return { model, status: 0, inTok, outTok, text: "", err: (e as Error).name === "AbortError" ? "timeout" : String(e), streamed };
+  } finally {
+    clearTimeout(first);
+    clearTimeout(hard);
+  }
+}
+
+function streamTask(sb: ReturnType<typeof admin>, userId: string, task: string, input: Record<string, unknown>, u: { month_usd: number; cap_usd: number }) {
+  const spec = TASKS[task];
+  const stream = new ReadableStream({
+    async start(ctrl) {
+      const send = (o: unknown) => { try { ctrl.enqueue(sse(o)); } catch (_e) { /* client went away */ } };
+      const started = Date.now();
+      const attempts: StreamAttempt[] = [];
+      let parsed: unknown = null, used = "", firstMs = 0;
+      const chain = spec.models.slice();
+      let retried = false;
+      for (let i = 0; i < chain.length; i++) {
+        const left = spec.deadlineMs - (Date.now() - started);
+        if (left < 3000) break;
+        const model = chain[i];
+        const a = await streamModel(model, buildRequest(task, input, model), Math.min(spec.attemptMs, left), left, (t) => {
+          if (!firstMs) firstMs = Date.now() - started;
+          send({ t: "chunk", text: t });
+        });
+        attempts.push(a);
+        if (a.status === 200) {
+          try {
+            const out = validateOutput(task, JSON.parse(a.text), input);
+            if (out) { parsed = out; used = model; break; }
+            a.err = "bad_output";
+          } catch (_e) { a.err = "bad_output"; }
+        }
+        if (a.streamed) { firstMs = 0; send({ t: "reset" }); }
+        if (i === chain.length - 1 && !retried && attempts.every((x) => x.status === 429 || x.status === 503 || x.status === 500)) {
+          retried = true;
+          await new Promise((r) => setTimeout(r, 1500));
+          chain.push(chain[0]);
+        }
+      }
+      const inTok = attempts.reduce((s, a) => s + a.inTok, 0);
+      const outTok = attempts.reduce((s, a) => s + a.outTok, 0);
+      const cost = attempts.reduce((s, a) => s + costUsd(a.model, a.inTok, a.outTok), 0);
+      const errSummary = attempts.map((a) => a.model + ":" + (a.err || a.status)).join(",").slice(0, 300);
+      try {
+        await sb.from("llm_usage").insert({
+          user_id: userId, task, model: used || (attempts[attempts.length - 1] || {}).model || null,
+          input_tokens: inTok, output_tokens: outTok, cost_usd: cost, ok: !!parsed, error: parsed ? (attempts.length > 1 ? errSummary : null) : errSummary,
+        });
+      } catch (e) { console.error(e); }
+      const usage = { model: used, input_tokens: inTok, output_tokens: outTok, cost_usd: Math.round(cost * 1e6) / 1e6, ms: Date.now() - started, first_ms: firstMs, attempts: attempts.length };
+      const monthUsd = Math.round((u.month_usd + usage.cost_usd) * 1e6) / 1e6;
+      if (parsed) send({ t: "done", data: parsed, usage, month_usd: monthUsd, cap_usd: u.cap_usd });
+      else {
+        const anyQuota = attempts.some((a) => a.status === 429);
+        const anyBad = attempts.some((a) => a.err === "bad_output");
+        const code = anyBad && !anyQuota ? "bad_output" : (anyQuota ? "quota" : "busy");
+        send({ t: "error", error: code, message: MSG[code] || code, usage, month_usd: monthUsd, cap_usd: u.cap_usd });
+      }
+      try { ctrl.close(); } catch (_e) { /* already closed */ }
+    },
+  });
+  return new Response(stream, {
+    headers: { ...cors, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const url = new URL(req.url);
@@ -168,6 +292,7 @@ Deno.serve(async (req) => {
     const u = await usageNow(sb, user.id);
     if (u.month_usd >= u.cap_usd) return fail("cap", 402, u);
     if (u.today_calls >= u.daily_limit) return fail("daily", 429, u);
+    if (task === "menuchat" && url.searchParams.get("stream") === "1") return streamTask(sb, user.id, task, input || {}, u);
     const r = await runTask(sb, user.id, task, input || {});
     const monthUsd = Math.round((u.month_usd + r.usage.cost_usd) * 1e6) / 1e6;
     if (!r.ok) return fail(r.code, r.code === "quota" ? 429 : 503, { usage: r.usage, month_usd: monthUsd, cap_usd: u.cap_usd });

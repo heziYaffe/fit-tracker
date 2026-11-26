@@ -170,25 +170,24 @@ pending.push(F.parseFoodText('2 ביצים', { provider: function () { throw new
   .then(items => assert(items.length === 1 && items[0].dbId === 'egg', 'provider skipped when all matched')));
 pending.push(F.parseFoodText('משהו', { provider: function () { return Promise.reject(new Error('quota')); } })
   .then(items => assert(items[0].unmatched, 'provider failure falls back')));
-pending.push(F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3, excludes: ['nofish'] }, {
-  provider: function (prefs, ctx) {
-    assert(ctx.catalog.length > 20 && ctx.catalog[0].per100, 'catalog passed');
-    assert(!ctx.catalog.some(c => c.tags.indexOf('fish') >= 0), 'excluded foods never reach the model');
-    assert(ctx.catalog.every(c => c.roles.length), 'only menu foods in the catalog');
-    assert(ctx.slots && ctx.slots.length === 3 && ctx.slots[0].kind === 'breakfast', 'meal slots passed');
-    return Promise.resolve({ meals: [
-      { name: 'בוקר', foods: [{ dbId: 'egg', grams: 100 }, { dbId: 'wbread', grams: 60 }] },
-      { name: 'צהריים', foods: [{ dbId: 'chicken', grams: 150, role: 'mp' }, { dbId: 'rice', grams: 150 }, { dbId: 'salmon', grams: 100 }, { dbId: 'nonsense' }] },
-      { name: 'ערב', foods: [{ dbId: 'cottage', grams: 125 }, { dbId: 'pita', grams: 80 }] }
-    ] });
-  }
-}).then(function (m) {
-  assert(m.meals.length === 3, 'provider menu used');
+// v49: the AI menu goes through menuFromSpec (the one-shot /menu flow is gone)
+(function () {
+  const prefs = { protein: 150, calories: 2200, meals: 3, excludes: ['nofish'] };
+  const cat = F.catalog(prefs);
+  assert(cat.length > 20 && cat[0].per100, 'catalog has nutrition');
+  assert(!cat.some(c => c.tags.indexOf('fish') >= 0), 'excluded foods not in a filtered catalog');
+  assert(cat.every(c => c.roles.length), 'only menu foods in the catalog');
+  const m = F.menuFromSpec({ meals: [
+    { name: 'בוקר', foods: [{ dbId: 'egg', grams: 100 }, { dbId: 'wbread', grams: 60 }] },
+    { name: 'צהריים', foods: [{ dbId: 'chicken', grams: 150, role: 'mp' }, { dbId: 'rice', grams: 150 }, { dbId: 'salmon', grams: 100 }, { dbId: 'nonsense' }] },
+    { name: 'ערב', foods: [{ dbId: 'cottage', grams: 125 }, { dbId: 'pita', grams: 80 }] }
+  ] }, prefs);
+  assert(m.meals.length === 3, 'spec menu used');
   const ids = [].concat.apply([], m.meals.map(x => x.foods.map(f => f.dbId)));
   assert(ids.indexOf('salmon') < 0 && ids.indexOf('nonsense') < 0, 'prefs + unknown ids filtered');
   const tot = Store.menuTotals(Store.normalizeMenu(m));
-  assert(tot.calories > 1700 && tot.calories < 2500, 'provider menu refitted: ' + tot.calories);
-}));
-pending.push(F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3 }, { provider: () => Promise.resolve({ meals: [] }) })
-  .then(m => assert(m.meals.length === 3, 'empty provider menu falls back')));
+  assert(tot.calories > 1700 && tot.calories < 2500, 'spec menu refitted: ' + tot.calories);
+  assert(!F.menuFromSpec({ meals: [] }, prefs), 'empty spec → nothing');
+  assert(!F.buildMenuAsync && !F.setMenuProvider, 'old menu provider hooks removed');
+})();
 Promise.all(pending).then(function () { console.log('food tests passed'); }).catch(function (e) { console.error(e); process.exit(1); });

@@ -1335,39 +1335,41 @@
   function MCx() { return root.FitMenuChat || null; }
   function memoryPrefs() { return MCx() ? MCx().prefs(state()) : {}; }
 
-  // «מה אני יודע עליך»: collapsed by default, editable, auto-filled from chat.
+  // «מה אני יודע עליך» (v49): one free-text field, like a system prompt.
+  // Collapsed by default; the model adds/removes lines from the chat.
   function renderMemoryCard() {
     const M = MCx();
     if (!M) return '';
+    const text = M.memoryText(state());
     const list = M.memory(state());
     const open = !!ui.memOpen;
+    const draft = ui.memDraft != null ? ui.memDraft : text;
+    const dirty = ui.memDraft != null && ui.memDraft !== text;
     let body = '';
     if (open) {
-      body = M.CATS.map(function (c) {
-        const items = list.filter(function (m) { return m.cat === c[0]; });
-        if (!items.length) return '';
-        return '<div class="mem-cat"><span class="kicker">' + esc(c[1]) + '</span>' + items.map(function (m) {
-          if (ui.memEdit === m.id) {
-            return '<div class="mem-item editing"><input type="text" id="mem-edit-input" maxlength="60" value="' + esc(ui.memEditDraft != null ? ui.memEditDraft : m.text) + '" />' +
-              '<button type="button" class="linkish" data-action="mem-save" data-id="' + esc(m.id) + '">שמירה</button>' +
-              '<button type="button" class="linkish" data-action="mem-cancel">ביטול</button></div>';
-          }
-          return '<div class="mem-item"><span>' + esc(m.text) + '</span><span class="mem-acts">' +
-            '<button type="button" class="linkish" data-action="mem-edit" data-id="' + esc(m.id) + '">עריכה</button>' +
-            '<button type="button" class="icon-btn" data-action="mem-del" data-id="' + esc(m.id) + '" aria-label="מחיקה">×</button></span></div>';
-        }).join('') + '</div>';
-      }).join('') || '<p class="hp-legend">עוד ריק. ספר בצ׳אט מה אתה אוהב, מה לא ומה ההרגלים שלך, וזה יישמר כאן.</p>';
-      const cat = ui.memAddCat || 'avoid';
-      body += '<div class="mem-add"><select id="mem-add-cat" aria-label="קטגוריה">' + M.CATS.map(function (c) {
-        return '<option value="' + c[0] + '"' + (c[0] === cat ? ' selected' : '') + '>' + esc(c[1]) + '</option>';
-      }).join('') + '</select><input type="text" id="mem-add-text" maxlength="60" placeholder="למשל: טונה" value="' + esc(ui.memDraft || '') + '" />' +
-        '<button type="button" class="btn" data-action="mem-add">הוספה</button></div>' +
-        '<p class="hp-legend">מתעדכן לבד ממה שאתה כותב בצ׳אט ונשלח ל-AI עם כל הודעה, בלי פרטים מזהים. מה שב«לא אוכל» לא ייכנס לתפריט.</p>';
+      body = '<textarea id="mem-text" class="mem-text" rows="8" maxlength="' + (M.MEM_MAX || 3000) + '" dir="auto" ' +
+        'placeholder="' + esc('למשל:\nלא אוכל טונה\nאין לי זמן לבשל בבוקר\nמתאמן ב-18:00, ארוחה גדולה אחרי האימון') + '">' + esc(draft) + '</textarea>' +
+        '<div class="mem-row"><span class="mem-state">' + (dirty ? 'לא נשמר' : 'נשמר') + '</span>' +
+        '<button type="button" class="btn primary sm" data-action="mem-save">שמירה</button>' +
+        '<button type="button" class="linkish" data-action="mem-cancel">ביטול</button></div>' +
+        '<p class="hp-legend">כתוב חופשי, כמו הוראות קבועות: מה אתה לא אוכל, מה אוהב, הרגלים ולוח זמנים. ' +
+        'זה נשלח ל-AI כמו שהוא עם כל הודעה, וה-AI מוסיף או מוחק כאן שורות לפי מה שאתה כותב בצ׳אט. בלי פרטים מזהים.</p>';
     }
-    const sum = list.length ? list.slice(0, 3).map(function (m) { return m.text; }).join(' · ') + (list.length > 3 ? ' …' : '') : 'עוד ריק';
-    return '<section class="card mem-card' + (open ? ' open' : '') + '"><button type="button" class="mem-head" data-action="mem-toggle" aria-expanded="' + open + '">' +
+    const sum = list.length ? list.slice(0, 3).join(' · ') + (list.length > 3 ? ' …' : '') : 'עוד ריק';
+    return '<section class="card mem-card' + (open ? ' open' : '') + (dirty ? ' dirty' : '') + '"><button type="button" class="mem-head" data-action="mem-toggle" aria-expanded="' + open + '">' +
       '<span class="mem-title"><strong>מה אני יודע עליך</strong> <span class="mem-count">' + list.length + '</span>' +
       (open ? '' : '<span class="mem-sum">' + esc(sum) + '</span>') + '</span><span class="chev" aria-hidden="true">‹</span></button>' + body + '</section>';
+  }
+  function saveMemoryDraft(quiet) {
+    const M = MCx();
+    if (!M || ui.memDraft == null) return false;
+    const el = document.getElementById('mem-text');
+    const v = el ? el.value : ui.memDraft;
+    const changed = v !== M.memoryText(state());
+    ui.memDraft = null;
+    if (changed) M.setMemoryText(v);
+    if (changed && !quiet) toast('נשמר');
+    return changed;
   }
 
   function chatMsgHtml(m, isLast) {
@@ -1388,10 +1390,29 @@
     }
     if (m.mem && m.mem.length) {
       extra += '<div class="mc-note mem">' + m.mem.map(function (op) {
-        return (op.op === 'add' ? 'נוסף לזיכרון: ' : 'הוסר מהזיכרון: ') + esc((M.CAT_LABEL[op.item.cat] || '') + ' · ' + op.item.text);
+        return (op.op === 'add' ? 'נוסף לזיכרון: ' : 'הוסר מהזיכרון: ') + esc(op.text || (op.item && op.item.text) || '');
       }).join('<br>') + (m.memUndone ? ' · <span class="muted">בוטל</span>' : ' · <button type="button" class="linkish" data-action="mc-mem-undo" data-id="' + esc(m.id) + '">בטל</button>') + '</div>';
     }
     return '<div class="mc-msg model' + (m.ask ? ' ask' : '') + '">' + esc(m.text) + extra + '</div>';
+  }
+
+  // While the model writes, its reply shows up word by word (v49 streaming).
+  function streamBubble(text, action) {
+    if (!text) return '<div class="mc-msg model typing" id="mc-stream"><span class="spin" aria-hidden="true"></span> חושב…</div>';
+    const working = action === 'build' || action === 'edit';
+    return '<div class="mc-msg model streaming' + (working ? ' working' : '') + '" id="mc-stream"><span class="mc-stream-text">' + esc(text) + '</span>' +
+      (working ? '<span class="mc-working"><span class="spin" aria-hidden="true"></span> ' + (action === 'build' ? 'בונה את התפריט…' : 'מעדכן את התפריט…') + '</span>' : '') + '</div>';
+  }
+  function onMenuStream(text, action) {
+    const el = document.getElementById('mc-stream');
+    if (!el) return;
+    const log = document.getElementById('mc-log');
+    const atEnd = !log || log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    const span = el.querySelector('.mc-stream-text');
+    const working = action === 'build' || action === 'edit';
+    if (text && span && el.classList.contains('working') === working) span.textContent = text;
+    else el.outerHTML = streamBubble(text, action);
+    if (log && atEnd) log.scrollTop = log.scrollHeight;
   }
 
   function renderChatSheet() {
@@ -1409,7 +1430,7 @@
         : 'היי! ספר לי מה אתה אוהב, מה לא ומה ההרגלים שלך, ואבנה תפריט. אפשר גם ללחוץ על הצעה.') + '</div>';
     }
     log += shown.map(function (m, i) { return chatMsgHtml(m, i === shown.length - 1 && !busy); }).join('');
-    if (busy) log += '<div class="mc-msg model typing"><span class="spin" aria-hidden="true"></span> חושב…</div>';
+    if (busy) log += streamBubble(M.streamText(), M.streamAction ? M.streamAction() : '');
     const chips = avail && !busy ? '<div class="mc-chips">' + M.chips().map(function (c) {
       return '<button type="button" class="chip" data-action="mc-chip" data-text="' + esc(c) + '">' + esc(c) + '</button>';
     }).join('') + (hasMenu ? '<button type="button" class="chip" data-action="mc-fresh">תפריט חדש מאפס</button>' : '') + '</div>' : '';
@@ -3633,7 +3654,7 @@
     else if (ui.tab === 'progress') html += renderProgress();
     else if (ui.tab === 'settings') html += renderSettings();
     const ae = document.activeElement;
-    const keep = ae && ae.id && /^(mc-input|mem-add-text|mem-edit-input)$/.test(ae.id)
+    const keep = ae && ae.id && /^(mc-input|mem-text)$/.test(ae.id)
       ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
     main.innerHTML = html;
     const chatOn = !!(ui.menuChat && ui.tab === 'nutrition' && MCx()) && !ui.editingTemplate && !ui.editingMenu && !liveOn && !ui.liveSummary;
@@ -5020,34 +5041,9 @@
     }
     if (action === 'mc-undo-all') { if (MCx() && MCx().undoAll()) toast('התפריט חזר למה שהיה לפני השיחה'); return; }
     if (action === 'mc-mem-undo') { if (MCx() && MCx().undoMemory(btn.dataset.id)) toast('הזיכרון חזר למה שהיה'); return; }
-    if (action === 'mem-toggle') { ui.memOpen = !ui.memOpen; ui.memEdit = null; render(); return; }
-    if (action === 'mem-edit') { ui.memEdit = btn.dataset.id; ui.memEditDraft = null; render(); const el = document.getElementById('mem-edit-input'); if (el) el.focus(); return; }
-    if (action === 'mem-cancel') { ui.memEdit = null; ui.memEditDraft = null; render(); return; }
-    if (action === 'mem-save') {
-      const el = document.getElementById('mem-edit-input');
-      const v = el ? String(el.value || '').trim() : '';
-      ui.memEdit = null; ui.memEditDraft = null;
-      if (MCx()) { if (v) MCx().updateMemory(btn.dataset.id, { text: v }); else MCx().removeMemory(btn.dataset.id); }
-      render();
-      return;
-    }
-    if (action === 'mem-del') {
-      const it = MCx() ? MCx().removeMemory(btn.dataset.id) : null;
-      if (it) toast('נמחק מהזיכרון: ' + it.text);
-      return;
-    }
-    if (action === 'mem-add') {
-      const tx = document.getElementById('mem-add-text');
-      const cs = document.getElementById('mem-add-cat');
-      const v = tx ? String(tx.value || '').trim() : '';
-      if (!v) { toast('כתוב מה להוסיף'); return; }
-      ui.memAddCat = cs ? cs.value : 'avoid';
-      ui.memDraft = '';
-      const it = MCx() ? MCx().addMemory(ui.memAddCat, v, 'manual') : null;
-      toast(it ? 'נוסף לזיכרון' : 'כבר בזיכרון');
-      render();
-      return;
-    }
+    if (action === 'mem-toggle') { if (ui.memOpen) saveMemoryDraft(); ui.memOpen = !ui.memOpen; render(); return; }
+    if (action === 'mem-cancel') { ui.memDraft = null; render(); return; }
+    if (action === 'mem-save') { if (!saveMemoryDraft()) toast('נשמר'); render(); return; }
     if (action === 'meal-toggle') {
       ui.mealOpen = ui.mealOpen || {};
       ui.mealOpen[btn.dataset.key] = !ui.mealOpen[btn.dataset.key];
@@ -5360,7 +5356,7 @@
   function onChange(ev) {
     const el = ev.target;
     if (!el) return;
-    if (el.id === 'mem-add-cat') { ui.memAddCat = el.value; return; }
+    if (el.id === 'mem-text') { saveMemoryDraft(); render(); return; }
     if (el.dataset && el.dataset.qlGrams != null && ui.quick) {
       const i = Number(el.dataset.qlGrams);
       const it = ui.quick.items[i];
@@ -5629,14 +5625,6 @@
         ev.preventDefault();
         const txt = String(el.value || '').trim();
         if (txt) { ui.mcDraft = ''; sendMenuChat(txt); }
-      } else if (el.id === 'mem-add-text' && ev.key === 'Enter') {
-        ev.preventDefault();
-        const b = document.querySelector('[data-action="mem-add"]');
-        if (b) b.click();
-      } else if (el.id === 'mem-edit-input' && ev.key === 'Enter') {
-        ev.preventDefault();
-        const b = document.querySelector('[data-action="mem-save"]');
-        if (b) b.click();
       }
     });
     if (window.visualViewport) {
@@ -5644,7 +5632,13 @@
       window.visualViewport.addEventListener('scroll', syncViewport);
       syncViewport();
     }
-    if (root.FitMenuChat) root.FitMenuChat.onChange(function () { if (ui.tab === 'nutrition') render(); });
+    // editing the memory text: the chat sheet steps aside for the keyboard
+    document.addEventListener('focusin', function (ev) { if (ev.target && ev.target.id === 'mem-text') document.body.classList.add('mem-editing'); });
+    document.addEventListener('focusout', function (ev) { if (ev.target && ev.target.id === 'mem-text') document.body.classList.remove('mem-editing'); });
+    if (root.FitMenuChat) {
+      root.FitMenuChat.onChange(function () { if (ui.tab === 'nutrition') render(); });
+      if (root.FitMenuChat.onStream) root.FitMenuChat.onStream(onMenuStream);
+    }
     document.addEventListener('input', function (ev) {
       const el = ev.target;
       if (el && el.dataset.cardio) { syncCardioField(el); return; }
@@ -5660,8 +5654,15 @@
       if (el && el.dataset.tex != null) onTexInput(el);
       if (el && el.dataset.meal != null) syncMeal(el);
       if (el && el.id === 'mc-input') { ui.mcDraft = el.value; el.style.height = 'auto'; el.style.height = Math.min(96, el.scrollHeight) + 'px'; return; }
-      if (el && el.id === 'mem-add-text') { ui.memDraft = el.value; return; }
-      if (el && el.id === 'mem-edit-input') { ui.memEditDraft = el.value; return; }
+      if (el && el.id === 'mem-text') {
+        ui.memDraft = el.value;
+        const card = el.closest('.mem-card');
+        const st = card && card.querySelector('.mem-state');
+        const dirty = MCx() ? el.value !== MCx().memoryText(state()) : true;
+        if (card) card.classList.toggle('dirty', dirty);
+        if (st) st.textContent = dirty ? 'לא נשמר' : 'נשמר';
+        return;
+      }
       if (el && el.id === 'ql-text') { qlState().text = el.value; return; }
       if (el && el.id === 'ql-code') { qlState().code = el.value; return; }
       if (el && el.id === 'swap-query') {

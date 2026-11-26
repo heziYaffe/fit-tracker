@@ -1,23 +1,23 @@
-/* פיט — the menu chat (v48). One AI flow for the menu: every message goes to
-   the model with the recent conversation, the current menu, the memory card
-   and the targets from Settings. The reply can build a menu, edit it, ask a
-   question or just answer, and can add/remove memory items. Changes go
-   straight to «התפריט שלי» (all week) and can be undone one by one or all
-   together. Hard "לא אוכל" items are enforced in code (blocked ids), not only
-   in the prompt. Nutrition always comes from the food table. */
+/* פיט — the menu chat (v48, v49). One AI flow for the menu: every message goes
+   to the model with the recent conversation, the current menu, the memory card
+   (free text, like a system prompt) and the targets from Settings. The reply
+   streams in, then can build a menu, edit it, ask a question or just answer,
+   add/remove memory lines and suggest follow-ups. Changes go straight to
+   «התפריט שלי» (all week) and can be undone one by one or all together.
+   Nutrition always comes from the food table. */
 (function (root) {
   'use strict';
 
   const CHAT_KEY = 'hazi-fit-menu-chat';
   const MENU_NAME = 'התפריט שלי';
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
-  const CATS = [['avoid', 'לא אוכל'], ['like', 'מועדף'], ['habit', 'הרגלים'], ['logistics', 'לוגיסטיקה'], ['goal', 'מטרות']];
-  const CAT_LABEL = {};
-  CATS.forEach(function (c) { CAT_LABEL[c[0]] = c[1]; });
   const GOAL_LABEL = { cut: 'חיטוב', bulk: 'מסה' };
 
   let provider = null;
   let busy = false;
+  let streamText = '';
+  let streamAction = '';
+  const streamListeners = [];
   let chat = null;
   const listeners = [];
 
@@ -29,93 +29,125 @@
   function now() { return new Date().toISOString(); }
   function norm(t) { return String(t || '').replace(/["'`.,!?״]/g, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
   function notify() { listeners.forEach(function (fn) { try { fn(); } catch (e) { /* ignore */ } }); }
+  function notifyStream() { streamListeners.forEach(function (fn) { try { fn(streamText, streamAction); } catch (e) { /* ignore */ } }); }
 
-  // ---------- memory card ----------
-  // Built once from the wizard's saved preferences (chips, dislikes, words).
-  function migrateMemory(set) {
-    const p = (set && set.menuPrefs) || {};
-    const Fd = F();
-    const out = [];
-    function has(t) { return out.some(function (m) { return norm(m.text) === norm(t); }); }
-    (p.excludes || []).forEach(function (id) {
-      const o = ((Fd && Fd.EXCLUDE_OPTIONS) || []).find(function (x) { return x.id === id; });
-      if (!o) return;
-      const veg = id === 'veg';
-      out.push({ id: uid(), cat: veg ? 'habit' : 'avoid', text: veg ? 'צמחוני' : o.label.replace(/^בלי\s+/, ''), excl: id, src: 'prefs' });
-    });
-    (p.dislikes || []).forEach(function (id) {
-      const f = Fd && Fd.byId ? Fd.byId[id] : null;
-      if (f && !has(f.name)) out.push({ id: uid(), cat: 'avoid', text: f.name, dbId: id, src: 'prefs' });
-    });
-    (p.dislikeTerms || []).forEach(function (t) { if (t && !has(t)) out.push({ id: uid(), cat: 'avoid', text: String(t), src: 'prefs' }); });
-    if (Number(p.meals) && Number(p.meals) !== 4) out.push({ id: uid(), cat: 'habit', text: p.meals + ' ארוחות ביום', src: 'prefs' });
-    if (GOAL_LABEL[p.goal]) out.push({ id: uid(), cat: 'goal', text: GOAL_LABEL[p.goal], src: 'prefs' });
+  // The `reply` string from a JSON object that is still being written:
+  // '{"reply":"שלום \"ע' → 'שלום "ע'. Stops before an incomplete escape.
+  const ESC = { n: '\n', t: '\t', r: '', b: '', f: '', '"': '"', '\\': '\\', '/': '/' };
+  function partialReply(raw) {
+    raw = String(raw || '');
+    const m = /"reply"\s*:\s*"/.exec(raw);
+    if (!m) return '';
+    let i = m.index + m[0].length, out = '';
+    while (i < raw.length) {
+      const c = raw[i];
+      if (c === '"') break;
+      if (c === '\\') {
+        if (i + 1 >= raw.length) break;
+        const n = raw[i + 1];
+        if (n === 'u') {
+          const hex = raw.substr(i + 2, 4);
+          if (hex.length < 4) break;
+          const code = parseInt(hex, 16);
+          if (!isNaN(code)) out += String.fromCharCode(code);
+          i += 6;
+          continue;
+        }
+        out += Object.prototype.hasOwnProperty.call(ESC, n) ? ESC[n] : n;
+        i += 2;
+        continue;
+      }
+      out += c;
+      i++;
+    }
     return out;
   }
 
-  function memory(state) {
-    state = state || S().getState();
-    const set = (state && state.settings) || {};
-    return Array.isArray(set.menuMemory) ? set.menuMemory : migrateMemory(set);
-  }
-  function saveMemory(list) {
-    S().updateSettings({ menuMemory: list.map(function (m) {
-      const o = { id: m.id || uid(), cat: CAT_LABEL[m.cat] ? m.cat : 'habit', text: String(m.text || '').slice(0, 60), src: m.src || 'manual' };
-      if (m.excl) o.excl = m.excl;
-      if (m.dbId) o.dbId = m.dbId;
-      if (m.at) o.at = m.at;
-      return o;
-    }) });
-  }
-  function addMemory(cat, text, src) {
-    text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    if (!text) return null;
-    cat = CAT_LABEL[cat] ? cat : 'habit';
-    const list = memory().slice();
-    if (list.some(function (m) { return m.cat === cat && norm(m.text) === norm(text); })) return null;
-    const item = { id: uid(), cat: cat, text: text, src: src || 'manual', at: now() };
-    list.push(item);
-    saveMemory(list);
-    return item;
-  }
-  function updateMemory(id, patch) {
-    const list = memory().map(function (m) {
-      if (m.id !== id) return m;
-      const next = Object.assign({}, m, patch);
-      // edited text is read again from the words; the old chip link goes
-      if (patch.text != null && norm(patch.text) !== norm(m.text)) { delete next.excl; delete next.dbId; }
-      return next;
-    }).filter(function (m) { return String(m.text || '').trim(); });
-    saveMemory(list);
-  }
-  function removeMemory(id) {
-    const list = memory();
-    const item = list.find(function (m) { return m.id === id; }) || null;
-    if (item) saveMemory(list.filter(function (m) { return m.id !== id; }));
-    return item;
-  }
-  function restoreMemory(item) {
-    if (!item) return;
-    const list = memory().slice();
-    if (list.some(function (m) { return m.id === item.id || (m.cat === item.cat && norm(m.text) === norm(item.text)); })) return;
-    list.push(item);
-    saveMemory(list);
+  // ---------- memory card («מה אני יודע עליך») ----------
+  // v49: free text, like a system prompt. Sent to the model as is with every
+  // message; the model may add or remove whole lines. No code-level blocking:
+  // the model is trusted with "לא אוכל ..." lines.
+  const MEM_MAX = 3000;
+  function lines(text) { return String(text || '').split('\n').map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(Boolean); }
+
+  // Built once from what older versions saved: the v48 memory items, or the
+  // wizard's preferences (chips, dislikes, words).
+  function migrateMemory(set) {
+    set = set || {};
+    const out = [];
+    function push(t) { t = String(t || '').replace(/\s+/g, ' ').trim(); if (t && !out.some(function (x) { return norm(x) === norm(t); })) out.push(t); }
+    if (Array.isArray(set.menuMemory)) {
+      set.menuMemory.forEach(function (m) {
+        const t = String((m && m.text) || '').trim();
+        if (!t) return;
+        if (m.cat === 'avoid') push(/^(לא|בלי)\s/.test(t) ? t : 'לא אוכל ' + t);
+        else if (m.cat === 'like') push(/^(אוהב|מעדיף)/.test(t) ? t : 'אוהב ' + t);
+        else if (m.cat === 'goal') push(/^מטרה/.test(t) ? t : 'מטרה: ' + t);
+        else push(t);
+      });
+      return out.join('\n');
+    }
+    const p = set.menuPrefs || {};
+    const Fd = F();
+    (p.excludes || []).forEach(function (id) {
+      const o = ((Fd && Fd.EXCLUDE_OPTIONS) || []).find(function (x) { return x.id === id; });
+      if (!o) return;
+      push(id === 'veg' ? 'צמחוני' : 'לא אוכל ' + o.label.replace(/^בלי\s+/, ''));
+    });
+    (p.dislikes || []).forEach(function (id) { const f = Fd && Fd.byId ? Fd.byId[id] : null; if (f) push('לא אוכל ' + f.name); });
+    (p.dislikeTerms || []).forEach(function (t) { if (t) push('לא אוכל ' + t); });
+    if (Number(p.meals) && Number(p.meals) !== 4) push(p.meals + ' ארוחות ביום');
+    if (GOAL_LABEL[p.goal]) push('מטרה: ' + GOAL_LABEL[p.goal]);
+    return out.join('\n');
   }
 
-  // FitFood prefs from the memory card (+ the words of this message): every
-  // "לא אוכל" item blocks its foods everywhere (catalog, reply, swaps).
-  function prefs(state, extraText) {
-    const p = { excludes: [], dislikes: [], rules: [], note: String(extraText || '') };
-    memory(state).forEach(function (m) {
-      if (m.excl) { if (p.excludes.indexOf(m.excl) < 0) p.excludes.push(m.excl); return; }
-      if (m.cat === 'avoid') {
-        if (m.dbId) p.dislikes.push(m.dbId);
-        p.rules.push('בלי ' + m.text);
-      } else if (/טבעוני|צמחוני/.test(m.text) && F() && F().textExcludes) {
-        F().textExcludes(m.text).forEach(function (x) { if (p.excludes.indexOf(x) < 0) p.excludes.push(x); });
-      }
+  function memoryText(state) {
+    state = state || S().getState();
+    const set = (state && state.settings) || {};
+    return typeof set.menuMemoryText === 'string' ? set.menuMemoryText : migrateMemory(set);
+  }
+  function setMemoryText(text) {
+    const t = String(text == null ? '' : text).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, MEM_MAX);
+    S().updateSettings({ menuMemoryText: t });
+    notify();
+    return t;
+  }
+  function memory(state) { return lines(memoryText(state)); }
+
+  // The model's line edits. Returns the ops that really changed something.
+  function findLine(list, t) {
+    const n = norm(t);
+    if (!n) return -1;
+    let i = list.findIndex(function (l) { return norm(l) === n; });
+    if (i < 0 && n.length >= 3) i = list.findIndex(function (l) { const m = norm(l); return m.indexOf(n) >= 0 || n.indexOf(m) >= 0; });
+    return i;
+  }
+  function applyMemoryOps(add, remove) {
+    const raw = memoryText().split('\n');
+    const ops = [];
+    (remove || []).forEach(function (t) {
+      const live = raw.map(function (l) { return l.replace(/\s+/g, ' ').trim(); });
+      const keyed = live.map(function (l, i) { return { l: l, i: i }; }).filter(function (x) { return x.l; });
+      const k = findLine(keyed.map(function (x) { return x.l; }), t);
+      if (k < 0) return;
+      ops.push({ op: 'remove', text: keyed[k].l });
+      raw.splice(keyed[k].i, 1);
     });
-    return p;
+    (add || []).forEach(function (t) {
+      t = String(t || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!t) return;
+      if (raw.some(function (l) { return norm(l) === norm(t); })) return;
+      while (raw.length && !raw[raw.length - 1].trim()) raw.pop();
+      raw.push(t);
+      ops.push({ op: 'add', text: t });
+    });
+    if (ops.length) setMemoryText(raw.join('\n'));
+    return ops;
+  }
+
+  // FitFood prefs for the menu engine. v49: nothing blocked in code.
+  function prefs(state, extraText) {
+    return { excludes: [], dislikes: [], rules: [], note: String(extraText || '') };
   }
 
   function targets(state) {
@@ -190,24 +222,22 @@
 
   // ---------- talking to the model ----------
   function available() { return !!provider || !!(root.FitAI && root.FitAI.available && root.FitAI.available()); }
-  function callModel(body) {
-    if (provider) return Promise.resolve().then(function () { return provider(body); });
+  function callModel(body, hooks) {
+    if (provider) return Promise.resolve().then(function () { return provider(body, hooks); });
     if (!root.FitAI || !root.FitAI.menuChat) return Promise.reject(new Error('ה-AI לא זמין כרגע.'));
-    return root.FitAI.menuChat(body);
+    return root.FitAI.menuChat(body, hooks);
   }
 
   function requestBody(state, text, fresh) {
-    const pre = prefs(state, text);
     const t = targets(state);
     const cur = fresh ? null : currentMeals();
     return {
       messages: chat.messages.filter(function (m) { return !m.error && m.text; }).slice(-10)
         .map(function (m) { return { role: m.role === 'user' ? 'user' : 'model', text: String(m.text).slice(0, 600) }; }),
-      memory: memory(state).map(function (m) { return { cat: m.cat, text: m.text }; }),
+      memory: memoryText(state),
       targets: { protein: t.protein, calories: t.calories, carbs: t.carbs, fat: t.fat },
       current: cur ? compact(cur) : null,
-      catalog: F().catalog(pre),
-      blocked: Object.keys(F().blockedIds(pre))
+      catalog: F().catalog(prefs(state, text))
     };
   }
 
@@ -233,15 +263,31 @@
     notify();
     let body;
     try { body = requestBody(S().getState(), text, !!opts.fresh); } catch (e) { body = null; }
-    const p = body ? callModel(body) : Promise.reject(new Error('לא הצלחתי להכין את הבקשה.'));
+    let raw = '';
+    streamText = '';
+    streamAction = '';
+    const hooks = {
+      onText: function (t) {
+        raw += t;
+        const rep = partialReply(raw);
+        // `action` comes right after the reply: build/edit → the menu follows
+        const am = streamAction ? null : /"action"\s*:\s*"(\w+)"/.exec(raw);
+        const act = am ? am[1] : streamAction;
+        if (rep !== streamText || act !== streamAction) { streamText = rep; streamAction = act; notifyStream(); }
+      },
+      onReset: function () { raw = ''; if (streamText || streamAction) { streamText = ''; streamAction = ''; notifyStream(); } }
+    };
+    const p = body ? callModel(body, hooks) : Promise.reject(new Error('לא הצלחתי להכין את הבקשה.'));
     return p.then(function (r) {
       busy = false;
+      streamText = ''; streamAction = '';
       let msg;
       try { msg = apply(r, text, opts); } catch (e) { msg = failMsg(e, text, opts); }
       notify();
       return msg;
     }, function (err) {
       busy = false;
+      streamText = ''; streamAction = '';
       const msg = failMsg(err, text, opts);
       notify();
       return msg;
@@ -259,20 +305,12 @@
     r = r || {};
     const action = String(r.action || '');
     const msg = { id: uid(), role: 'model', text: String(r.reply || '').slice(0, 600), action: action, at: now() };
-    // 1. memory first, so a new "לא אוכל" already binds this menu
-    const ops = [];
+    // 1. memory line edits (shown under the reply with «בטל»)
     const mem = r.memory || {};
-    (mem.remove || []).forEach(function (t) {
-      const n = norm(t);
-      if (!n) return;
-      const it = memory().find(function (m) { return norm(m.text) === n || (n.length >= 3 && (norm(m.text).indexOf(n) >= 0 || n.indexOf(norm(m.text)) >= 0)); });
-      if (it && removeMemory(it.id)) ops.push({ op: 'remove', item: it });
-    });
-    (mem.add || []).forEach(function (a) {
-      const it = addMemory(a && a.cat, a && a.text, 'chat');
-      if (it) ops.push({ op: 'add', item: it });
-    });
+    const ops = applyMemoryOps((mem.add || []).map(function (a) { return a && typeof a === 'object' ? a.text : a; }), mem.remove || []);
     if (ops.length) msg.mem = ops;
+    const sug = (Array.isArray(r.suggestions) ? r.suggestions : []).map(function (x) { return String(x || '').trim().slice(0, 40); }).filter(Boolean).slice(0, 3);
+    if (sug.length) msg.suggestions = sug;
     // 2. the menu
     if ((action === 'build' || action === 'edit') && Array.isArray(r.meals) && r.meals.length) {
       const state = S().getState();
@@ -393,10 +431,21 @@
     load();
     const m = chat.messages.find(function (x) { return x.id === msgId; });
     if (!m || !m.mem || m.memUndone) return false;
+    const raw = memoryText().split('\n');
+    let changed = false;
     m.mem.slice().reverse().forEach(function (op) {
-      if (op.op === 'add') removeMemory(op.item.id);
-      else restoreMemory(op.item);
+      const t = op.text || (op.item && op.item.text) || '';
+      if (!t) return;
+      if (op.op === 'add') {
+        const k = raw.findIndex(function (l) { return norm(l) === norm(t); });
+        if (k >= 0) { raw.splice(k, 1); changed = true; }
+      } else if (!raw.some(function (l) { return norm(l) === norm(t); })) {
+        while (raw.length && !raw[raw.length - 1].trim()) raw.pop();
+        raw.push(t);
+        changed = true;
+      }
     });
+    if (changed) setMemoryText(raw.join('\n'));
     m.memUndone = true;
     persist();
     notify();
@@ -422,7 +471,11 @@
     return ch.idx.map(function (i) { return (src[i] && src[i].name) || (ch.before && ch.before[i] && ch.before[i].name) || ''; }).filter(Boolean);
   }
 
+  // The model's follow-ups from its last reply; fixed ones before that.
   function chips() {
+    const msgs = load().messages;
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'model' && !last.error && last.suggestions && last.suggestions.length) return last.suggestions.slice(0, 3);
     return currentMeals()
       ? ['ערב קל יותר', 'בלי בישול בבוקר', 'יותר חלבון בבוקר', 'תחליף את הצהריים']
       : ['תבנה לי תפריט', 'אין לי זמן לבשל בבוקר', '3 ארוחות ביום'];
@@ -431,15 +484,15 @@
   function reset() { chat = freshChat(); busy = false; persist(); }
 
   root.FitMenuChat = {
-    CATS: CATS, CAT_LABEL: CAT_LABEL, MENU_NAME: MENU_NAME,
-    memory: memory, migrateMemory: migrateMemory, addMemory: addMemory, updateMemory: updateMemory, removeMemory: removeMemory, restoreMemory: restoreMemory,
-    prefs: prefs, targets: targets,
-    state: load, messages: function () { return load().messages; }, isBusy: function () { return busy; },
+    MENU_NAME: MENU_NAME, MEM_MAX: MEM_MAX,
+    memory: memory, memoryText: memoryText, setMemoryText: setMemoryText, migrateMemory: migrateMemory, applyMemoryOps: applyMemoryOps,
+    prefs: prefs, targets: targets, partialReply: partialReply,
+    state: load, messages: function () { return load().messages; }, isBusy: function () { return busy; }, streamText: function () { return streamText; }, streamAction: function () { return streamAction; },
     available: available, setProvider: function (fn) { provider = typeof fn === 'function' ? fn : null; },
     send: send, retry: retry, applyBasic: applyBasic,
     undoChange: undoChange, undoAll: undoAll, canUndoAll: canUndoAll, undoMemory: undoMemory,
     highlights: highlights, change: change, changedNames: changedNames, chips: chips,
     currentMeals: currentMeals, savedMenu: savedMenu, sameMeal: sameMeal, requestBody: function (text, fresh) { load(); return requestBody(S().getState(), text, fresh); },
-    onChange: function (fn) { listeners.push(fn); }, reset: reset
+    onChange: function (fn) { listeners.push(fn); }, onStream: function (fn) { streamListeners.push(fn); }, reset: reset
   };
 })(typeof window !== 'undefined' ? window : globalThis);

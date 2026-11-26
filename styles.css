@@ -2456,17 +2456,19 @@ html.av-lock, html.av-lock body { overflow: hidden; }
 .mem-card.open .mem-head .chev { transform: rotate(90deg); }
 .mem-card.open { padding-bottom: 10px; }
 .mem-card.open > :not(.mem-head) { margin-inline: 14px; }
-.mem-cat { margin-bottom: 8px; }
-.mem-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  border-bottom: 1px solid var(--line); min-height: 40px; font-size: 0.92rem;
+.mem-text {
+  display: block; width: calc(100% - 28px); box-sizing: border-box; min-height: 180px; max-height: 50vh; resize: vertical;
+  font-size: 16px; line-height: 1.55; padding: 10px 12px; border-radius: 12px;
+  background: var(--bg-card-2); color: var(--text); border: 1px solid var(--line);
 }
-.mem-item .linkish { min-height: 36px; padding: 4px 6px; font-size: 0.8rem; }
-.mem-item .icon-btn { width: 32px; height: 32px; }
-.mem-acts { display: flex; align-items: center; flex-shrink: 0; }
-.mem-item.editing input { flex: 1; min-width: 0; font-size: 16px; }
-.mem-add { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; margin-top: 6px; }
-.mem-add select, .mem-add input { min-width: 0; font-size: 16px; }
+.mem-card.dirty .mem-text { border-color: var(--accent); }
+.mem-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.mem-state { flex: 1; color: var(--text-muted); font-size: 0.8rem; }
+.mem-card.dirty .mem-state { color: var(--accent); }
+.mem-card:not(.dirty) .mem-row .linkish { display: none; }
+.mem-card.open .hp-legend { margin-top: 8px; }
+body.mem-editing .mc-sheet { display: none; }
+body.mem-editing .mc-spacer { height: 40vh; }
 
 body.is-chat .main { padding-bottom: 0; }
 .mc-totals { font-size: 0.8rem; margin-bottom: 4px; }
@@ -2510,6 +2512,9 @@ body.kb-open .mc-log { max-height: calc(var(--vvh, 100vh) * 0.24); }
 .mc-msg.err { border: 1px solid var(--danger); }
 .mc-msg.err p { margin: 0 0 6px; }
 .mc-msg.typing { color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+.mc-msg.streaming:not(.working) .mc-stream-text::after { content: '▍'; margin-inline-start: 2px; color: var(--accent); animation: mc-caret 1s steps(2) infinite; }
+.mc-working { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--text-muted); font-size: 0.8rem; }
+@keyframes mc-caret { 50% { opacity: 0; } }
 .mc-note { margin-top: 5px; font-size: 0.78rem; color: var(--text-muted); white-space: normal; }
 .mc-note .linkish { min-height: 28px; padding: 0 4px; font-size: 0.78rem; }
 .mc-note.mem { color: var(--accent); }

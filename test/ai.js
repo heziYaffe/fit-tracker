@@ -7,7 +7,7 @@ const rootDir = path.join(__dirname, '..');
 const mem = {};
 const ctx = {
   console, Date, Math, Number, String, Array, Object, JSON, parseInt, isFinite, Promise,
-  setTimeout, clearTimeout,
+  setTimeout, clearTimeout, TextDecoder, TextEncoder, ReadableStream,
   localStorage: {
     getItem: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },
     setItem: function (k, v) { mem[k] = String(v); },
@@ -31,13 +31,25 @@ ctx.FitSync.authedFetch = function (url, opts) {
   calls.push({ url: url, body: opts.body ? JSON.parse(opts.body) : null });
   const r = typeof reply === 'function' ? reply(url) : reply;
   if (r === 'network') return Promise.reject(new Error('offline'));
-  return Promise.resolve({ ok: r.status === 200, status: r.status, json: function () { return Promise.resolve(r.body); } });
+  if (r.stream) {
+    // server-sent events, cut into awkward pieces (mid-event, mid-UTF-8)
+    const bytes = new TextEncoder().encode(r.stream.map(function (e) { return typeof e === 'string' ? e : 'data: ' + JSON.stringify(e) + '\n\n'; }).join(''));
+    const pieces = [];
+    for (let i = 0; i < bytes.length; i += 7) pieces.push(bytes.slice(i, i + 7));
+    let k = 0;
+    return Promise.resolve({ ok: true, status: 200, headers: { get: function () { return 'text/event-stream; charset=utf-8'; } },
+      body: { getReader: function () { return { read: function () {
+        if (r.cut && k >= pieces.length / 2) return Promise.reject(new Error('network lost'));
+        return Promise.resolve(k < pieces.length ? { done: false, value: pieces[k++] } : { done: true });
+      } }; } } });
+  }
+  return Promise.resolve({ ok: r.status === 200, status: r.status, headers: { get: function () { return 'application/json'; } }, json: function () { return Promise.resolve(r.body); } });
 };
 const toasts = [];
 ctx.FitUI = { toast: function (m) { toasts.push(m); } };
 
 (async function () {
-  assert(F.hasTextProvider() && F.hasMenuProvider(), 'providers installed');
+  assert(F.hasTextProvider() && !F.setMenuProvider, 'text provider installed, old menu hook gone');
 
   // signed out: no server call, rules only
   let items = await F.parseFoodText('2 ביצים וגלידת שוקולד מוזרה');
@@ -80,36 +92,39 @@ ctx.FitUI = { toast: function (m) { toasts.push(m); } };
   items = await F.parseFoodText('עוד משהו לא מוכר');
   assert(items[0].unmatched, 'network fallback');
 
-  // menu: AI spec validated + refit by FitFood; failure → rule menu
-  const prefs = { protein: 150, calories: 2200, meals: 3, excludes: ['nofish'], dislikes: [], note: 'בוקר מהיר' };
-  reply = { status: 200, body: { reply: 'בניתי תפריט פשוט', meals: [
-    { name: 'בוקר', foods: [{ dbId: 'proyogurt', grams: 200 }, { dbId: 'oats', grams: 50 }] },
-    { name: 'צהריים', foods: [{ dbId: 'chicken', grams: 200 }, { dbId: 'rice', grams: 200 }, { dbId: 'salmon', grams: 150 }, { dbId: 'nope', grams: 9 }] },
-    { name: 'ערב', foods: [{ dbId: 'egg', grams: 150 }, { dbId: 'wbread', grams: 60 }] }] } };
-  let menu = await F.buildMenuAsync(prefs);
-  const last = calls[calls.length - 1];
-  assert(/\/llm\/menu$/.test(last.url) && last.body.prefs.note === 'בוקר מהיר' && last.body.catalog.length > 20, 'menu request');
-  assert(AI.lastMenuReply() === 'בניתי תפריט פשוט', 'reply kept');
-  assert(!last.body.catalog.some(function (c) { return c.tags.indexOf('fish') >= 0; }), 'excluded foods not sent');
-  assert(last.body.slots.length === 3 && last.body.slots[0].name === 'בוקר', 'meal slots sent');
-  assert(last.body.blocked.indexOf('salmon') >= 0 && last.body.prefs.dislikes === undefined, 'blocked ids sent separately, not as prompt text');
-  const ids = [].concat.apply([], menu.meals.map(function (m) { return m.foods.map(function (f) { return f.dbId; }); }));
-  assert(ids.indexOf('salmon') < 0 && ids.indexOf('nope') < 0, 'excluded/unknown dropped');
-  assert(ids.indexOf('chicken') >= 0, 'AI pick kept');
-  // a food disliked in words never reaches the model and is replaced if it comes back
-  reply = { status: 200, body: { reply: 'ok', meals: [
-    { name: 'בוקר', foods: [{ dbId: 'cottage', grams: 200, role: 'bp' }, { dbId: 'wbread', grams: 60, role: 'bc' }] },
-    { name: 'צהריים', foods: [{ dbId: 'tuna', grams: 110, role: 'mp' }, { dbId: 'rice', grams: 200, role: 'mc' }] },
-    { name: 'ערב', foods: [{ dbId: 'egg', grams: 150, role: 'bp' }] }] } };
-  menu = await F.buildMenuAsync({ protein: 150, calories: 2200, meals: 3, excludes: [], dislikes: ['tuna'], note: 'לא אוהב קוטג׳' });
-  const sent = calls[calls.length - 1].body;
-  assert(!sent.catalog.some(function (c) { return c.id === 'tuna' || c.id === 'cottage'; }), 'disliked foods not in catalog');
-  const ids2 = [].concat.apply([], menu.meals.map(function (m) { return m.foods.map(function (f) { return f.dbId; }); }));
-  assert(ids2.indexOf('tuna') < 0 && ids2.indexOf('cottage') < 0, 'disliked foods replaced in AI menu');
-  assert(menu.meals[1].foods.some(function (f) { return f.role === 'mp'; }), 'lunch keeps a protein');
-  reply = { status: 503, body: { error: 'busy', message: 'Gemini עמוס כרגע.' } };
-  menu = await F.buildMenuAsync(prefs);
-  assert(menu && menu.meals.length === 3 && AI.lastMenuReply() === '', 'rule menu on failure');
+  // v49: the menu chat, plain and streamed
+  reply = { status: 200, body: { reply: 'בסדר', action: 'none', suggestions: [], memory: { add: [], remove: [] }, meals: [], month_usd: 0.5, cap_usd: 10 } };
+  let r = await AI.menuChat({ messages: [{ role: 'user', text: 'היי' }] });
+  assert(/\/llm\/menuchat$/.test(calls[calls.length - 1].url) && r.reply === 'בסדר', 'plain menuchat call');
+  const full = JSON.stringify({ reply: 'בניתי לך "תפריט" חדש ✓', action: 'none', suggestions: ['ערב קל'], memory: { add: [], remove: [] }, meals: [] });
+  const chunks = [full.slice(0, 5), full.slice(5, 23), full.slice(23)];
+  reply = { stream: [{ t: 'chunk', text: 'זבל' }, { t: 'reset' }].concat(chunks.map(function (c) { return { t: 'chunk', text: c }; }),
+    [': keep-alive\n\n', { t: 'done', data: JSON.parse(full), usage: { first_ms: 400 }, month_usd: 0.75, cap_usd: 10 }]) };
+  let got = '', resets = 0;
+  r = await AI.menuChat({ messages: [] }, { onText: function (t) { got += t; }, onReset: function () { resets++; got = ''; } });
+  assert(/\/llm\/menuchat\?stream=1$/.test(calls[calls.length - 1].url), 'stream url');
+  assert(resets === 1 && got === full, 'chunks reassembled after a reset');
+  assert(r.reply === 'בניתי לך "תפריט" חדש ✓' && r.suggestions[0] === 'ערב קל' && r.usage.first_ms === 400, 'done event = result');
+  assert(/\$0\.75 מתוך/.test(AI.usageLine()), 'usage saved from the stream');
+  reply = { stream: [{ t: 'chunk', text: '{"reply":"' }, { t: 'error', error: 'busy', message: 'Gemini עמוס כרגע.', month_usd: 0.76, cap_usd: 10 }] };
+  let err = null;
+  try { await AI.menuChat({}, { onText: function () {} }); } catch (e) { err = e; }
+  assert(err && err.code === 'busy' && /עמוס/.test(err.message), 'error event rejects with its message');
+  reply = { stream: [{ t: 'chunk', text: full }], cut: true };
+  err = null;
+  try { await AI.menuChat({}, { onText: function () {} }); } catch (e) { err = e; }
+  assert(err && err.code === 'busy', 'dropped connection rejects');
+  reply = { status: 402, body: { error: 'cap', message: 'הגעת לתקרה', month_usd: 10, cap_usd: 10 } };
+  err = null;
+  try { await AI.menuChat({}, { onText: function () {} }); } catch (e) { err = e; }
+  assert(err && err.code === 'cap', 'JSON error before streaming');
+  const evs = [];
+  const sp = AI.sseParser(function (e) { evs.push(e); });
+  sp.push('data: {"t":"chunk",'); sp.push('"text":"a"}\r\n\r\ndata: not json\n\n: ping\n\ndata: {"t":"done"}');
+  assert(evs.length === 1, 'waits for the blank line');
+  sp.end();
+  assert(evs.length === 2 && evs[0].text === 'a' && evs[1].t === 'done', 'sse parser: CRLF, junk, comments, tail');
+  calls = [];
 
   // plan → templates, loads from the engine, supersets, static holds
   Store.addWorkout({ date: '2026-11-10', type: 'chest', exercises: [{ name: 'לחיצת חזה', sets: 3, reps: 8, weight: 60, setLogs: [{ weight: 60, reps: 8 }, { weight: 60, reps: 8 }, { weight: 60, reps: 8 }] }] });

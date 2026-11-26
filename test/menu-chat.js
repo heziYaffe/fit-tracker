@@ -1,7 +1,7 @@
-// v48 menu chat: memory card (migration, blocking), build/edit/ask replies,
-// changes applied to «התפריט שלי» at once, undo one change / undo all,
-// memory ops + undo, failure → retry, fresh menu resets the conversation,
-// carbs/fat targets.
+// v48/v49 menu chat: free-text memory (migration, line ops, undo), streamed
+// reply text, smart suggestions, build/edit/ask replies, changes applied to
+// «התפריט שלי» at once, undo one change / undo all, failure → retry, fresh
+// menu resets the conversation, carbs/fat targets. No code-level blocking.
 const vm = require('vm');
 const fs = require('fs');
 const path = require('path');
@@ -35,29 +35,60 @@ const t0 = tot(base), t1 = tot(withMacros);
 assert(Math.abs(t1.c - 150) + Math.abs(t1.f - 110) < Math.abs(t0.c - 150) + Math.abs(t0.f - 110) - 30, 'carbs/fat closer: ' + JSON.stringify([t0, t1]));
 assert(t1.p >= 145 && Math.abs(t1.k - 2400) < 250, 'protein/calories still hit: ' + JSON.stringify(t1));
 
-// memory: migrated from the wizard prefs, not written until changed
+// memory: migrated from the wizard prefs as text lines, not written until changed
 Store.updateSettings({ menuPrefs: { goal: 'cut', meals: 3, excludes: ['nodairy'], dislikes: ['tuna'], dislikeTerms: ['קוטג׳'] } });
-let memList = MC.memory();
-assert(memList.some(m => m.cat === 'avoid' && m.text === 'מוצרי חלב' && m.excl === 'nodairy'), 'exclude chip migrated');
-assert(memList.some(m => m.cat === 'avoid' && m.dbId === 'tuna'), 'dislike migrated');
-assert(memList.some(m => m.text === '3 ארוחות ביום') && memList.some(m => m.cat === 'goal' && m.text === 'חיטוב'), 'meals + goal migrated');
-let blocked = F.blockedIds(MC.prefs());
-assert(blocked.tuna && blocked.tunaoil && blocked.cottage && blocked.yogurt, 'memory blocks foods + dairy: ' + Object.keys(blocked).length);
-// start clean for the chat
-Store.updateSettings({ menuMemory: [] });
-assert(MC.memory().length === 0, 'explicit empty memory is kept');
-MC.addMemory('avoid', 'טונה');
-assert(F.blockedIds(MC.prefs()).tuna, 'manual "לא אוכל טונה" blocks tuna');
-assert(MC.addMemory('avoid', 'טונה') === null, 'no duplicates');
+let memText = MC.memoryText();
+assert(/^לא אוכל מוצרי חלב$/m.test(memText) && /^לא אוכל טונה/m.test(memText) && /^לא אוכל קוטג׳$/m.test(memText), 'prefs migrated to lines: ' + memText);
+assert(/^3 ארוחות ביום$/m.test(memText) && /^מטרה: חיטוב$/m.test(memText), 'meals + goal migrated');
+assert(Store.getState().settings.menuMemoryText === undefined, 'migration is lazy');
+// v48 memory items win over the old prefs
+Store.updateSettings({ menuMemory: [{ id: 'a', cat: 'avoid', text: 'טונה' }, { id: 'b', cat: 'habit', text: 'אין זמן לבשל בבוקר' }, { id: 'c', cat: 'like', text: 'אוכל חריף' }, { id: 'd', cat: 'goal', text: 'חיטוב' }, { id: 'e', cat: 'avoid', text: 'בלי גלוטן' }] });
+assert(MC.memoryText() === 'לא אוכל טונה\nאין זמן לבשל בבוקר\nאוהב אוכל חריף\nמטרה: חיטוב\nבלי גלוטן', 'v48 items → lines: ' + MC.memoryText());
+// no blocking any more: the whole menu catalog is offered
+const pre = MC.prefs();
+assert(!pre.dislikes.length && !pre.excludes.length && !Object.keys(F.blockedIds(pre)).length, 'nothing blocked in code');
+// start clean for the chat; free text is kept as written (trimmed)
+MC.setMemoryText('');
+assert(MC.memoryText() === '' && MC.memory().length === 0, 'explicit empty memory is kept');
+MC.setMemoryText('  לא אוכל טונה  \r\n\n\n\nמתאמן ב-18:00   ');
+assert(MC.memoryText() === 'לא אוכל טונה\n\nמתאמן ב-18:00' && MC.memory().length === 2, 'text normalised: ' + JSON.stringify(MC.memoryText()));
+assert(MC.setMemoryText('x'.repeat(5000)).length === MC.MEM_MAX, 'length capped');
+MC.setMemoryText('לא אוכל טונה');
+// line ops
+let ops = MC.applyMemoryOps(['לא אוכל טונה', ' אוהב  חריף '], []);
+assert(ops.length === 1 && ops[0].text === 'אוהב חריף' && MC.memoryText() === 'לא אוכל טונה\nאוהב חריף', 'add skips duplicates');
+ops = MC.applyMemoryOps([], ['חריף', 'לא קיים']);
+assert(ops.length === 1 && ops[0].text === 'אוהב חריף' && MC.memoryText() === 'לא אוכל טונה', 'remove by containment, unknown ignored');
+
+// the streamed reply parser
+const P = MC.partialReply;
+const fullJson = JSON.stringify({ reply: 'שלום "עולם"\nשורה \\ ✓', action: 'none' });
+let prev = '', grows = true;
+for (let i = 0; i <= fullJson.length; i++) { const r = P(fullJson.slice(0, i)); if (r.indexOf(prev) !== 0) grows = false; prev = r; }
+assert(grows && prev === 'שלום "עולם"\nשורה \\ ✓', 'partial reply only grows and ends exact: ' + prev);
+assert(P('{"reply":"a\\u05') === 'a' && P('{"reply":"a\\u05d0b') === 'aאb' && P('{"reply": "ab\\') === 'ab' && P('{"act') === '', 'incomplete escapes wait');
+assert(P('{"action":"none","reply":"x"}') === 'x', 'reply found anywhere');
 
 // a scripted model
 const calls = [];
 let script = [];
-MC.setProvider(function (body) { calls.push(body); const s = script.shift(); return typeof s === 'function' ? s(body) : s; });
+MC.setProvider(function (body, hooks) {
+  calls.push(body);
+  const s = script.shift();
+  const r = typeof s === 'function' ? s(body) : s;
+  // stream the reply like the server does: reply first, in small pieces
+  if (hooks && r && !r.then && r.reply) {
+    const json = JSON.stringify({ reply: r.reply, action: r.action });
+    for (let i = 3; i < json.length; i += 4) hooks.onText(json.slice(i - 3, i + 1));
+  }
+  return r;
+});
+const streamed = [];
+MC.onStream(t => streamed.push(t));
 const day1 = [
   { name: 'בוקר', time: '08:00', dish: 'שקשוקה עם לחם מלא', prep: 'ביצים ברוטב עגבניות', foods: [{ dbId: 'egg', grams: 150, role: 'bp' }, { dbId: 'wbread', grams: 60, role: 'bc' }, { dbId: 'tomato', grams: 120, role: 'veg' }] },
   { name: 'צהריים', time: '13:00', dish: 'עוף עם אורז וסלט', prep: 'עוף בתנור', foods: [{ dbId: 'chicken', grams: 180, role: 'mp' }, { dbId: 'rice', grams: 200, role: 'mc' }, { dbId: 'salad', grams: 150, role: 'veg' }] },
-  { name: 'ביניים', time: '16:30', dish: 'יוגורט עם תפוח', prep: '', foods: [{ dbId: 'yogurt', grams: 200, role: 'sp' }, { dbId: 'apple', grams: 150, role: 'fruit' }] },
+  { name: 'ביניים', time: '16:30', dish: 'יוגורט עם תפוח', prep: '', foods: [{ dbId: 'proyogurt', grams: 200, role: 'sp' }, { dbId: 'apple', grams: 150, role: 'fruit' }] },
   { name: 'ערב', time: '20:00', dish: 'חביתה עם פיתה', prep: 'חביתה במחבת', foods: [{ dbId: 'omelet', grams: 120, role: 'bp' }, { dbId: 'pita', grams: 80, role: 'bc' }, { dbId: 'salad', grams: 150, role: 'veg' }] }
 ];
 
@@ -67,12 +98,15 @@ const day1 = [
   let msg = await MC.send('תבנה לי תפריט');
   assert(msg.ask && !MC.currentMeals(), 'a question changes nothing');
   const b0 = calls[0];
-  assert(b0.current === null && b0.memory.length === 1 && b0.targets.carbs === 200 && b0.messages.length === 1, 'body: memory, targets, no menu');
-  assert(!b0.catalog.some(c => c.id === 'tuna') && b0.blocked.indexOf('tuna') >= 0, 'tuna never offered');
+  assert(b0.current === null && b0.memory === 'לא אוכל טונה' && b0.targets.carbs === 200 && b0.messages.length === 1, 'body: memory text, targets, no menu');
+  assert(b0.catalog.some(c => c.id === 'tuna') && b0.blocked === undefined, 'no code blocking: the model reads the memory');
+  assert(streamed.length > 3 && streamed[streamed.length - 1] === 'כמה ארוחות ביום נוח לך?' && streamed.every((x, i) => i === 0 || x.indexOf(streamed[i - 1]) === 0), 'reply streamed word by word');
+  assert(MC.streamText() === '' && !MC.isBusy(), 'stream cleared when done');
+  assert(MC.chips()[0] === 'תבנה לי תפריט', 'static chips before suggestions');
   assert(!JSON.stringify(b0).match(/Hazi|displayName|weight/), 'nothing identifying in the body');
 
   // build (+ a memory item from the words)
-  script.push({ reply: 'בניתי תפריט של 4 ארוחות.', action: 'build', meals: day1, memory: { add: [{ cat: 'habit', text: 'אין זמן לבשל בבוקר' }], remove: [] } });
+  script.push({ reply: 'בניתי תפריט של 4 ארוחות.', action: 'build', suggestions: ['ערב קל יותר', ' ', 'עוד חלבון בבוקר', 'בלי אורז', 'רביעי'], meals: day1, memory: { add: ['אין זמן לבשל בבוקר'], remove: [] } });
   msg = await MC.send('4 ארוחות, ואין לי זמן לבשל בבוקר');
   assert(calls[1].messages.length === 3, 'conversation sent');
   let cur = MC.currentMeals();
@@ -81,7 +115,8 @@ const day1 = [
   assert(saved.name === 'התפריט שלי' && saved.days.length === 7 && saved.applyOn === '', 'one menu, all week');
   assert(Store.getDayMenu(E.todayISO()).meals.length === 4, 'today follows');
   assert(cur[1].dish === 'עוף עם אורז וסלט', 'dish kept');
-  assert(msg.mem && msg.mem[0].op === 'add' && MC.memory().some(m => m.text === 'אין זמן לבשל בבוקר'), 'memory auto-added');
+  assert(msg.mem && msg.mem[0].op === 'add' && MC.memoryText() === 'לא אוכל טונה\nאין זמן לבשל בבוקר', 'memory line auto-added');
+  assert(MC.chips().join('|') === 'ערב קל יותר|עוד חלבון בבוקר|בלי אורז', 'model suggestions become the chips');
   const built = JSON.parse(JSON.stringify(cur));
 
   // edit dinner only: other meals keep their exact grams
@@ -101,17 +136,19 @@ const day1 = [
   let hl = MC.highlights();
   assert(hl[3] === 'fresh' && hl[0] === 'touched', 'changed meal highlighted: ' + JSON.stringify(hl));
 
-  // memory "לא אוכל קוטג׳" in the same reply as a menu using it → enforced in code
+  // memory line + a menu edit in one reply; undo each on its own
   script.push(function (body) {
-    return { reply: 'בלי קוטג׳ מעכשיו.', action: 'edit', meals: body.current, memory: { add: [{ cat: 'avoid', text: 'קוטג׳' }], remove: [] } };
+    const meals = JSON.parse(JSON.stringify(body.current));
+    meals[3] = { name: 'ערב', time: '20:00', dish: 'חביתה וסלט', prep: '', foods: [{ dbId: 'omelet', grams: 150, role: 'bp' }, { dbId: 'salad', grams: 200, role: 'veg' }] };
+    return { reply: 'בלי קוטג׳ מעכשיו.', action: 'edit', meals: meals, memory: { add: ['לא אוכל קוטג׳'], remove: [] } };
   });
   msg = await MC.send('אני לא אוכל קוטג׳');
   cur = MC.currentMeals();
-  assert(!cur.some(m => m.foods.some(f => f.dbId === 'cottage')), 'blocked food replaced in code even though the model kept it');
-  assert(msg.change && MC.change(msg.change).idx.indexOf(3) >= 0, 'that is a recorded change');
-
-  // undo the memory op → item gone, menu stays (undo the change separately)
-  assert(MC.undoMemory(msg.id) && !MC.memory().some(m => m.text === 'קוטג׳'), 'memory undo');
+  assert(!cur[3].foods.some(f => f.dbId === 'cottage') && /^לא אוכל קוטג׳$/m.test(MC.memoryText()), 'model swapped dinner + noted it');
+  assert(msg.change && MC.change(msg.change).idx.join() === '3', 'that is a recorded change ' + JSON.stringify(MC.change(msg.change).idx));
+  assert(MC.chips()[0] === 'ערב קל יותר', 'no suggestions in this reply → static chips again');
+  // undo the memory op → line gone, menu stays (undo the change separately)
+  assert(MC.undoMemory(msg.id) && !/קוטג/.test(MC.memoryText()) && !MC.undoMemory(msg.id), 'memory undo (once)');
   // undo the specific change → dinner back to the cottage version
   let u = MC.undoChange(msg.change);
   assert(u.ok && MC.currentMeals()[3].foods.some(f => f.dbId === 'cottage'), 'undo one change');
@@ -131,7 +168,7 @@ const day1 = [
 
   // a fresh menu resets the conversation, memory stays, undo-all → menu before it
   const beforeFresh = JSON.parse(JSON.stringify(MC.currentMeals()));
-  const memCount = MC.memory().length;
+  const memBefore = MC.memoryText();
   script.push(function (body) {
     assert(body.current === null && body.messages.length === 1, 'fresh: no old menu / conversation');
     const m = JSON.parse(JSON.stringify(day1.slice(0, 3)));
@@ -139,7 +176,7 @@ const day1 = [
     return { reply: 'תפריט חדש.', action: 'build', meals: m, memory: { add: [], remove: [] } };
   });
   msg = await MC.send('תפריט חדש מאפס', { fresh: true });
-  assert(MC.messages().length === 2 && MC.memory().length === memCount, 'conversation reset, memory kept');
+  assert(MC.messages().length === 2 && MC.memoryText() === memBefore, 'conversation reset, memory kept');
   assert(MC.currentMeals().length === 3, 'new menu');
   MC.undoAll();
   assert(MC.currentMeals().length === 4 && MC.sameMeal(MC.currentMeals()[0], beforeFresh[0]), 'undo all restores the previous menu');
@@ -159,18 +196,27 @@ const day1 = [
   // memory remove op
   script.push({ reply: 'עדכנתי.', action: 'none', meals: [], memory: { add: [], remove: ['אין זמן לבשל בבוקר'] } });
   msg = await MC.send('דווקא יש לי זמן בבוקר');
-  assert(msg.mem && msg.mem[0].op === 'remove' && !MC.memory().some(m => m.text === 'אין זמן לבשל בבוקר'), 'memory remove op');
+  assert(msg.mem && msg.mem[0].op === 'remove' && MC.memoryText() === 'לא אוכל טונה', 'memory remove op');
   MC.undoMemory(msg.id);
-  assert(MC.memory().some(m => m.text === 'אין זמן לבשל בבוקר'), 'remove undone');
+  assert(MC.memoryText() === 'לא אוכל טונה\nאין זמן לבשל בבוקר', 'remove undone');
+  // a v48 chat message (memory ops with items) still undoes
+  MC.messages().push({ id: 'old1', role: 'model', text: 'x', mem: [{ op: 'add', item: { id: 'q', cat: 'avoid', text: 'אין זמן לבשל בבוקר' } }] });
+  assert(MC.undoMemory('old1') && MC.memoryText() === 'לא אוכל טונה', 'v48 memory op undo');
+
+  // a reset mid-stream (fallback model) starts the bubble over
+  MC.setProvider(function (body, hooks) {
+    hooks.onText('{"reply":"ראשון');
+    hooks.onReset();
+    hooks.onText('{"reply":"שני", "action":"none"}');
+    return { reply: 'שני', action: 'none', meals: [], memory: { add: [], remove: [] } };
+  });
+  streamed.length = 0;
+  await MC.send('בדיקה');
+  assert(streamed.join('|') === 'ראשון||שני', 'reset clears the streamed text: ' + streamed.join('|'));
 
   // basic menu (AI down), and the manual memory editor
   MC.undoAll();
   const bm = MC.applyBasic();
   assert(bm.change && MC.currentMeals().length >= 3, 'basic menu on request');
-  const it = MC.memory().find(m => m.text === 'טונה');
-  MC.updateMemory(it.id, { text: 'טונה וסלמון' });
-  assert(F.blockedIds(MC.prefs()).salmon && F.blockedIds(MC.prefs()).tuna, 'edited item blocks both');
-  MC.removeMemory(it.id);
-  assert(!F.blockedIds(MC.prefs()).tuna, 'deleted item unblocks');
   console.log('menu-chat tests passed (' + n + ' checks)');
 })().catch(e => { console.error(e); process.exit(1); });
